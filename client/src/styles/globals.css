@@ -1,0 +1,190 @@
+@import 'tailwindcss' source('../../');
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-robin-orange: #fe8502;
+  --color-robin-green: #44a83a;
+
+  --color-robin-gray-50: #f9f9f9;
+  --color-robin-gray-100: #f4f4f4;
+  --color-robin-gray-200: #e9e9e9;
+  --color-robin-gray-300: #dddddd;
+  --color-robin-gray-400: #999999;
+  --color-robin-gray-500: #666666;
+  --color-robin-gray-600: #555555;
+  --color-robin-gray-700: #424146;
+  --color-robin-gray-800: #2d2d2d;
+  --color-robin-gray-900: #1a1a1a;
+
+  --font-sans: Arial, Helvetica, sans-serif;
+  --font-mono: Consolas, 'Courier New', monospace;
+
+  /* Keep dense controls stable when browsers enforce a minimum font size. */
+  --text-xs--line-height: 1rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl--line-height: 2.25rem;
+  --text-4xl--line-height: 2.5rem;
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+@utility btn-primary {
+  @apply bg-robin-orange text-white hover:bg-orange-600;
+}
+
+@utility btn-secondary {
+  @apply bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-robin-gray-700 dark:text-gray-200 dark:hover:bg-robin-gray-600;
+}
+
+@utility btn-danger {
+  @apply bg-red-600 text-white hover:bg-red-700;
+}
+
+@utility btn-success {
+  @apply bg-robin-green text-white hover:bg-green-600;
+}
+
+@utility input {
+  @apply w-full px-3 py-2 border rounded-sm bg-white dark:bg-robin-gray-800 border-gray-300 dark:border-robin-gray-600 focus:outline-hidden focus:ring-2 focus:ring-robin-orange focus:border-transparent;
+}
+
+@utility form-label {
+  @apply block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1;
+}
+
+@utility form-input {
+  @apply w-full px-3 py-2 border rounded-sm bg-white dark:bg-robin-gray-800 border-gray-300 dark:border-robin-gray-600 focus:outline-hidden focus:ring-2 focus:ring-robin-orange focus:border-transparent;
+}
+
+@utility form-hint {
+  @apply text-xs text-gray-500 dark:text-gray-400 mt-1;
+}
+
+@utility card {
+  @apply bg-white dark:bg-robin-gray-800 border border-gray-200/60 dark:border-robin-gray-700/60 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)];
+}
+
+@utility card-header {
+  @apply px-6 py-4 border-b border-gray-100 dark:border-robin-gray-700/60;
+}
+
+@utility card-title {
+  @apply text-base font-semibold text-gray-900 dark:text-gray-100 tracking-tight;
+}
+
+@utility card-body {
+  @apply p-6;
+}
+
+@utility table-container {
+  @apply min-w-0 max-w-full overflow-x-auto;
+}
+
+@utility table {
+  @apply w-full border-collapse;
+
+  & th {
+    @apply px-4 py-3 text-left text-sm font-semibold bg-gray-100 dark:bg-robin-gray-700 border-b border-gray-200 dark:border-robin-gray-600;
+  }
+
+  & td {
+    @apply px-4 py-3 align-top text-sm border-b border-gray-200 dark:border-robin-gray-700;
+  }
+
+  & tr:hover {
+    @apply bg-gray-50 dark:bg-robin-gray-700/50;
+  }
+}
+
+@utility sidebar-link {
+  @apply flex items-center gap-3 px-3 py-2 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-robin-gray-700/50 rounded-lg transition-all duration-200;
+
+  &.active {
+    @apply bg-orange-50 dark:bg-robin-orange/10 text-robin-orange font-medium;
+  }
+}
+
+@layer base {
+  :root {
+    --color-primary: #FE8502;
+    --color-success: #44A83A;
+  }
+  
+  body {
+    @apply bg-white text-gray-900 dark:bg-robin-gray-900 dark:text-gray-100;
+  }
+
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    @apply text-gray-400;
+  }
+
+  /* Custom Scrollbar Styles */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(156, 163, 175, 0.5) transparent;
+  }
+
+  .dark * {
+    scrollbar-color: rgba(75, 85, 99, 0.6) transparent;
+  }
+
+  /* Webkit (Chrome, Safari, Edge) scrollbar styles */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 dark:bg-gray-600 rounded-full;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400 dark:bg-gray-500;
+  }
+
+  ::-webkit-scrollbar-thumb:active {
+    @apply bg-gray-500 dark:bg-gray-400;
+  }
+
+  ::-webkit-scrollbar-corner {
+    @apply bg-transparent;
+  }
+
+  /* Thin scrollbar variant for smaller containers */
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    border-width: 1px;
+  }
+}
+
+/* Telemetry dashboard grid (react-grid-layout) */
+.react-grid-item.react-grid-placeholder {
+  @apply rounded-xl bg-robin-orange opacity-20;
+}
+
+.react-grid-item > .react-resizable-handle::after {
+  @apply border-gray-400 dark:border-gray-500;
+}

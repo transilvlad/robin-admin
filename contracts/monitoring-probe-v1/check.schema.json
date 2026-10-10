@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robin-admin.dev/contracts/monitoring-probe-v1/check.schema.json",
+  "title": "Monitoring probe check v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checkId", "name", "checkType", "endpoint", "port", "intervalSeconds",
+    "timeoutSeconds", "confirmationSeconds", "recoverySeconds", "tlsMode",
+    "certificateErrorMode", "allowPrivate", "options", "enabled"
+  ],
+  "properties": {
+    "checkId": { "type": "integer", "minimum": 1 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "checkType": { "enum": ["http", "tcp", "dns", "smtp", "imap"] },
+    "endpoint": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "port": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 },
+    "intervalSeconds": { "type": "integer", "minimum": 10, "maximum": 86400 },
+    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 120 },
+    "confirmationSeconds": { "type": "integer", "minimum": 0, "maximum": 86400 },
+    "recoverySeconds": { "type": "integer", "minimum": 0, "maximum": 86400 },
+    "certExpiryDays": { "type": ["integer", "null"], "minimum": 1, "maximum": 365 },
+    "tlsMode": { "enum": ["strict", "allow_self_signed"] },
+    "certificateErrorMode": { "enum": ["down", "warning"] },
+    "allowPrivate": { "type": "boolean" },
+    "options": { "type": "object" },
+    "secretHeaders": {
+      "type": "object",
+      "maxProperties": 32,
+      "additionalProperties": { "type": "string", "maxLength": 4096 }
+    },
+    "jitterSeed": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+    "enabled": { "type": "boolean" }
+  }
+}

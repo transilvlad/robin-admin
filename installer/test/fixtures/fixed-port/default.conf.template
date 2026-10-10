@@ -1,0 +1,6 @@
+server {
+    listen ${FIXTURE_PORT};
+    location /health {
+        return 200 'fixture ready\n';
+    }
+}

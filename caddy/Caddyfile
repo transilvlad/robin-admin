@@ -1,0 +1,45 @@
+{
+	# Bundled Compose entrypoint uses Caddy's internal CA.
+	local_certs
+	skip_install_trust
+	admin off
+}
+
+# HTTPS for the Robin Admin UI and API on port 3443, on localhost and on the
+# gateway's role alias. Upstreams are found by role alias, never container name.
+localhost:3443, admin-gateway:3443 {
+	tls internal
+
+	log {
+		output stdout
+		format json
+	}
+
+	encode zstd gzip
+
+	# Health checks to the server for external probes and load balancers.
+	handle /health/* {
+		reverse_proxy admin-backend:3001
+	}
+
+	handle /api/* {
+		reverse_proxy admin-backend:3001
+	}
+
+	# Module federation files and assets: the server applies module and licence
+	# checks and proxies each module's UI from its registered asset address.
+	# Opening or reloading a module page in the browser is a document request
+	# for the UI, which shares the /modules/ path.
+	@moduleFiles {
+		path /modules/*
+		not header Sec-Fetch-Dest document
+	}
+	handle @moduleFiles {
+		reverse_proxy admin-backend:3001
+	}
+
+	# Everything else is the static UI.
+	handle {
+		reverse_proxy admin-frontend:80
+	}
+}

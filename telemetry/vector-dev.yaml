@@ -1,0 +1,44 @@
+# Local Vector for the `telemetry-dev` Compose profile. Sends this Docker
+# host's metrics through Robin Admin's authenticated ingest route, the same
+# path production agents use.
+data_dir: /var/lib/vector
+
+# Local API for the container healthcheck only (loopback, not published).
+api:
+  enabled: true
+  address: 127.0.0.1:8686
+
+# The API key arrives as a Compose secret; Vector does not interpolate
+# environment variables in config files by default.
+secret:
+  compose:
+    type: directory
+    path: /run/secrets
+    remove_trailing_whitespace: true
+
+sources:
+  host:
+    type: host_metrics
+    namespace: host
+    scrape_interval_secs: 15
+    collectors: [cpu, disk, filesystem, load, host, memory, network]
+
+transforms:
+  labels:
+    type: remap
+    inputs: [host]
+    source: |
+      .tags.host = "robin-admin-dev"
+      .tags.role = "container"
+
+sinks:
+  robin_admin:
+    type: prometheus_remote_write
+    inputs: [labels]
+    endpoint: http://admin-backend:3001/api/telemetry/write
+    auth:
+      strategy: bearer
+      token: "SECRET[compose.telemetry_api_key]"
+    batch:
+      max_events: 1000
+      timeout_secs: 10

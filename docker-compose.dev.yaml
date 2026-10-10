@@ -1,0 +1,169 @@
+# Development: build Robin Admin from source and add dev helpers.
+#   docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d --build
+# With the Robin suite:
+#   docker compose -f docker-compose.yaml -f docker-compose.suite.yaml \
+#     -f docker-compose.dev.yaml up -d --build
+#
+# Optional helpers (profiles):
+#   telemetry-dev  suite-admin-vector-dev sends this host's metrics through the
+#                  authenticated ingest route (key in TELEMETRY_DEV_API_KEY)
+#   agent-dev      suite-admin-agent-dev, an enrollment-token agent for testing
+#                  the remote-host workflow
+#   postfix-dev    suite-admin-postfix-dev, a Postfix server for testing Robin
+#                  Admin's Postfix support (Postfix is not part of the Robin
+#                  suite; Robin is its MTA)
+
+services:
+  suite-admin:
+    build:
+      context: ./server
+    image: robin-admin-server:dev
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      - ROBIN_ADMIN_PUBLIC_URL=${ROBIN_ADMIN_PUBLIC_URL:-https://localhost:3443}
+
+  suite-admin-ui:
+    build:
+      context: ./client
+    image: robin-admin-client:dev
+
+  suite-admin-installer:
+    build:
+      context: ./installer
+    image: robin-admin-installer:dev
+
+  suite-admin-vector-dev:
+    profiles: [telemetry-dev]
+    image: timberio/vector:0.58.0-alpine
+    container_name: suite-admin-vector-dev
+    restart: unless-stopped
+    # Not read-only: Compose writes file-based secrets into the container.
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 50
+    mem_limit: 128m
+    cpus: 0.25
+    command: ["--config", "/etc/vector/vector.yaml"]
+    secrets: [telemetry_api_key]
+    environment:
+      - PROCFS_ROOT=/host/proc
+      - SYSFS_ROOT=/host/sys
+    tmpfs: ["/var/lib/vector:size=16m"]
+    volumes:
+      - ./telemetry/vector-dev.yaml:/etc/vector/vector.yaml:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8686/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      suite-admin: { condition: service_healthy }
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      suite-admin: {}
+
+  suite-admin-agent-dev:
+    profiles: [agent-dev]
+    build:
+      context: ./agent
+      target: runtime
+    image: robin-admin-agent:dev
+    container_name: suite-admin-agent-dev
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 50
+    mem_limit: 128m
+    cpus: 0.25
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    environment:
+      - ROBIN_ADMIN_URL=${ROBIN_AGENT_ADMIN_URL:-http://admin-backend:3001}
+      - ROBIN_AGENT_ID=${ROBIN_AGENT_ID:-}
+      - ROBIN_ENROLLMENT_TOKEN=${ROBIN_ENROLLMENT_TOKEN:-}
+      - ROBIN_AGENT_PROBE=${ROBIN_AGENT_PROBE:-}
+    volumes:
+      - suite-admin-agent-dev-state:/var/lib/robin-agent
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/robin-agent", "--version"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      suite-admin: {}
+
+  # Postfix for testing Robin Admin's Postfix support, managed by a co-located
+  # agent. Register it as fleet service `postfix-dev` and enroll the agent under
+  # Fleet > Agents (POSTFIX_AGENT_ID and POSTFIX_AGENT_ENROLLMENT_TOKEN).
+  suite-admin-postfix-dev:
+    profiles: [postfix-dev]
+    image: boky/postfix:v5.1.0
+    container_name: suite-admin-postfix-dev
+    restart: unless-stopped
+    environment:
+      - ALLOWED_SENDER_DOMAINS=example.com
+      - HOSTNAME=mail.example.com
+    healthcheck:
+      test: ["CMD-SHELL", "/scripts/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      suite-admin: {}
+
+  suite-admin-postfix-agent-dev:
+    profiles: [postfix-dev]
+    build:
+      context: ./agent
+      target: colocated
+    image: robin-admin-agent:colocated-dev
+    container_name: suite-admin-postfix-agent-dev
+    restart: unless-stopped
+    user: "0:0"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 50
+    mem_limit: 128m
+    environment:
+      - ROBIN_ADMIN_URL=http://admin-backend:3001
+      - ROBIN_AGENT_ID=${POSTFIX_AGENT_ID:-}
+      - ROBIN_ENROLLMENT_TOKEN=${POSTFIX_AGENT_ENROLLMENT_TOKEN:-}
+      - ROBIN_AGENT_STATE=/var/lib/robin-agent/state.json
+      - ROBIN_AGENT_POSTFIX_LOG_CONTAINER=suite-admin-postfix-dev
+      - ROBIN_AGENT_EXEC_PREFIX=postfix-dev=docker exec suite-admin-postfix-dev
+    volumes:
+      - suite-admin-postfix-agent-dev-state:/var/lib/robin-agent
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/robin-agent", "--version"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      suite-admin: { condition: service_healthy }
+    networks:
+      suite-admin: {}
+
+secrets:
+  telemetry_api_key:
+    environment: TELEMETRY_DEV_API_KEY
+
+volumes:
+  suite-admin-agent-dev-state:
+    name: suite-admin-agent-dev-state
+  suite-admin-postfix-agent-dev-state:
+    name: suite-admin-postfix-agent-dev-state

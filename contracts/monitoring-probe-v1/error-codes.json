@@ -1,0 +1,32 @@
+{
+  "protocolVersion": 1,
+  "codes": [
+    "assertion_failed:1",
+    "assertion_failed:2",
+    "assertion_failed:3",
+    "assertion_failed:4",
+    "assertion_failed:5",
+    "assertion_failed:6",
+    "assertion_failed:7",
+    "assertion_failed:8",
+    "assertion_failed:9",
+    "assertion_failed:10",
+    "assertion_failed:11",
+    "assertion_failed:12",
+    "assertion_failed:13",
+    "assertion_failed:14",
+    "assertion_failed:15",
+    "assertion_failed:16",
+    "assertion_failed:17",
+    "assertion_failed:18",
+    "assertion_failed:19",
+    "assertion_failed:20",
+    "connect_refused",
+    "dns_failed",
+    "http_status",
+    "probe_failed",
+    "probe_timeout",
+    "target_not_permitted",
+    "tls_certificate_error"
+  ]
+}

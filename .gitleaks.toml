@@ -1,0 +1,20 @@
+# Gitleaks configuration for robin-admin.
+#
+# Extends the default Gitleaks ruleset and allowlists dummy credential material
+# that only appears in test fixtures. These are not real secrets: they are inert
+# placeholders used to exercise request validation and DKIM import handling.
+title = "robin-admin"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures containing inert placeholder credentials, not real secrets"
+paths = [
+  # Embeds a dummy "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----"
+  # literal to test the DKIM key import endpoint.
+  '''server/src/routes/rspamd\.test\.ts''',
+  # Throwaway self-signed TLS keys for local probe fixtures; they protect nothing.
+  '''contracts/monitoring-probe-v1/fixtures/tls(-[a-z-]+)?-key\.pem''',
+  '''server/src/services/monitoring/fixtures/tls\.key''',
+]

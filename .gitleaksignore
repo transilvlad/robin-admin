@@ -1,0 +1,5 @@
+# Inert disposable drill key, replaced by per-run random values.
+e42ec7314e2fbbcb2699584015ae4045769ee2c7:server/scripts/reliability-soak.mjs:generic-api-key:67
+# Dummy values in unit tests (a fake DSN password and an unsubscribe token), not real credentials.
+7cb3367048ecffc756e3174f53d41a35d0e161e8:server/src/db/queries/email.test.ts:generic-api-key:55
+7cb3367048ecffc756e3174f53d41a35d0e161e8:server/src/db/queries/fleet-services.test.ts:generic-api-key:21

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robinmta.com/contracts/license-v1.schema.json",
+  "title": "Robin Sheriff lease v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "activationId",
+    "licenseId",
+    "moduleSlug",
+    "instanceId",
+    "instanceKeyThumbprint",
+    "issuedAt",
+    "expiresAt",
+    "offlineGraceEndsAt"
+  ],
+  "properties": {
+    "activationId": {
+      "type": "string",
+      "pattern": "^act_[A-Za-z0-9_-]{16,}$"
+    },
+    "licenseId": {
+      "type": "string",
+      "pattern": "^lic_[A-Za-z0-9_-]{16,}$"
+    },
+    "moduleSlug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"
+    },
+    "instanceId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "instanceKeyThumbprint": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "issuedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "offlineGraceEndsAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "replacementAllowance": {
+      "type": "integer",
+      "const": 2
+    },
+    "replacementsUsed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2
+    }
+  }
+}

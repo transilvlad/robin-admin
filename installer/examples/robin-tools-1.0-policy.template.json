@@ -1,0 +1,60 @@
+{
+  "modules": {
+    "robin-tools": {
+      "upgradeStrategy": "stage-first",
+      "versions": {
+        "1.0.0": {
+          "runtime": {
+            "backendUrl": "http://robin-tools-server:3003",
+            "assetBaseUrl": "http://robin-tools:80",
+            "probeUrl": "http://robin-tools-server:3003/health"
+          },
+          "services": [
+            {
+              "name": "frontend",
+              "image": "ghcr.io/transilvlad/robin-tools@sha256:REPLACE_WITH_64_HEX_FRONTEND_DIGEST",
+              "containerName": "robin-tools",
+              "network": "suite",
+              "ports": [],
+              "volumes": [],
+              "allowedEnvKeys": [
+                "NODE_ENV"
+              ],
+              "environment": {
+                "NODE_ENV": "production"
+              },
+              "healthTimeoutSeconds": 60
+            },
+            {
+              "name": "backend",
+              "image": "ghcr.io/transilvlad/robin-tools-server@sha256:REPLACE_WITH_64_HEX_BACKEND_DIGEST",
+              "containerName": "robin-tools-server",
+              "network": "suite",
+              "ports": [],
+              "volumes": [],
+              "allowedEnvKeys": [
+                "NODE_ENV",
+                "DB_HOST",
+                "DB_PORT",
+                "DB_NAME",
+                "DB_USER",
+                "DB_PASSWORD",
+                "MODULE_PROXY_SECRET"
+              ],
+              "environment": {
+                "NODE_ENV": "production",
+                "DB_HOST": "REPLACE_WITH_DATABASE_HOST",
+                "DB_PORT": "REPLACE_WITH_DATABASE_PORT",
+                "DB_NAME": "REPLACE_WITH_DATABASE_NAME",
+                "DB_USER": "REPLACE_WITH_DATABASE_USER",
+                "DB_PASSWORD": "REPLACE_WITH_DATABASE_PASSWORD",
+                "MODULE_PROXY_SECRET": "REPLACE_WITH_HIGH_ENTROPY_MODULE_PROXY_SECRET"
+              },
+              "healthTimeoutSeconds": 60
+            }
+          ]
+        }
+      }
+    }
+  }
+}

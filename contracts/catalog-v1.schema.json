@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robinmta.com/contracts/catalog-v1.schema.json",
+  "title": "Robin Sheriff catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "expiresAt", "modules"],
+  "properties": {
+    "schemaVersion": {
+      "const": "robin-sheriff-catalog/v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "modules": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/module"
+      }
+    }
+  },
+  "$defs": {
+    "publisher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName", "kind", "verified"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "kind": {
+          "enum": ["first-party", "third-party"]
+        },
+        "verified": {
+          "const": true
+        },
+        "supportUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "securityContact": {
+          "type": "string",
+          "format": "email"
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "repository", "digest", "platforms"],
+      "properties": {
+        "name": {
+          "enum": ["frontend", "backend"]
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{1,200}$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "platforms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["linux/amd64", "linux/arm64"]
+          }
+        }
+      }
+    },
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slug",
+        "displayName",
+        "description",
+        "tier",
+        "version",
+        "minimumRobinAdminVersion",
+        "publisher",
+        "remoteScope",
+        "exposedModule",
+        "remoteEntryPath",
+        "routeSlug",
+        "status",
+        "permissions",
+        "delivery"
+      ],
+      "properties": {
+        "slug": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "tier": {
+          "enum": ["free", "paid"]
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "minimumRobinAdminVersion": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "publisher": {
+          "$ref": "#/$defs/publisher"
+        },
+        "remoteScope": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9]{1,63}$"
+        },
+        "exposedModule": {
+          "type": "string",
+          "pattern": "^\\./[A-Za-z0-9/_-]+$"
+        },
+        "remoteEntryPath": {
+          "type": "string",
+          "pattern": "^/modules/[a-z0-9-]+/remoteEntry\\.js$"
+        },
+        "routeSlug": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"
+        },
+        "iconName": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]{1,50}$"
+        },
+        "sortOrder": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "status": {
+          "enum": ["published", "deprecated"]
+        },
+        "tags": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]{1,40}$"
+          }
+        },
+        "permissions": {
+          "type": "array",
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(?::[a-z][a-z0-9-]*)+$"
+          }
+        },
+        "delivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "available", "services"],
+          "properties": {
+            "mode": {
+              "enum": ["public-ghcr", "sheriff-proxy"]
+            },
+            "available": {
+              "type": "boolean"
+            },
+            "services": {
+              "type": "array",
+              "maxItems": 2,
+              "items": {
+                "$ref": "#/$defs/service"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

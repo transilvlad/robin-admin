@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robin-admin.dev/contracts/monitoring-probe-v1/manifest.schema.json",
+  "title": "Remote probe manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "manifestRevision", "generatedAt", "locationId", "concurrency", "checks"],
+  "properties": {
+    "protocolVersion": { "const": 1 },
+    "manifestRevision": { "type": "integer", "minimum": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "locationId": { "type": "integer", "minimum": 1 },
+    "concurrency": { "type": "integer", "minimum": 1, "maximum": 128 },
+    "checks": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "allOf": [
+          { "$ref": "check.schema.json" },
+          { "type": "object", "required": ["jitterSeed"] }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,71 @@
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { TelemetryConnectionSettings, TelemetryStorageSettingsView } from './TelemetryStoreSettings';
+const api = vi.hoisted(() => ({ connection: vi.fn(), save: vi.fn(), test: vi.fn(), snapshots: vi.fn(), createSnapshot: vi.fn(), deleteSnapshot: vi.fn() }));
+const telemetry = vi.hoisted(() => ({ store: vi.fn() }));
+vi.mock('../../api/client', () => ({ ApiError: class ApiError extends Error {}, telemetrySettingsApi: api, telemetryApi: telemetry }));
+const connection = { revision: 'one', mode: 'external', url: 'https://store.test', auth: 'basic', username: 'fixture', allowPrivate: false, secretConfigured: true };
+const snapshot = { name: '20261007081055-18DC310563C98334', createdAt: '2026-10-07T08:10:55Z' };
+const health = { address: 'metrics-backend:8428', kind: 'victoriametrics', version: 'v1.153.0', retention: '90d', totalSeries: 10, dataSizeBytes: 2 * 1024 * 1024, freeDiskBytes: null, memoryLimitBytes: 1024 * 1024 * 1024, rowsInserted: 1, rowsRejected: 0, ingestRate: null, rejectRate: null, topMetrics: [] };
+beforeEach(() => {
+  cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks();
+  api.connection.mockResolvedValue({ data: connection });
+  api.test.mockResolvedValue({ data: { reachable: true } });
+  api.save.mockResolvedValue({ data: { ...connection, revision: 'two' } });
+  api.snapshots.mockResolvedValue({ data: [snapshot] });
+  api.createSnapshot.mockResolvedValue({ data: snapshot });
+  api.deleteSnapshot.mockResolvedValue({});
+  telemetry.store.mockResolvedValue({ data: health });
+});
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it('tests unsaved edits without saving or echoing an existing credential', async () => {
+  render(<TelemetryConnectionSettings />);
+  const url = await screen.findByLabelText('Store URL');
+  expect(screen.getByLabelText('Password')).toHaveValue('');
+  fireEvent.change(url, { target: { value: 'https://new-store.test' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+  await screen.findByText('Connection healthy');
+  expect(api.save).not.toHaveBeenCalled();
+  expect(api.test).toHaveBeenCalledWith({ revision: 'one', mode: 'external', url: 'https://new-store.test', auth: 'basic', username: 'fixture', allowPrivate: false, clearSecret: false });
+});
+it('clears the replacement credential from the form after a successful save', async () => {
+  render(<TelemetryConnectionSettings />);
+  const password = await screen.findByLabelText('Password');
+  fireEvent.change(password, { target: { value: 'fixture-new-secret' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await screen.findByText('Connection saved');
+  expect(password).toHaveValue('');
+  expect(api.save).toHaveBeenCalledWith(expect.objectContaining({ secret: 'fixture-new-secret' }));
+});
+it('shows bundled store settings read-only and creates snapshots', async () => {
+  api.connection.mockResolvedValue({ data: { ...connection, mode: 'bundled' } });
+  render(<TelemetryStorageSettingsView />);
+  expect(await screen.findByText('v1.153.0')).toBeInTheDocument();
+  expect(screen.getByText('90d')).toBeInTheDocument();
+  expect(screen.getByText('TELEMETRY_RETENTION_DAYS')).toBeInTheDocument();
+  expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
+  expect(screen.getByText(snapshot.name)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Create snapshot' }));
+  expect(await screen.findByText(`Snapshot ${snapshot.name} created`)).toBeInTheDocument();
+  expect(api.createSnapshot).toHaveBeenCalledTimes(1);
+});
+it('deletes a snapshot only after confirmation', async () => {
+  api.connection.mockResolvedValue({ data: { ...connection, mode: 'bundled' } });
+  render(<TelemetryStorageSettingsView />);
+  fireEvent.click(await screen.findByRole('button', { name: `Delete snapshot ${snapshot.name}` }));
+  expect(api.deleteSnapshot).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }));
+  await waitFor(() => expect(api.deleteSnapshot).toHaveBeenCalledWith(snapshot.name));
+  expect(await screen.findByText('Snapshot deleted')).toBeInTheDocument();
+});
+it('offers no snapshots for an external store and nothing for a disabled one', async () => {
+  render(<TelemetryStorageSettingsView />);
+  expect(await screen.findByText('Retention, memory and backups of an external store are managed where it runs.')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Create snapshot' })).not.toBeInTheDocument();
+  expect(api.snapshots).not.toHaveBeenCalled();
+  cleanup(); telemetry.store.mockClear();
+  api.connection.mockResolvedValue({ data: { ...connection, mode: 'disabled' } });
+  render(<TelemetryStorageSettingsView />);
+  expect(await screen.findByText(/telemetry store is disabled/)).toBeInTheDocument();
+  expect(telemetry.store).not.toHaveBeenCalled();
+});

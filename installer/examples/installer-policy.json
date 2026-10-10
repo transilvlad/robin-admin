@@ -1,0 +1,45 @@
+{
+  "modules": {
+    "example-module": {
+      "upgradeStrategy": "stage-first",
+      "versions": {
+        "1.0.0": {
+          "runtime": {
+            "backendUrl": null,
+            "assetBaseUrl": "http://host.docker.internal:3080",
+            "probeUrl": "http://host.docker.internal:3080/health"
+          },
+          "services": [
+            {
+              "name": "web",
+              "image": "ghcr.io/example/example-module@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+              "containerName": "robin-module-example-web",
+              "network": "suite",
+              "ports": [
+                {
+                  "hostIp": "127.0.0.1",
+                  "hostPort": 3080,
+                  "containerPort": 8080,
+                  "protocol": "tcp"
+                }
+              ],
+              "volumes": [
+                {
+                  "name": "robin-module-example-data",
+                  "target": "/var/lib/example"
+                }
+              ],
+              "allowedEnvKeys": [
+                "NODE_ENV"
+              ],
+              "environment": {
+                "NODE_ENV": "production"
+              },
+              "healthTimeoutSeconds": 60
+            }
+          ]
+        }
+      }
+    }
+  }
+}
