@@ -1,0 +1,152 @@
+# robin-agent — build, cross-compile, and publish the fleet agent.
+#
+# The agent is a single dependency-free Go binary deployed on mail-server hosts
+# and containers. This workflow builds it on every change, and on a version tag
+# (v*) cross-compiles release binaries (+ checksums) attached to the GitHub
+# Release and pushes a multi-arch container image to GHCR.
+#
+# Consumed by agent/install.sh (curl | sh) and by the Fleet → Agents UI, which
+# hands operators the download/enroll commands.
+name: Agent Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'agent/**'
+      - 'contracts/monitoring-probe-v1/**'
+      - '.github/workflows/agent-release.yml'
+  pull_request:
+    paths:
+      - 'agent/**'
+      - 'contracts/monitoring-probe-v1/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & vet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: agent/go.mod
+          cache: false
+      - name: Test, vet & build
+        working-directory: agent
+        run: |
+          go test ./...
+          go vet ./...
+          CGO_ENABLED=0 go build ./...
+
+  release-binaries:
+    name: Release binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: agent/go.mod
+          cache: false
+      - name: Version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+      - name: Cross-compile
+        working-directory: agent
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            out="dist/robin-agent-${os}-${arch}"
+            echo "building $out"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w -X main.agentVersion=${VERSION}" -o "$out" .
+          done
+          cd dist && sha256sum robin-agent-* > SHA256SUMS.agent
+          cat SHA256SUMS.agent
+      # The binaries carry the Go standard library they were built with, so a
+      # stale toolchain ships its CVEs; nothing is attached unless this passes.
+      - name: Scan binaries
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: rootfs
+          scan-ref: agent/dist
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Attach to release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: |
+            agent/dist/robin-agent-*
+            agent/dist/SHA256SUMS.agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-image:
+    name: Publish container image
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # buildx can't --load a multi-platform manifest, so the scan builds the
+      # runner's native platform locally; nothing is pushed unless it passes.
+      - name: Build image for security scan (linux/amd64, local only)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: agent
+          push: false
+          load: true
+          tags: robin-admin-agent:scan-${{ github.sha }}
+          platforms: linux/amd64
+      - name: Scan image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: robin-admin-agent:scan-${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+      - name: Build & push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            AGENT_VERSION=${{ steps.version.outputs.version }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/robin-admin-agent:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/robin-admin-agent:latest

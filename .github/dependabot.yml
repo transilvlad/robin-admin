@@ -1,0 +1,55 @@
+version: 2
+# Weekly, one grouped pull request per ecosystem and directory: every update
+# pull request runs CI, so separate daily pull requests multiply its cost.
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /client
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /server
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /installer
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /client
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /server
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /agent
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /installer
+    schedule:
+      interval: weekly

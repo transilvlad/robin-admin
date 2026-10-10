@@ -1,0 +1,45 @@
+{
+  "name": "robin-admin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web-based administration interface for Robin MTA Server",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "cd server && npm run build",
+    "build:client": "cd client && npm run build",
+    "start": "cd server && npm run start",
+    "lint": "npm run lint:server && npm run lint:client",
+    "lint:server": "cd server && npm run lint",
+    "lint:client": "cd client && npm run lint",
+    "test": "npm run test:server && npm run test:client",
+    "test:server": "cd server && npm run test",
+    "test:client": "cd client && npm run test",
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/transilvlad/robin-admin"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "robin",
+    "mta",
+    "admin",
+    "email",
+    "dovecot",
+    "postfix"
+  ],
+  "overrides": {
+    "shell-quote": "^1.12.0"
+  }
+}

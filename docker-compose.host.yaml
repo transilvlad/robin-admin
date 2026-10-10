@@ -1,0 +1,42 @@
+# Co-located layout: Robin Admin on a mail host whose services (PostgreSQL,
+# Robin, Redis, Rspamd, ...) listen on 127.0.0.1 only, behind the host's own
+# reverse proxy.
+#   docker compose -f docker-compose.yaml -f docker-compose.host.yaml up -d
+#
+# Robin Admin uses host networking and binds 127.0.0.1:3001; every role address
+# is a loopback address (override in .env). The telemetry store and the UI are
+# published on loopback ports for Robin Admin and the host proxy. The bundled
+# gateway and Robin Admin's own database are off: the host's proxy and database
+# are used instead.
+
+services:
+  suite-admin:
+    network_mode: host
+    networks: !reset {}
+    extra_hosts: !reset []
+    environment:
+      - HOST=${HOST:-127.0.0.1}
+      - DB_HOST=${DB_HOST:-127.0.0.1}
+      - TELEMETRY_STORE_URL=${TELEMETRY_STORE_URL:-http://127.0.0.1:8428}
+      - MODULE_INSTALLER_URL=${MODULE_INSTALLER_URL:-http://127.0.0.1:3041}
+    depends_on: !override
+      suite-victoriametrics: { condition: service_healthy }
+
+  suite-admin-ui:
+    ports: ["127.0.0.1:${ADMIN_UI_PORT:-3002}:80"]
+
+  suite-victoriametrics:
+    networks: !override
+      suite-admin: {}
+    ports: ["127.0.0.1:${TELEMETRY_STORE_PORT:-8428}:8428"]
+
+  suite-admin-installer:
+    networks: !override
+      suite-admin: {}
+    ports: ["127.0.0.1:3041:3041"]
+
+  suite-admin-gateway:
+    profiles: [gateway]
+
+  suite-admin-postgres:
+    profiles: [standalone-database]

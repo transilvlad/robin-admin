@@ -1,0 +1,112 @@
+# Joins the Robin suite (robin/.suite, network suite):
+#   docker compose -f docker-compose.yaml -f docker-compose.suite.yaml up -d
+#
+# Start the suite first. Robin Admin then uses the suite's database
+# (postgres-backend), Robin MTA (mta-backend) and services, registers the
+# suite's modules, and runs a co-located agent for the suite's containers.
+# Suite services are found by role alias; only the agent's `docker exec`
+# targets name containers, because Docker exec needs a container name.
+
+services:
+  suite-admin-gateway:
+    networks:
+      suite:
+        aliases: [admin-gateway]
+
+  suite-admin:
+    environment:
+      - DB_NAME=${DB_NAME:-robin}
+      - DB_USER=${DB_USER:-robin}
+      - ROBIN_API_ENABLED=true
+      - ROBIN_API_URL=${ROBIN_API_URL:-http://mta-backend:8090}
+      - ROBIN_METRICS_URL=${ROBIN_METRICS_URL:-http://mta-backend:8080}
+      - ROBIN_CONFIG_TABLE=${ROBIN_CONFIG_TABLE:-robin_config_store}
+      - SHERIFF_BASE_URL=${SHERIFF_BASE_URL:-http://sheriff-backend:3025}
+      - MODULE_PROXY_SECRETS_JSON=${MODULE_PROXY_SECRETS_JSON:?Set per-module proxy secrets as a JSON object}
+      - POSTGRES_ADMIN_DSN=${POSTGRES_ADMIN_DSN:-postgresql://${DB_USER:-robin}:${DB_PASSWORD}@postgres-backend:5432/${DB_NAME:-robin}}
+      - REDIS_ADMIN_DSN=${REDIS_ADMIN_DSN:-redis://redis-backend:6379}
+      # Robin writes world-readable date-rotated logs, read from the mount below;
+      # root-owned service logs are tailed by suite-admin-agent instead.
+      - ROBIN_LOG_DIR=/mnt/logs/robin
+      - 'MODULES_BOOTSTRAP_JSON=${MODULES_BOOTSTRAP_JSON:-[{"moduleSlug":"robin-tools","displayName":"Robin Tools","remoteScope":"robinTools","exposedModule":"./RobinToolsApp","remoteEntryUrl":"/modules/robin-tools/remoteEntry.js","remoteEntryPath":"/modules/robin-tools/remoteEntry.js","backendUrl":"http://tools-backend:3003","probeUrl":"http://tools-backend:3003/health","tier":"free","routeSlug":"robin-tools","assetBaseUrl":"http://tools-frontend:80"},{"moduleSlug":"robin-qa","displayName":"Robin QA","remoteScope":"robinQa","exposedModule":"./RobinQaApp","remoteEntryUrl":"/modules/robin-qa/remoteEntry.js","remoteEntryPath":"/modules/robin-qa/remoteEntry.js","backendUrl":"http://qa-backend:3002","probeUrl":"http://qa-backend:3002/health","tier":"paid","routeSlug":"robin-qa","iconName":"search","sortOrder":100,"metadata":{"imageUrl":"https://robinmta.com/static/robin-qa.jpg"},"assetBaseUrl":"http://qa-frontend:80"},{"moduleSlug":"robin-sheriff","displayName":"Robin Sheriff","remoteScope":"robinSheriff","exposedModule":"./RobinSheriffApp","remoteEntryUrl":"/modules/robin-sheriff/remoteEntry.js","remoteEntryPath":"/modules/robin-sheriff/remoteEntry.js","backendUrl":"http://sheriff-backend:3025/module","probeUrl":"http://sheriff-backend:3025/health","tier":"free","routeSlug":"robin-sheriff","iconName":"sheriff","sortOrder":10,"metadata":{"operatorConsole":true},"assetBaseUrl":"http://sheriff-frontend:80"}]}'
+      # The co-located agent, pre-enrolled with a fixed credential.
+      - 'FLEET_AGENTS_BOOTSTRAP_JSON=${FLEET_AGENTS_BOOTSTRAP_JSON:-[{"agentId":"suite-admin-agent","name":"Suite Agent","credential":"${SUITE_AGENT_CREDENTIAL:?Set SUITE_AGENT_CREDENTIAL to a unique high-entropy value}","os":"linux","arch":"amd64"}]}'
+      # The suite's services. Network services are reached directly by role;
+      # the agent runs Dovecot tooling, applies Rspamd and ClamAV config and
+      # tails root-owned logs.
+      - 'FLEET_SERVICES_BOOTSTRAP_JSON=${FLEET_SERVICES_BOOTSTRAP_JSON:-[{"serviceId":"suite-redis","serviceType":"redis","name":"Suite Redis","description":"Redis — direct via REDIS_ADMIN_DSN; logs via the suite agent.","logAgentId":"suite-admin-agent"},{"serviceId":"suite-postgres","serviceType":"postgres","name":"Suite PostgreSQL","description":"PostgreSQL — direct via POSTGRES_ADMIN_DSN; logs via the suite agent.","logAgentId":"suite-admin-agent"},{"serviceId":"suite-clamav","serviceType":"clamav","name":"Suite ClamAV","description":"ClamAV — direct via clamd; config and logs via the suite agent.","apiUrl":"http://antivirus-backend:3310","logAgentId":"suite-admin-agent","configAgentId":"suite-admin-agent"},{"serviceId":"rspamd","configAgentId":"suite-admin-agent"},{"serviceId":"suite-dovecot","serviceType":"dovecot","name":"Suite Dovecot","description":"Dovecot — metrics, sessions, users, and logs via the suite agent (docker exec suite-dovecot).","agentId":"suite-admin-agent"}]}'
+    volumes:
+      - ${RSPAMD_CONFIG_MOUNT:-../robin/.suite/etc/rspamd/local.d}:/mnt/rspamd/local.d
+      - ${RSPAMD_STORE_MOUNT:-../robin/store/rspamd}:/mnt/rspamd/store
+      - ${ROBIN_LOG_MOUNT:-../robin/log/robin}:/mnt/logs/robin:ro
+    networks:
+      suite:
+        aliases: [admin-backend]
+    # The suite provides postgres-backend; Robin Admin's own database is off.
+    depends_on: !override
+      suite-victoriametrics: { condition: service_healthy }
+
+  suite-admin-ui:
+    networks:
+      suite:
+        aliases: [admin-frontend]
+
+  suite-admin-postgres:
+    profiles: [standalone-database]
+
+  # Co-located agent for the suite's containers: runs their tools with
+  # `docker exec` and tails root-owned logs. The Docker socket grants high
+  # privilege; use only on a trusted host or behind a socket proxy.
+  suite-admin-agent:
+    build:
+      context: ./agent
+      target: colocated
+    image: robin-admin-agent:colocated-dev
+    container_name: suite-admin-agent
+    restart: unless-stopped
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 100
+    mem_limit: 256m
+    cpus: 0.50
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+    depends_on:
+      suite-admin: { condition: service_healthy }
+    environment:
+      - ROBIN_ADMIN_URL=http://admin-backend:3001
+      - ROBIN_AGENT_ID=suite-admin-agent
+      - ROBIN_AGENT_CREDENTIAL=${SUITE_AGENT_CREDENTIAL:?Set SUITE_AGENT_CREDENTIAL to a unique high-entropy value}
+      - ROBIN_AGENT_STATE=/var/lib/robin-agent/state.json
+      - ROBIN_AGENT_MANAGED_ROOT=/tmp/managed
+      - ROBIN_AGENT_APPLY_ONLY=1
+      - ROBIN_AGENT_DOVECOT_LOG_FILE=/logs/dovecot/dovecot.log
+      - ROBIN_AGENT_CLAMAV_LOG_FILE=/logs/clamav/clamd.log
+      - ROBIN_AGENT_POSTGRES_LOG_DIR=/logs/postgres
+      - ROBIN_AGENT_REDIS_LOG_CONTAINER=suite-redis
+      - ROBIN_AGENT_EXEC_PREFIX=suite-dovecot=docker exec suite-dovecot,rspamd=docker exec suite-rspamd,suite-clamav=docker exec suite-clamav
+    volumes:
+      - ${SUITE_LOG_MOUNT:-../robin/log}:/logs:ro
+      - suite-admin-agent-state:/var/lib/robin-agent
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/robin-agent", "--version"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      suite: {}
+
+networks:
+  suite:
+    external: true
+    name: suite
+
+volumes:
+  suite-admin-agent-state:
+    name: suite-admin-agent-state

@@ -1,0 +1,331 @@
+# Robin Admin - Continuous Integration
+# Status Badge: ![CI](https://github.com/transilvlad/robin-admin/actions/workflows/ci.yml/badge.svg)
+#
+# This workflow runs on:
+# - Push to main branch
+# - Pull requests to main branch
+#
+# Branch Protection Recommendations:
+# - Require status checks to pass before merging
+# - Require branches to be up to date before merging
+# - Require the following checks: build-client, build-server, typecheck,
+#   dependency-audit, secret-scan
+# - These are the checks that should be marked "required" in this repo's
+#   branch protection settings for `main` (GitHub branch protection cannot be
+#   configured from this workflow file — set it up manually in repo settings).
+
+name: CI
+
+# Automatic runs (pull requests, and pushes to main through
+# production-images.yml) do only the Checks job. The Postgres integration
+# tests, probe end-to-end test, reliability drill and Compose smoke tests are
+# manual: run this workflow from the Actions tab before a release. Agent tests
+# run in agent-release.yml; the images are built by the publish workflows.
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '26.10.0'
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    # Everything that runs automatically, in one job: each separate job is
+    # billed a whole minute and repeats checkout and setup.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            client/package-lock.json
+            server/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Cache node_modules
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            client/node_modules
+            server/node_modules
+          key: node-modules-${{ runner.os }}-node-${{ env.NODE_VERSION }}-${{ hashFiles('**/package-lock.json') }}
+      - name: Type check client
+        working-directory: client
+        run: npx tsc --noEmit
+
+      - name: Type check server
+        working-directory: server
+        run: npx tsc --noEmit
+      - name: Run linters
+        run: npm run lint
+      - name: Audit root dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Audit client dependencies
+        working-directory: client
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Audit server dependencies
+        working-directory: server
+        run: npm audit --omit=dev --audit-level=moderate
+      - name: Verify package versions
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          node - <<'NODE'
+          const paths = ['package.json', 'client/package.json', 'server/package.json', 'installer/package.json'];
+          const versions = paths.map(path => [path, require(`./${path}`).version]);
+          const expected = versions[0][1];
+          for (const [path, version] of versions) {
+            if (version !== expected) throw new Error(`${path} version ${version} does not match ${expected}`);
+          }
+          if (process.env.REF.startsWith('refs/tags/v')) {
+            const tagged = process.env.REF.slice('refs/tags/v'.length);
+            if (tagged !== expected) throw new Error(`tag version ${tagged} does not match package version ${expected}`);
+          }
+          NODE
+      - name: Check suite naming, healthchecks and role aliases
+        run: node .github/scripts/check-compose.mjs
+      - name: Scan Git history
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Allow the shared probe cases to bind port 465
+        run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0
+
+      - name: Test server
+        working-directory: server
+        run: npm run test -- --testTimeout=10000
+      - name: Test client
+        working-directory: client
+        run: npm run test
+      - name: Test installer
+        working-directory: installer
+        run: npm test
+
+  # The unit suite mocks the database; these run the DMARC ingest, rollup and
+  # partition SQL against a real Postgres. One file at a time: they share and
+  # reset the same tables.
+  test-server-integration:
+    name: Test Server (Postgres integration)
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    needs: checks
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: robin_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d robin_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      # Monitored fleet databases for the MariaDB service module (mariadb.integration.test.ts).
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: test
+          MARIADB_ROOT_HOST: '%'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_ROOT_HOST: '%'
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -ptest"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      MARIADB_IT_DSNS: mysql://root:test@127.0.0.1:3306/,mysql://root:test@127.0.0.1:3307/
+      ROLLUP_IT_DB: '1'
+      MODULES_IT_DB: '1'
+      DB_HOST: localhost
+      DB_PORT: '5432'
+      DB_NAME: robin_test
+      DB_USER: test
+      DB_PASSWORD: test
+      SESSION_SECRET: ci-integration-session-secret
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Restore node_modules
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            client/node_modules
+            server/node_modules
+          key: node-modules-${{ runner.os }}-node-${{ env.NODE_VERSION }}-${{ hashFiles('**/package-lock.json') }}
+
+      - name: Verify existing administrator UUID migration
+        working-directory: server
+        run: |
+          set -euo pipefail
+          node --input-type=module -e 'import pg from "pg"; const client = new pg.Client({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), database: process.env.DB_NAME, user: process.env.DB_USER, password: process.env.DB_PASSWORD }); await client.connect(); try { await client.query("CREATE DATABASE robin_test_admin_uid_ci"); } finally { await client.end(); }'
+          ADMIN_IDENTITY_IT=1 DB_NAME=robin_test_admin_uid_ci timeout 180s npx vitest run src/db/queries/admin-identity.integration.test.ts
+
+      - name: Verify fresh and upgraded observability configuration
+        working-directory: server
+        run: |
+          set -euo pipefail
+          node --input-type=module -e 'import pg from "pg"; const client = new pg.Client({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), database: process.env.DB_NAME, user: process.env.DB_USER, password: process.env.DB_PASSWORD }); await client.connect(); try { await client.query("CREATE DATABASE robin_test_observability_ci"); } finally { await client.end(); }'
+          OBSERVABILITY_IT_DB=1 DB_NAME=robin_test_observability_ci timeout 180s npx vitest run src/db/queries/observability.integration.test.ts
+
+      - name: Run integration tests
+        working-directory: server
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            timeout 180s npx vitest run "$file"
+          done < <(find src -name '*.integration.test.ts' -print0 | sort -z)
+
+  # Builds and runs the real Go probe agent against the real fleet-agent routes.
+  test-probe-e2e:
+    name: Test Probe Agent (end to end)
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    needs: checks
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: robin_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d robin_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PROBE_E2E: '1'
+      OBSERVABILITY_IT_DB: '1'
+      DB_HOST: localhost
+      DB_PORT: '5432'
+      DB_NAME: robin_test
+      DB_USER: test
+      DB_PASSWORD: test
+      SESSION_SECRET: ci-integration-session-secret
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Restore node_modules
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            client/node_modules
+            server/node_modules
+          key: node-modules-${{ runner.os }}-node-${{ env.NODE_VERSION }}-${{ hashFiles('**/package-lock.json') }}
+
+      - name: Run probe agent end-to-end test
+        working-directory: server
+        run: timeout 300s npx vitest run src/routes/fleet-agent-probe.e2e.test.ts
+
+  reliability-smoke:
+    name: Real Agent Reliability Smoke
+    if: github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/reliability.yml
+    with:
+      minutes: '5'
+
+  compose-smoke:
+    name: Compose Smoke (${{ matrix.layout }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        layout: [base, suite]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup, Telemetry ingest and query, restart
+        run: bash .github/scripts/compose-smoke.sh ${{ matrix.layout }}
+
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    needs: [checks, test-server-integration, test-probe-e2e, reliability-smoke, compose-smoke]
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
+          if [[ "${{ needs.checks.result }}" != "success" ]] || \
+             ! ok "${{ needs.test-server-integration.result }}" || \
+             ! ok "${{ needs.test-probe-e2e.result }}" || \
+             ! ok "${{ needs.reliability-smoke.result }}" || \
+             ! ok "${{ needs.compose-smoke.result }}"; then
+            echo "One or more jobs failed"
+            exit 1
+          fi
+          echo "All CI checks passed!"
