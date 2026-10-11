@@ -1,0 +1,68 @@
+{
+  "name": "robin-admin-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Robin Admin API Server",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "node ./node_modules/typescript-native/bin/tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "reporting:rebuild": "tsx scripts/rebuild-reporting.ts",
+    "rollups:backfill": "tsx scripts/backfill-rollups.ts",
+    "rollups:scale-harness": "tsx scripts/scale-harness.ts",
+    "telemetry:seed": "tsx scripts/telemetry-seed.ts",
+    "telemetry:check": "tsx scripts/telemetry-check.ts",
+    "admin:reset-password": "tsx src/scripts/reset-admin-password.ts"
+  },
+  "dependencies": {
+    "@sentry/core": "^11.4.0",
+    "@sentry/node": "^11.4.0",
+    "bcrypt": "^6.0.0",
+    "connect-pg-simple": "^10.0.0",
+    "cors": "^2.8.5",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.7.1",
+    "express-session": "^1.18.0",
+    "helmet": "^8.3.0",
+    "imapflow": "^2.2.7",
+    "ioredis": "^6.0.0",
+    "ipaddr.js": "^2.3.0",
+    "jose": "^6.2.12",
+    "json5": "^2.2.3",
+    "mysql2": "^3.24.5",
+    "pg": "^8.23.1",
+    "psl": "^1.15.0",
+    "uuid": "^14.0.0",
+    "winston": "^3.14.2"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/connect-pg-simple": "^7.0.3",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.6",
+    "@types/express-session": "^1.18.0",
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.11.10",
+    "@typescript-eslint/eslint-plugin": "^8.71.1",
+    "@typescript-eslint/parser": "^8.71.0",
+    "@vitest/coverage-v8": "^5.0.3",
+    "eslint": "^10.12.0",
+    "tsx": "^4.23.15",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-native": "npm:typescript@^7.0.2",
+    "vitest": "^5.0.3"
+  },
+  "overrides": {
+    "qs": "^6.16.0"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  }
+}

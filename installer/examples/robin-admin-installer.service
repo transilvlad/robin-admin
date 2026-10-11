@@ -1,0 +1,28 @@
+[Unit]
+Description=Robin Admin host module installer
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=robin-installer
+Group=docker
+EnvironmentFile=/etc/robin-admin/installer.env
+LoadCredential=installer-policy:/etc/robin-admin/installer-policy.json
+Environment=MODULE_INSTALLER_POLICY_FILE=%d/installer-policy
+ExecStartPre=/usr/bin/node /opt/robin-admin/installer/src/check-policy.js /etc/robin-admin/installer-policy.json
+ExecStart=/usr/bin/node /opt/robin-admin/installer/src/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/robin-admin-installer
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

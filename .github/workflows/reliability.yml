@@ -1,0 +1,78 @@
+name: Reliability drill
+
+on:
+  workflow_call:
+    inputs:
+      minutes:
+        type: string
+        default: '5'
+      workload:
+        type: string
+        default: faults
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Disposable real-agent validation duration
+        type: choice
+        options: ['5', '60', '120']
+        default: '60'
+      workload:
+        description: Fault recovery, Fleet/reporting soak or combined telemetry/multi-agent load
+        type: choice
+        options: [faults, steady, combined]
+        default: steady
+
+permissions:
+  contents: read
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.minutes == '120' && 135 || inputs.minutes == '60' && 75 || 15 }}
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: robin_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U test -d robin_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_USER: test
+      DB_PASSWORD: test
+      SOAK_MINUTES: ${{ inputs.minutes }}
+      SOAK_WORKLOAD: ${{ inputs.workload }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26.10.0'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Build isolated server and agent
+        run: |
+          npm ci --prefix server
+          npm run build --prefix server
+          chmod +x server/scripts/fixtures/reliability-postqueue.sh
+          docker build -t robin-agent:reliability agent
+      - name: Build combined-load server image
+        if: inputs.workload == 'combined'
+        run: docker build -t robin-admin-server server
+      - name: Exercise selected workload
+        working-directory: server
+        run: |
+          if [ "$SOAK_WORKLOAD" = combined ]; then
+            LOAD_SECONDS=$((SOAK_MINUTES * 60)) node scripts/combined-load.mjs
+          else
+            node scripts/reliability-soak.mjs
+          fi
+      - name: Remove only drill-owned agents
+        if: always()
+        run: |
+          ids=$(docker ps -aq --filter label=robin.test.reliability=true)
+          if [ -n "$ids" ]; then docker rm -f $ids; fi

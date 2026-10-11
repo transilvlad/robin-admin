@@ -1,0 +1,15 @@
+{
+  "name": "robin-admin-installer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Policy-driven Robin Admin host module installer",
+  "license": "Apache-2.0",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.22.2"
+  }
+}

@@ -1,0 +1,2858 @@
+{
+  "protocolVersion": 1,
+  "cases": [
+    {
+      "id": "http-200",
+      "fixture": {
+        "type": "http",
+        "status": 200,
+        "body": "ok"
+      },
+      "check": {
+        "checkType": "http",
+        "expectedStatuses": [
+          200
+        ]
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-status-mismatch",
+      "fixture": {
+        "type": "http",
+        "status": 503,
+        "body": "unavailable"
+      },
+      "check": {
+        "checkType": "http",
+        "expectedStatuses": [
+          200
+        ]
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "http_status"
+      }
+    },
+    {
+      "id": "http-body-assertion",
+      "fixture": {
+        "type": "http",
+        "status": 200,
+        "body": "robin probe ready"
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "GET",
+            "headers": {},
+            "body": "",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": [
+              {
+                "kind": "body",
+                "operator": "contains",
+                "value": "probe ready"
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-body-assertion-failure",
+      "fixture": {
+        "type": "http",
+        "status": 200,
+        "body": "robin probe unavailable"
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "GET",
+            "headers": {},
+            "body": "",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": [
+              {
+                "kind": "body",
+                "operator": "contains",
+                "value": "probe ready"
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "assertion_failed:1"
+      }
+    },
+    {
+      "id": "private-address-blocked",
+      "fixture": {
+        "type": "http",
+        "status": 200,
+        "body": "should not be reached"
+      },
+      "check": {
+        "checkType": "http",
+        "allowPrivate": false
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "http-hanging-peer",
+      "fixture": {
+        "type": "http",
+        "hang": true
+      },
+      "check": {
+        "checkType": "http",
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_timeout"
+      }
+    },
+    {
+      "id": "tcp-banner-match",
+      "fixture": {
+        "type": "tcp",
+        "banner": "220 Robin ready\r\n"
+      },
+      "check": {
+        "checkType": "tcp",
+        "port": 2525,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": "Robin"
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "tcp-banner-mismatch",
+      "fixture": {
+        "type": "tcp",
+        "banner": "220 Ready\r\n",
+        "closeAfterWrite": true
+      },
+      "check": {
+        "checkType": "tcp",
+        "port": 2525,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": "Robin"
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "smtp-greeting",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example.test ESMTP ready\r\n"
+      },
+      "check": {
+        "checkType": "smtp",
+        "port": 2525,
+        "options": {
+          "smtp": {
+            "startTls": false
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-303-post-becomes-get",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 303,
+            "headers": {
+              "location": "/done"
+            }
+          },
+          "/done": {
+            "status": 200,
+            "body": "done",
+            "method": "GET"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "POST",
+            "headers": {},
+            "body": "payload",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-302-post-rejected",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 302,
+            "headers": {
+              "location": "/done"
+            }
+          },
+          "/done": {
+            "status": 200
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "POST",
+            "headers": {},
+            "body": "payload",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "http-redirect-limit",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 302,
+            "headers": {
+              "location": "/"
+            }
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "GET",
+            "headers": {},
+            "body": "",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 2,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "http-redirect-not-followed",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 302,
+            "headers": {
+              "location": "/done"
+            }
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "GET",
+            "headers": {},
+            "body": "",
+            "expectedStatuses": [
+              302
+            ],
+            "followRedirects": false,
+            "maxRedirects": 0,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-redirect-to-other-scheme-refused",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 302,
+            "headers": {
+              "location": "ftp://example.invalid/"
+            }
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "GET",
+            "headers": {},
+            "body": "",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "http-default-options-accept-2xx",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 204
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {}
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-default-options-reject-3xx-without-location",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 301
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {}
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "http_status"
+      }
+    },
+    {
+      "id": "http-header-assertion",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 200,
+            "headers": {
+              "x-robin": "ready"
+            }
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "GET",
+            "headers": {},
+            "body": "",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": [
+              {
+                "kind": "header",
+                "name": "x-robin",
+                "operator": "equals",
+                "value": "ready"
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-header-assertion-failure",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 200,
+            "headers": {
+              "x-robin": "stale"
+            }
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "GET",
+            "headers": {},
+            "body": "",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": [
+              {
+                "kind": "header",
+                "name": "x-robin",
+                "operator": "equals",
+                "value": "ready"
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "assertion_failed:1"
+      }
+    },
+    {
+      "id": "http-json-assertion",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 200,
+            "body": "{\"ok\":{\"count\":3}}"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "GET",
+            "headers": {},
+            "body": "",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": [
+              {
+                "kind": "json",
+                "pointer": "/ok/count",
+                "operator": "gte",
+                "value": 3
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-json-assertion-failure",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 200,
+            "body": "{\"ok\":{\"count\":1}}"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "GET",
+            "headers": {},
+            "body": "",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": [
+              {
+                "kind": "json",
+                "pointer": "/ok/count",
+                "operator": "gte",
+                "value": 3
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "assertion_failed:1"
+      }
+    },
+    {
+      "id": "http-body-too-large",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 200,
+            "bodyBytes": 2097152
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "GET",
+            "headers": {},
+            "body": "",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "http-headers-too-large",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 200,
+            "headerBytes": 40000
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "GET",
+            "headers": {},
+            "body": "",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "smtp-starttls-advertised-mid-reply",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\n",
+        "replies": [
+          "250-mail.example\r\n250-PIPELINING\r\n250-STARTTLS\r\n250 8BITMIME\r\n",
+          "220 Ready to start TLS\r\n"
+        ],
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_timeout"
+      }
+    },
+    {
+      "id": "smtp-starttls-not-advertised",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\n",
+        "replies": [
+          "250-mail.example\r\n250 8BITMIME\r\n"
+        ],
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "imap-starttls-advertised-mid-line",
+      "fixture": {
+        "type": "imap",
+        "banner": "* OK IMAP ready\r\n",
+        "replies": [
+          "* CAPABILITY IMAP4rev1 STARTTLS AUTH=PLAIN\r\nA001 OK done\r\n",
+          "A002 OK Begin TLS\r\n"
+        ],
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 1,
+        "options": {
+          "imap": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_timeout"
+      }
+    },
+    {
+      "id": "imap-starttls-not-advertised",
+      "fixture": {
+        "type": "imap",
+        "banner": "* OK IMAP ready\r\n",
+        "replies": [
+          "* CAPABILITY IMAP4rev1 AUTH=PLAIN\r\nA001 OK done\r\n"
+        ],
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 1,
+        "options": {
+          "imap": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "address-blocked-ipv4-mapped-metadata",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "::ffff:169.254.169.254",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-nat64-metadata",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "64:ff9b::a9fe:a9fe",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-6to4-metadata",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "2002:a9fe:a9fe::1",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-teredo",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-loopback-v6",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "::1",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-link-local-v4",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "169.254.169.254",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-rfc1918",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "10.0.0.5",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-nat64-public",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "64:ff9b::808:808",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-6to4-public",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "2002:808:808::1",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-discard-prefix",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "100::1",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-benchmarking-v6",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "2001:2::1",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-3fff",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "3fff::1",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-as112-v4",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "192.31.196.1",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "address-blocked-carrier-grade-nat",
+      "fixture": {
+        "type": "tcp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "100.64.0.1",
+        "port": 25,
+        "allowPrivate": false,
+        "options": {
+          "tcp": {
+            "tls": false,
+            "bannerContains": ""
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "imap-starttls-on-non-capability-line",
+      "fixture": {
+        "type": "imap",
+        "banner": "* OK IMAP ready\r\n",
+        "replies": [
+          "* OK STARTTLS\r\n* CAPABILITY IMAP4rev1\r\nA001 OK done\r\n"
+        ],
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 1,
+        "options": {
+          "imap": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "http-307-post-preserved",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 307,
+            "headers": {
+              "location": "/done"
+            }
+          },
+          "/done": {
+            "status": 200,
+            "body": "done",
+            "method": "POST"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "POST",
+            "headers": {},
+            "body": "payload",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-308-post-preserved",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 308,
+            "headers": {
+              "location": "/done"
+            }
+          },
+          "/done": {
+            "status": 200,
+            "body": "done",
+            "method": "POST"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "POST",
+            "headers": {},
+            "body": "payload",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-redirect-cross-origin-with-headers-refused",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 307,
+            "headers": {
+              "location": "http://localhost/done"
+            }
+          },
+          "/done": {
+            "status": 200,
+            "body": "done"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "POST",
+            "headers": {
+              "x-probe": "1"
+            },
+            "body": "payload",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "http-redirect-with-user-info-refused",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 307,
+            "headers": {
+              "location": "http://user:pw@127.0.0.1/done"
+            }
+          },
+          "/done": {
+            "status": 200,
+            "body": "done"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "POST",
+            "headers": {},
+            "body": "payload",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "http-redirect-to-ftp-refused",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 307,
+            "headers": {
+              "location": "ftp://127.0.0.1/done"
+            }
+          },
+          "/done": {
+            "status": 200,
+            "body": "done"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "method": "POST",
+            "headers": {},
+            "body": "payload",
+            "expectedStatuses": [
+              200
+            ],
+            "followRedirects": true,
+            "maxRedirects": 3,
+            "maxResponseTimeMs": null,
+            "assertions": []
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "http-credential-headers-require-https",
+      "fixture": {
+        "type": "http",
+        "status": 200
+      },
+      "check": {
+        "checkType": "http",
+        "secretHeaders": {
+          "x-secret": "value"
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "tls-self-signed-certificate-is-down-in-strict-mode",
+      "fixture": {
+        "type": "https",
+        "routes": {
+          "/": {
+            "status": 200,
+            "body": "ok"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http"
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "tls-self-signed-certificate-is-accepted-when-allowed",
+      "fixture": {
+        "type": "https",
+        "routes": {
+          "/": {
+            "status": 200,
+            "body": "ok"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "tls-certificate-error-mode-warning-downgrades-to-warning",
+      "fixture": {
+        "type": "https",
+        "routes": {
+          "/": {
+            "status": 200,
+            "body": "ok"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "certificateErrorMode": "warning"
+      },
+      "expected": {
+        "status": "warning",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "tls-certificate-near-expiry-is-a-warning",
+      "fixture": {
+        "type": "https",
+        "routes": {
+          "/": {
+            "status": 200,
+            "body": "ok"
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "tlsMode": "allow_self_signed",
+        "certExpiryDays": 40000
+      },
+      "expected": {
+        "status": "warning",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "dns-a-record-matches-expected",
+      "fixture": {
+        "type": "dns",
+        "records": {
+          "A": [
+            "192.0.2.10"
+          ]
+        }
+      },
+      "check": {
+        "checkType": "dns",
+        "endpoint": "probe.example.test",
+        "options": {
+          "dns": {
+            "recordType": "A",
+            "resolver": "127.0.0.1",
+            "expectedValues": [
+              "192.0.2.10"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "dns-ipv6-record-compares-in-normalised-form",
+      "fixture": {
+        "type": "dns",
+        "records": {
+          "AAAA": [
+            "2001:db8::1"
+          ]
+        }
+      },
+      "check": {
+        "checkType": "dns",
+        "endpoint": "probe.example.test",
+        "options": {
+          "dns": {
+            "recordType": "AAAA",
+            "resolver": "127.0.0.1",
+            "expectedValues": [
+              "2001:0db8:0000:0000:0000:0000:0000:0001"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "dns-missing-expected-record-is-down",
+      "fixture": {
+        "type": "dns",
+        "records": {
+          "A": [
+            "192.0.2.10"
+          ]
+        }
+      },
+      "check": {
+        "checkType": "dns",
+        "endpoint": "probe.example.test",
+        "options": {
+          "dns": {
+            "recordType": "A",
+            "resolver": "127.0.0.1",
+            "expectedValues": [
+              "192.0.2.11"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "dns-txt-record-matches-exactly",
+      "fixture": {
+        "type": "dns",
+        "records": {
+          "TXT": [
+            "v=spf1 -all"
+          ]
+        }
+      },
+      "check": {
+        "checkType": "dns",
+        "endpoint": "probe.example.test",
+        "options": {
+          "dns": {
+            "recordType": "TXT",
+            "resolver": "127.0.0.1",
+            "expectedValues": [
+              "v=spf1 -all"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "dns-mx-record-matches-priority-and-host",
+      "fixture": {
+        "type": "dns",
+        "records": {
+          "MX": [
+            "10 mail.example.test"
+          ]
+        }
+      },
+      "check": {
+        "checkType": "dns",
+        "endpoint": "probe.example.test",
+        "options": {
+          "dns": {
+            "recordType": "MX",
+            "resolver": "127.0.0.1",
+            "expectedValues": [
+              "10 MAIL.example.test."
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "dns-cname-record-ignores-case-and-trailing-dot",
+      "fixture": {
+        "type": "dns",
+        "records": {
+          "CNAME": [
+            "Target.example.test"
+          ]
+        }
+      },
+      "check": {
+        "checkType": "dns",
+        "endpoint": "probe.example.test",
+        "options": {
+          "dns": {
+            "recordType": "CNAME",
+            "resolver": "127.0.0.1",
+            "expectedValues": [
+              "target.example.test."
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "dns-nxdomain-is-dns-failure",
+      "fixture": {
+        "type": "dns",
+        "records": {},
+        "rcode": 3
+      },
+      "check": {
+        "checkType": "dns",
+        "endpoint": "probe.example.test",
+        "options": {
+          "dns": {
+            "recordType": "A",
+            "resolver": "127.0.0.1",
+            "expectedValues": []
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "dns_failed"
+      }
+    },
+    {
+      "id": "dns-empty-answer-is-dns-failure",
+      "fixture": {
+        "type": "dns",
+        "records": {}
+      },
+      "check": {
+        "checkType": "dns",
+        "endpoint": "probe.example.test",
+        "options": {
+          "dns": {
+            "recordType": "A",
+            "resolver": "127.0.0.1",
+            "expectedValues": []
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "dns_failed"
+      }
+    },
+    {
+      "id": "dns-silent-resolver-times-out",
+      "fixture": {
+        "type": "dns",
+        "records": {
+          "A": [
+            "192.0.2.10"
+          ]
+        },
+        "hang": true
+      },
+      "check": {
+        "checkType": "dns",
+        "endpoint": "probe.example.test",
+        "options": {
+          "dns": {
+            "recordType": "A",
+            "resolver": "127.0.0.1",
+            "expectedValues": []
+          }
+        },
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_timeout"
+      }
+    },
+    {
+      "id": "dns-public-resolver-address-check-blocks-private-resolver",
+      "fixture": {
+        "type": "dns",
+        "records": {
+          "A": [
+            "192.0.2.10"
+          ]
+        }
+      },
+      "check": {
+        "checkType": "dns",
+        "endpoint": "probe.example.test",
+        "options": {
+          "dns": {
+            "recordType": "A",
+            "resolver": "127.0.0.1",
+            "expectedValues": []
+          }
+        },
+        "allowPrivate": false
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "imap-implicit-tls-self-signed-certificate-is-down-in-strict-mode",
+      "fixture": {
+        "type": "imaps",
+        "banner": "* OK IMAP ready\r\n"
+      },
+      "check": {
+        "checkType": "imap",
+        "options": {
+          "imap": {
+            "startTls": false
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "imap-implicit-tls-accepts-greeting-when-self-signed-allowed",
+      "fixture": {
+        "type": "imaps",
+        "banner": "* OK IMAP ready\r\n"
+      },
+      "check": {
+        "checkType": "imap",
+        "options": {
+          "imap": {
+            "startTls": false
+          }
+        },
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "imap-implicit-tls-near-expiry-is-a-warning",
+      "fixture": {
+        "type": "imaps",
+        "banner": "* OK IMAP ready\r\n"
+      },
+      "check": {
+        "checkType": "imap",
+        "options": {
+          "imap": {
+            "startTls": false
+          }
+        },
+        "tlsMode": "allow_self_signed",
+        "certExpiryDays": 40000
+      },
+      "expected": {
+        "status": "warning",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "smtp-465-implicit-tls-self-signed-certificate-is-down-in-strict-mode",
+      "fixture": {
+        "type": "smtps",
+        "port": 465,
+        "banner": "220 mail.example.test ESMTP ready\r\n"
+      },
+      "check": {
+        "checkType": "smtp",
+        "options": {
+          "smtp": {
+            "startTls": false
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "smtp-465-implicit-tls-accepts-greeting-when-self-signed-allowed",
+      "fixture": {
+        "type": "smtps",
+        "port": 465,
+        "banner": "220 mail.example.test ESMTP ready\r\n"
+      },
+      "check": {
+        "checkType": "smtp",
+        "options": {
+          "smtp": {
+            "startTls": false
+          }
+        },
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "smtp-465-implicit-tls-near-expiry-is-a-warning",
+      "fixture": {
+        "type": "smtps",
+        "port": 465,
+        "banner": "220 mail.example.test ESMTP ready\r\n"
+      },
+      "check": {
+        "checkType": "smtp",
+        "options": {
+          "smtp": {
+            "startTls": false
+          }
+        },
+        "tlsMode": "allow_self_signed",
+        "certExpiryDays": 40000
+      },
+      "expected": {
+        "status": "warning",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "guard-blocks-169-254-169-254",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "169.254.169.254",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-64-ff9b--a9fe-a9fe",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "64:ff9b::a9fe:a9fe",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-2002-a9fe-a9fe--1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "2002:a9fe:a9fe::1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-2001-0-4136-e378-8000-63bf-3fff-fdd2",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-100--1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "100::1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-10-0-0-1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "10.0.0.1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-192-168-1-1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "192.168.1.1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-172-16-0-1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "172.16.0.1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-100-64-0-1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "100.64.0.1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-198-18-0-1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "198.18.0.1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-0-0-0-0",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "0.0.0.0",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-224-0-0-1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "224.0.0.1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks---1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "::1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks---",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "::",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-fe80--1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "fe80::1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-fc00--1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "fc00::1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-ff02--1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "ff02::1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "guard-blocks-192-0-2-1",
+      "fixture": {
+        "type": "tcp"
+      },
+      "check": {
+        "checkType": "tcp",
+        "endpoint": "192.0.2.1",
+        "port": 80,
+        "allowPrivate": false,
+        "timeoutSeconds": 1
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "target_not_permitted"
+      }
+    },
+    {
+      "id": "http-secret-header-is-delivered",
+      "fixture": {
+        "type": "https",
+        "routes": {
+          "/": {
+            "status": 200,
+            "body": "ok",
+            "requestHeaders": {
+              "x-tenant": "abc123"
+            }
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "secretHeaders": {
+          "x-tenant": "abc123"
+        },
+        "expectedStatuses": [
+          200
+        ],
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-missing-secret-header-is-rejected-by-peer",
+      "fixture": {
+        "type": "https",
+        "routes": {
+          "/": {
+            "status": 200,
+            "body": "ok",
+            "requestHeaders": {
+              "x-tenant": "abc123"
+            }
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "expectedStatuses": [
+          200
+        ],
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "http_status"
+      }
+    },
+    {
+      "id": "private-address-allowed-when-opted-in",
+      "fixture": {
+        "type": "http",
+        "status": 200,
+        "body": "ok"
+      },
+      "check": {
+        "checkType": "http",
+        "allowPrivate": true,
+        "expectedStatuses": [
+          200
+        ]
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "smtp-greeting-without-separator-is-rejected",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220abc\r\n"
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": false
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "smtp-greeting-with-wrong-code-is-rejected",
+      "fixture": {
+        "type": "smtp",
+        "banner": "554 no service\r\n"
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": false
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "smtp-ehlo-timeout-before-starttls",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\n"
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_timeout"
+      }
+    },
+    {
+      "id": "imap-lowercase-greeting-is-accepted-then-capability-checked",
+      "fixture": {
+        "type": "imap",
+        "banner": "* ok IMAP ready\r\n",
+        "replies": [
+          "* CAPABILITY IMAP4rev1\r\nA001 OK done\r\n"
+        ],
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 1,
+        "options": {
+          "imap": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "tls-expired-certificate-is-down-even-when-self-signed-allowed",
+      "fixture": {
+        "type": "https",
+        "cert": "expired"
+      },
+      "check": {
+        "checkType": "http",
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "tls-wrong-host-certificate-is-down-even-when-self-signed-allowed",
+      "fixture": {
+        "type": "https",
+        "cert": "wrong-host"
+      },
+      "check": {
+        "checkType": "http",
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "tls-expired-certificate-error-mode-warning-downgrades-to-warning",
+      "fixture": {
+        "type": "https",
+        "cert": "expired"
+      },
+      "check": {
+        "checkType": "http",
+        "tlsMode": "allow_self_signed",
+        "certificateErrorMode": "warning"
+      },
+      "expected": {
+        "status": "warning",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "imap-implicit-tls-expired-certificate-is-down",
+      "fixture": {
+        "type": "imaps",
+        "banner": "* OK IMAP ready\r\n",
+        "cert": "expired"
+      },
+      "check": {
+        "checkType": "imap",
+        "options": {
+          "imap": {
+            "startTls": false
+          }
+        },
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "smtp-465-implicit-tls-wrong-host-certificate-is-down",
+      "fixture": {
+        "type": "smtps",
+        "port": 465,
+        "banner": "220 mail.example ESMTP\r\n",
+        "cert": "wrong-host"
+      },
+      "check": {
+        "checkType": "smtp",
+        "port": 465,
+        "options": {
+          "smtp": {
+            "startTls": false
+          }
+        },
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "smtp-starttls-plaintext-injection-is-rejected",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\n",
+        "replies": [
+          "250-mail.example\r\n250 STARTTLS\r\n",
+          "220 Go ahead\r\nINJECTED\r\n"
+        ],
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "smtp-starttls-refused-after-advertise-is-down",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\n",
+        "replies": [
+          "250-mail.example\r\n250 STARTTLS\r\n",
+          "454 TLS not available\r\n"
+        ],
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "smtp-plaintext-injection-before-ehlo-is-rejected",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\nINJECTED\r\n",
+        "replies": [
+          "250-mail.example\r\n250 STARTTLS\r\n"
+        ],
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "imap-starttls-plaintext-injection-is-rejected",
+      "fixture": {
+        "type": "imap",
+        "banner": "* OK IMAP ready\r\n",
+        "replies": [
+          "* CAPABILITY IMAP4rev1 STARTTLS\r\nA001 OK done\r\n",
+          "A002 OK Begin TLS\r\n* INJECTED\r\n"
+        ],
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 1,
+        "options": {
+          "imap": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "imap-starttls-refused-after-advertise-is-down",
+      "fixture": {
+        "type": "imap",
+        "banner": "* OK IMAP ready\r\n",
+        "replies": [
+          "* CAPABILITY IMAP4rev1 STARTTLS\r\nA001 OK done\r\n",
+          "A002 NO TLS not available\r\n"
+        ],
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 1,
+        "options": {
+          "imap": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "smtp-silent-peer-times-out",
+      "fixture": {
+        "type": "smtp",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": false
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_timeout"
+      }
+    },
+    {
+      "id": "imap-silent-peer-times-out",
+      "fixture": {
+        "type": "imap",
+        "banner": ""
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 1,
+        "options": {
+          "imap": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_timeout"
+      }
+    },
+    {
+      "id": "smtp-slow-dripped-greeting-times-out",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\n",
+        "dripMs": 200
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": false
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_timeout"
+      }
+    },
+    {
+      "id": "imap-slow-dripped-greeting-times-out",
+      "fixture": {
+        "type": "imap",
+        "banner": "* OK IMAP ready\r\n",
+        "dripMs": 200
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 1,
+        "options": {
+          "imap": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_timeout"
+      }
+    },
+    {
+      "id": "imap-plaintext-peer-on-implicit-tls-port-is-down",
+      "fixture": {
+        "type": "imap",
+        "banner": "* OK IMAP ready\r\n"
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 1,
+        "options": {
+          "imap": {
+            "startTls": false
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "smtp-starttls-upgrade-succeeds",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\n",
+        "replies": [
+          "250-mail.example\r\n250 STARTTLS\r\n",
+          "220 Go ahead\r\n",
+          "250 mail.example\r\n"
+        ],
+        "upgradeAfterReply": 2,
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 2,
+        "options": {
+          "smtp": {
+            "startTls": true
+          }
+        },
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "smtp-starttls-ehlo-after-upgrade-rejected",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\n",
+        "replies": [
+          "250-mail.example\r\n250 STARTTLS\r\n",
+          "220 Go ahead\r\n",
+          "502 not implemented\r\n"
+        ],
+        "upgradeAfterReply": 2,
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 2,
+        "options": {
+          "smtp": {
+            "startTls": true
+          }
+        },
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "smtp-starttls-ehlo-after-upgrade-times-out",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\n",
+        "replies": [
+          "250-mail.example\r\n250 STARTTLS\r\n",
+          "220 Go ahead\r\n"
+        ],
+        "upgradeAfterReply": 2,
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": true
+          }
+        },
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_timeout"
+      }
+    },
+    {
+      "id": "smtp-starttls-upgrade-with-expired-certificate-is-down",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\n",
+        "replies": [
+          "250-mail.example\r\n250 STARTTLS\r\n",
+          "220 Go ahead\r\n",
+          "250 mail.example\r\n"
+        ],
+        "upgradeAfterReply": 2,
+        "hangAfterReplies": true,
+        "cert": "expired"
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 2,
+        "options": {
+          "smtp": {
+            "startTls": true
+          }
+        },
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "smtp-starttls-upgrade-self-signed-is-down-in-strict-mode",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 mail.example ESMTP\r\n",
+        "replies": [
+          "250-mail.example\r\n250 STARTTLS\r\n",
+          "220 Go ahead\r\n",
+          "250 mail.example\r\n"
+        ],
+        "upgradeAfterReply": 2,
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 2,
+        "options": {
+          "smtp": {
+            "startTls": true
+          }
+        },
+        "tlsMode": "strict"
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "imap-starttls-upgrade-succeeds",
+      "fixture": {
+        "type": "imap",
+        "banner": "* OK IMAP ready\r\n",
+        "replies": [
+          "* CAPABILITY IMAP4rev1 STARTTLS\r\nA001 OK done\r\n",
+          "A002 OK Begin TLS\r\n"
+        ],
+        "upgradeAfterReply": 2,
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 2,
+        "options": {
+          "imap": {
+            "startTls": true
+          }
+        },
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "imap-starttls-upgrade-with-wrong-host-certificate-is-down",
+      "fixture": {
+        "type": "imap",
+        "banner": "* OK IMAP ready\r\n",
+        "replies": [
+          "* CAPABILITY IMAP4rev1 STARTTLS\r\nA001 OK done\r\n",
+          "A002 OK Begin TLS\r\n"
+        ],
+        "upgradeAfterReply": 2,
+        "cert": "wrong-host",
+        "hangAfterReplies": true
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 2,
+        "options": {
+          "imap": {
+            "startTls": true
+          }
+        },
+        "tlsMode": "allow_self_signed"
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "tls_certificate_error"
+      }
+    },
+    {
+      "id": "smtp-overlong-greeting-line-is-rejected",
+      "fixture": {
+        "type": "smtp",
+        "banner": "220 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "check": {
+        "checkType": "smtp",
+        "timeoutSeconds": 1,
+        "options": {
+          "smtp": {
+            "startTls": false
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "imap-overlong-greeting-line-is-rejected",
+      "fixture": {
+        "type": "imap",
+        "banner": "* OK aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "check": {
+        "checkType": "imap",
+        "timeoutSeconds": 1,
+        "options": {
+          "imap": {
+            "startTls": true
+          }
+        }
+      },
+      "expected": {
+        "status": "down",
+        "errorCode": "probe_failed"
+      }
+    },
+    {
+      "id": "http-default-user-agent-is-identifying",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 200,
+            "requestHeaders": {
+              "user-agent": "Robin-Admin-Monitor/1"
+            }
+          }
+        }
+      },
+      "check": {
+        "checkType": "http"
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    },
+    {
+      "id": "http-user-agent-can-be-overridden",
+      "fixture": {
+        "type": "http",
+        "routes": {
+          "/": {
+            "status": 200,
+            "requestHeaders": {
+              "user-agent": "custom/2"
+            }
+          }
+        }
+      },
+      "check": {
+        "checkType": "http",
+        "options": {
+          "http": {
+            "headers": {
+              "User-Agent": "custom/2"
+            },
+            "expectedStatuses": [
+              200
+            ]
+          }
+        }
+      },
+      "expected": {
+        "status": "up",
+        "errorCode": null
+      }
+    }
+  ]
+}

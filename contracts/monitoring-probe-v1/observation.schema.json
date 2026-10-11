@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robin-admin.dev/contracts/monitoring-probe-v1/observation.schema.json",
+  "title": "Remote probe observation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checkId", "manifestRevision", "startedAt", "finishedAt", "status",
+    "responseTimeMs", "dnsTimeMs", "details"
+  ],
+  "properties": {
+    "checkId": { "type": "integer", "minimum": 1 },
+    "manifestRevision": { "type": "integer", "minimum": 1 },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "status": { "enum": ["up", "down", "warning"] },
+    "errorCode": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9_]*(?::[0-9]+)?$", "maxLength": 64 },
+    "warning": { "type": ["string", "null"], "maxLength": 500 },
+    "responseTimeMs": { "type": "integer", "minimum": 0 },
+    "dnsTimeMs": { "type": "integer", "minimum": 0 },
+    "details": { "type": "object", "maxProperties": 32 }
+  }
+}

@@ -1,0 +1,12 @@
+node_modules
+dist
+.cache
+.vite
+coverage
+.eslintcache
+.git
+.github
+.gitignore
+*.md
+.env*
+npm-debug.log*

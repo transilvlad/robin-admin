@@ -1,0 +1,240 @@
+# Robin Admin: a self-contained stack that follows the Robin suite conventions.
+#
+#   docker compose up -d                                   # standalone
+#   docker compose -f docker-compose.yaml -f docker-compose.suite.yaml up -d
+#   docker compose -f docker-compose.yaml -f docker-compose.host.yaml up -d
+#   docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d --build
+#
+# Naming: every container is named after its service (suite-<component>) and
+# found by its role alias (<role>-backend / <role>-frontend), never by name.
+# Robin Admin reaches each dependency through an environment setting whose
+# default is the role alias: DB_HOST=postgres-backend,
+# TELEMETRY_STORE_URL=http://metrics-backend:8428, and so on.
+
+name: robin-admin
+
+x-hardened: &hardened
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  extra_hosts: ["host.docker.internal:host-gateway"]
+  logging:
+    options:
+      max-size: 10m
+      max-file: "3"
+
+x-healthcheck: &healthcheck
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 15s
+
+services:
+  # Only published entrypoint. Routes /api, /health and /modules to the server
+  # and everything else to the static UI.
+  suite-admin-gateway:
+    <<: *hardened
+    image: caddy:2.11.2-alpine
+    container_name: suite-admin-gateway
+    init: true
+    cap_add: [NET_BIND_SERVICE]
+    pids_limit: 100
+    mem_limit: 256m
+    cpus: 0.50
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    ports: ["${ADMIN_HTTPS_PORT:-3443}:3443"]
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - suite-admin-gateway-data:/data
+      - suite-admin-gateway-config:/config
+    networks:
+      suite-admin:
+        aliases: [admin-gateway]
+    depends_on:
+      suite-admin: { condition: service_healthy }
+      suite-admin-ui: { condition: service_healthy }
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "/dev/null", "https://localhost:3443/"]
+
+  suite-admin:
+    <<: *hardened
+    image: ghcr.io/transilvlad/robin-admin-server:${ROBIN_ADMIN_VERSION:-latest}
+    container_name: suite-admin
+    init: true
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 1.50
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+      - /app/logs:size=32m,mode=0700,uid=1000,gid=1000
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=3001
+      # Required in production; the server refuses to start without it.
+      - ROBIN_ADMIN_PUBLIC_URL=${ROBIN_ADMIN_PUBLIC_URL:-}
+      - SETUP_ID_FILE=${SETUP_ID_FILE:-/tmp/robin-admin-setup-id}
+      - SESSION_SECRET=${SESSION_SECRET:?Set SESSION_SECRET to a high-entropy value}
+      - ROBIN_ADMIN_ENCRYPTION_KEY=${ROBIN_ADMIN_ENCRYPTION_KEY:?Set ROBIN_ADMIN_ENCRYPTION_KEY to at least 32 random characters}
+      - COOKIE_SECURE=${COOKIE_SECURE:-true}
+      # Role addresses (see the header). Override only for a custom layout.
+      - DB_HOST=${DB_HOST:-postgres-backend}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-robin_admin}
+      - DB_USER=${DB_USER:-robin_admin}
+      - DB_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD}
+      - TELEMETRY_STORE_URL=${TELEMETRY_STORE_URL:-http://metrics-backend:8428}
+      - MODULE_INSTALLER_URL=${MODULE_INSTALLER_URL:-http://installer-backend:3041}
+      - MODULE_INSTALLER_SIGNING_SECRET=${MODULE_INSTALLER_SIGNING_SECRET:-}
+      # Standalone: no Robin MTA, modules, agents or fleet services are assumed.
+      - ROBIN_API_ENABLED=${ROBIN_API_ENABLED:-false}
+      - MODULE_PROXY_SECRETS_JSON=${MODULE_PROXY_SECRETS_JSON:-{}}
+      - MODULES_BOOTSTRAP_JSON=${MODULES_BOOTSTRAP_JSON:-[]}
+      - FLEET_AGENTS_BOOTSTRAP_JSON=${FLEET_AGENTS_BOOTSTRAP_JSON:-[]}
+      - FLEET_SERVICES_BOOTSTRAP_JSON=${FLEET_SERVICES_BOOTSTRAP_JSON:-[]}
+      - SHERIFF_ROOT_PUBLIC_KEY_PEM=${SHERIFF_ROOT_PUBLIC_KEY_PEM:-}
+      - SERVE_STATIC=false
+      - MODULE_IDENTITY_TRUST_EXPORT_FILE=/app/module-identity/trust.json
+      # Robin Admin's own error reporting; off when SENTRY_DSN is empty.
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_BROWSER_DSN=${SENTRY_BROWSER_DSN:-}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.05}
+    volumes:
+      - suite-admin-module-identity:/app/module-identity
+    networks:
+      suite-admin:
+        aliases: [admin-backend]
+      suite-admin-internal: {}
+    depends_on:
+      suite-admin-postgres: { condition: service_healthy }
+      suite-victoriametrics: { condition: service_healthy }
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+
+  suite-admin-ui:
+    <<: *hardened
+    image: ghcr.io/transilvlad/robin-admin-client:${ROBIN_ADMIN_VERSION:-latest}
+    container_name: suite-admin-ui
+    environment:
+      - BASE_PATH=${BASE_PATH:-/}
+      - CONTENT_SECURITY_POLICY=${CONTENT_SECURITY_POLICY:-}
+      - CONTENT_SECURITY_POLICY_MODE=${CONTENT_SECURITY_POLICY_MODE:-enforce}
+    pids_limit: 100
+    mem_limit: 256m
+    cpus: 0.50
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /var/cache/nginx:size=32m,mode=1777
+      - /var/run:size=1m,mode=1777
+    networks:
+      suite-admin:
+        aliases: [admin-frontend]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+
+  # Robin Admin's own database (standalone). The suite overlay switches to the
+  # suite's postgres-backend instead.
+  suite-admin-postgres:
+    <<: *hardened
+    image: postgres:18-alpine
+    container_name: suite-admin-postgres
+    read_only: false
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    shm_size: 128m
+    pids_limit: 200
+    mem_limit: 1g
+    environment:
+      - POSTGRES_DB=${DB_NAME:-robin_admin}
+      - POSTGRES_USER=${DB_USER:-robin_admin}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD}
+    volumes:
+      - suite-admin-postgres-data:/var/lib/postgresql
+    networks:
+      suite-admin-internal:
+        aliases: [postgres-backend]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+
+  # Telemetry store: a hard dependency, always running. Retention and memory are
+  # deployment settings, shown read-only in Administration > Telemetry.
+  suite-victoriametrics:
+    <<: *hardened
+    image: victoriametrics/victoria-metrics@sha256:5eff7af5341e401471002f58d106d399e614a62f3d240f2dbc21901e49eed5dd
+    container_name: suite-victoriametrics
+    pids_limit: 128
+    mem_limit: ${TELEMETRY_STORE_MEMORY:-1g}
+    cpus: ${TELEMETRY_STORE_CPUS:-1}
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    command:
+      - -storageDataPath=/storage
+      - -retentionPeriod=${TELEMETRY_RETENTION_DAYS:-90}d
+      - -memory.allowedPercent=60
+      - -httpListenAddr=:8428
+      - -search.maxUniqueTimeseries=100000
+      - -search.maxQueryDuration=30s
+      - -search.maxPointsPerTimeseries=1500
+    volumes:
+      - suite-victoriametrics-data:/storage
+    networks:
+      suite-admin-internal:
+        aliases: [metrics-backend]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8428/health"]
+
+  # Module installer (holds the Docker socket; Robin Admin never does). Opt in:
+  #   docker compose --profile installer up -d
+  suite-admin-installer:
+    <<: *hardened
+    profiles: [installer]
+    image: ghcr.io/transilvlad/robin-admin-installer:${ROBIN_ADMIN_VERSION:-latest}
+    container_name: suite-admin-installer
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 0.50
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    environment:
+      - MODULE_INSTALLER_HOST=0.0.0.0
+      - MODULE_INSTALLER_PORT=3041
+      # Optional at interpolation so stacks without the installer profile need
+      # no value; the installer refuses to start without 32+ characters.
+      - MODULE_INSTALLER_SIGNING_SECRET=${MODULE_INSTALLER_SIGNING_SECRET:-}
+      - MODULE_INSTALLER_STATE_DIR=/state
+      - MODULE_INSTALLER_POLICY_FILE=/policy/installer-policy.json
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - suite-admin-installer-state:/state
+      - ${MODULE_INSTALLER_POLICY:-./installer/examples/local-policy.json}:/policy/installer-policy.json:ro
+    networks:
+      suite-admin-internal:
+        aliases: [installer-backend]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3041/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+
+networks:
+  suite-admin:
+    name: suite-admin
+  # Database, telemetry store and installer: reachable from Robin Admin only.
+  suite-admin-internal:
+    name: suite-admin-internal
+    internal: true
+
+volumes:
+  suite-admin-postgres-data:
+    name: suite-admin-postgres-data
+  suite-victoriametrics-data:
+    name: suite-victoriametrics-data
+  suite-admin-module-identity:
+    name: suite-admin-module-identity
+  suite-admin-gateway-data:
+    name: suite-admin-gateway-data
+  suite-admin-gateway-config:
+    name: suite-admin-gateway-config
+  suite-admin-installer-state:
+    name: suite-admin-installer-state

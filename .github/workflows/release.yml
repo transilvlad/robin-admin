@@ -1,0 +1,548 @@
+# Robin Admin - Release Management
+# Status Badge: ![Release](https://github.com/transilvlad/robin-admin/actions/workflows/release.yml/badge.svg)
+#
+# This workflow creates GitHub Releases when version tags are pushed.
+#
+# Triggers:
+# - Push of version tags (v*)
+# - Manual dispatch validates archives without publishing a release
+#
+# To create a release:
+# 1. Update version in package.json files
+# 2. Commit changes
+# 3. Tag the commit: git tag v1.0.0
+# 4. Push the tag: git push origin v1.0.0
+#
+# The workflow will:
+# - Run CI checks first
+# - Build artifacts
+# - Create a GitHub Release with auto-generated changelog
+# - Trigger Docker image publishing
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  NODE_VERSION: '26.10.0'
+  REGISTRY: ghcr.io
+  CLIENT_IMAGE: ghcr.io/${{ github.repository_owner }}/robin-admin-client
+  SERVER_IMAGE: ghcr.io/${{ github.repository_owner }}/robin-admin-server
+  INSTALLER_IMAGE: ghcr.io/${{ github.repository_owner }}/robin-admin-installer
+
+jobs:
+  # First, run CI checks
+  ci:
+    name: CI Checks
+    uses: ./.github/workflows/ci.yml
+
+  # Build release artifacts
+  build:
+    name: Build Artifacts
+    runs-on: ubuntu-latest
+    needs: ci
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Get release version
+        id: version
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="$(node -p 'require("./package.json").version')"
+          else
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Verify package versions match release
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node - <<'NODE'
+          const expected = process.env.EXPECTED_VERSION;
+          for (const path of ['package.json', 'client/package.json', 'server/package.json', 'installer/package.json']) {
+            const actual = require(`./${path}`).version;
+            if (actual !== expected) {
+              throw new Error(`${path} version ${actual} does not match tag ${expected}`);
+            }
+          }
+          NODE
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            client/package-lock.json
+            server/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          cd client && npm ci
+          cd ../server && npm ci
+
+      - name: Build client
+        working-directory: client
+        run: npm run build
+
+      - name: Build server
+        working-directory: server
+        run: npm run build
+
+      - name: Create client release archive
+        run: |
+          cd client
+          tar -czvf ../robin-admin-client-${{ steps.version.outputs.version }}.tar.gz dist/
+          cd ..
+          zip -r robin-admin-client-${{ steps.version.outputs.version }}.zip client/dist/
+
+      - name: Create server release archive
+        run: |
+          cd server
+          tar -czvf ../robin-admin-server-${{ steps.version.outputs.version }}.tar.gz dist/ package.json package-lock.json
+          cd ..
+          zip -r robin-admin-server-${{ steps.version.outputs.version }}.zip server/dist/ server/package.json server/package-lock.json
+
+      - name: Create host installer release archive
+        run: |
+          tar -czvf robin-admin-installer-${{ steps.version.outputs.version }}.tar.gz \
+            installer/src installer/package.json installer/README.md installer/examples
+          zip -r robin-admin-installer-${{ steps.version.outputs.version }}.zip \
+            installer/src installer/package.json installer/README.md installer/examples
+
+      - name: Create release checksums
+        run: sha256sum robin-admin-*.tar.gz robin-admin-*.zip > SHA256SUMS
+
+      - name: Upload client artifact (tar.gz)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: client-tar
+          path: robin-admin-client-${{ steps.version.outputs.version }}.tar.gz
+
+      - name: Upload client artifact (zip)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: client-zip
+          path: robin-admin-client-${{ steps.version.outputs.version }}.zip
+
+      - name: Upload server artifact (tar.gz)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: server-tar
+          path: robin-admin-server-${{ steps.version.outputs.version }}.tar.gz
+
+      - name: Upload server artifact (zip)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: server-zip
+          path: robin-admin-server-${{ steps.version.outputs.version }}.zip
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installer-archives
+          path: |
+            robin-admin-installer-${{ steps.version.outputs.version }}.tar.gz
+            robin-admin-installer-${{ steps.version.outputs.version }}.zip
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checksums
+          path: SHA256SUMS
+
+  # Create GitHub Release
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "SHA256SUMS" \) -exec mv {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous tag found, generating full changelog"
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges | head -50)
+          else
+            echo "Previous tag: $PREV_TAG"
+            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" --no-merges)
+          fi
+
+          # Create changelog file
+          cat > changelog.md << EOF
+          ## What's Changed
+
+          $COMMITS
+
+          ## Docker Images
+
+          Pull the Docker images for this release:
+
+          \`\`\`bash
+          docker pull ghcr.io/${{ github.repository_owner }}/robin-admin-client:${{ needs.build.outputs.version }}
+          docker pull ghcr.io/${{ github.repository_owner }}/robin-admin-server:${{ needs.build.outputs.version }}
+          \`\`\`
+
+          ## Installation
+
+          ### Using Docker Compose (Recommended)
+
+          Update your \`docker-compose.yaml\` to use the new version:
+
+          \`\`\`yaml
+          services:
+            client:
+              image: ghcr.io/${{ github.repository_owner }}/robin-admin-client:${{ needs.build.outputs.version }}
+            server:
+              image: ghcr.io/${{ github.repository_owner }}/robin-admin-server:${{ needs.build.outputs.version }}
+          \`\`\`
+
+          ### Manual Installation
+
+          Download the archives from the release assets below and extract:
+
+          \`\`\`bash
+          tar -xzf robin-admin-client-${{ needs.build.outputs.version }}.tar.gz
+          tar -xzf robin-admin-server-${{ needs.build.outputs.version }}.tar.gz
+          \`\`\`
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...v${{ needs.build.outputs.version }}
+          EOF
+
+          echo "Changelog generated"
+          cat changelog.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          name: Robin Admin v${{ needs.build.outputs.version }}
+          body_path: changelog.md
+          draft: false
+          prerelease: ${{ contains(needs.build.outputs.version, '-') }}
+          files: release-assets/*
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          {
+            echo "## Release Created 🚀"
+            echo
+            echo "**Version:** v${{ needs.build.outputs.version }}"
+            echo
+            echo "**Assets:**"
+            find release-assets -maxdepth 1 -type f -printf '%f\n' |
+              sort |
+              while IFS= read -r file; do
+                echo "- \`$file\`"
+              done
+            echo
+            echo "**Docker Images:** Published by this workflow"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Versioned multi-arch images, built after the same CI run as the release
+  # archives (formerly docker-publish.yml, which ran CI a second time).
+  build-and-push-client:
+    name: Build & Push Client
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    needs: ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.CLIENT_IMAGE }}
+          tags: |
+            # Short SHA
+            type=sha,prefix=
+            # Semver tags (v1.2.3 -> 1.2.3, 1.2, 1, latest)
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            # Latest only for stable semver tags
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      # buildx can't --load a multi-platform manifest, so the pre-push scan
+      # builds only the runner's native platform (linux/amd64) and loads it
+      # into the local Docker daemon. The final multi-arch build below reuses
+      # this build's GHA cache for dependencies/compilation; runtime OS packages
+      # are refreshed. Nothing is pushed to ghcr.io until the scan step passes.
+      - name: Build client image for security scan (linux/amd64, local only)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./client
+          file: ./client/Dockerfile
+          no-cache-filters: runtime
+          push: false
+          load: true
+          tags: ${{ env.CLIENT_IMAGE }}:scan-${{ github.sha }}
+          cache-from: type=gha,scope=client
+          cache-to: type=gha,mode=max,scope=client
+          platforms: linux/amd64
+
+      - name: Scan client image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.CLIENT_IMAGE }}:scan-${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push client image
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./client
+          file: ./client/Dockerfile
+          no-cache-filters: runtime
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=client
+          cache-to: type=gha,mode=max,scope=client
+          platforms: linux/amd64,linux/arm64
+          provenance: true
+          sbom: true
+
+      - name: Sign client image
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${CLIENT_IMAGE}@${DIGEST}"
+
+  build-and-push-server:
+    name: Build & Push Server
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    needs: ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.SERVER_IMAGE }}
+          tags: |
+            # Short SHA
+            type=sha,prefix=
+            # Semver tags (v1.2.3 -> 1.2.3, 1.2, 1, latest)
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            # Latest only for stable semver tags
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      # buildx can't --load a multi-platform manifest, so the pre-push scan
+      # builds only the runner's native platform (linux/amd64) and loads it
+      # into the local Docker daemon. The final multi-arch build below reuses
+      # this build's GHA cache for dependencies/compilation; runtime OS packages
+      # are refreshed. Nothing is pushed to ghcr.io until the scan step passes.
+      - name: Build server image for security scan (linux/amd64, local only)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          no-cache-filters: runtime
+          push: false
+          load: true
+          tags: ${{ env.SERVER_IMAGE }}:scan-${{ github.sha }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
+          platforms: linux/amd64
+
+      - name: Scan server image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.SERVER_IMAGE }}:scan-${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push server image
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          no-cache-filters: runtime
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ROBIN_ADMIN_RELEASE=${{ github.ref_name }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
+          platforms: linux/amd64,linux/arm64
+          provenance: true
+          sbom: true
+
+      - name: Sign server image
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${SERVER_IMAGE}@${DIGEST}"
+
+  build-and-push-installer:
+    name: Build & Push Installer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    needs: ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.INSTALLER_IMAGE }}
+          tags: |
+            # Short SHA
+            type=sha,prefix=
+            # Semver tags (v1.2.3 -> 1.2.3, 1.2, 1, latest)
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            # Latest only for stable semver tags
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      # buildx can't --load a multi-platform manifest, so the pre-push scan
+      # builds only the runner's native platform (linux/amd64) and loads it
+      # into the local Docker daemon. The final multi-arch build below reuses
+      # this build's GHA cache for dependencies/compilation; runtime OS packages
+      # are refreshed. Nothing is pushed to ghcr.io until the scan step passes.
+      - name: Build installer image for security scan (linux/amd64, local only)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./installer
+          file: ./installer/Dockerfile
+          no-cache-filters: runtime
+          push: false
+          load: true
+          tags: ${{ env.INSTALLER_IMAGE }}:scan-${{ github.sha }}
+          cache-from: type=gha,scope=installer
+          cache-to: type=gha,mode=max,scope=installer
+          platforms: linux/amd64
+
+      - name: Scan installer image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.INSTALLER_IMAGE }}:scan-${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push installer image
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./installer
+          file: ./installer/Dockerfile
+          no-cache-filters: runtime
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=installer
+          cache-to: type=gha,mode=max,scope=installer
+          platforms: linux/amd64,linux/arm64
+          provenance: true
+          sbom: true
+
+      - name: Sign installer image
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${INSTALLER_IMAGE}@${DIGEST}"
