@@ -96,8 +96,9 @@ export async function createTelemetryAlertRule(input: TelemetryAlertRuleInput): 
 }
 
 /**
- * A changed query or condition makes the tracked series meaningless, so their
- * state is dropped (without notifications); a disabled rule tracks nothing.
+ * Series state survives an edit: the next evaluation recovers firing series
+ * that no longer match or are no longer returned, through the normal delivery
+ * path. A disabled rule's state is cleared, with recoveries, by the evaluator.
  */
 export async function updateTelemetryAlertRule(id: number, input: TelemetryAlertRuleInput): Promise<TelemetryAlertRule | null> {
   const result = await query<RuleRow>(
@@ -109,12 +110,18 @@ export async function updateTelemetryAlertRule(id: number, input: TelemetryAlert
     [id, input.name, input.description, input.query, input.comparator, input.threshold, input.forSeconds, input.severity, input.enabled],
   );
   if (!result.rows[0]) return null;
-  await query('DELETE FROM telemetry_alert_states WHERE rule_id = $1', [id]);
   return mapRule(result.rows[0]);
 }
 
-export async function deleteTelemetryAlertRule(id: number): Promise<boolean> {
-  const result = await query('DELETE FROM telemetry_alert_rules WHERE id = $1', [id]);
+export async function listTelemetryAlertRulesByIds(client: PoolClient, ids: number[]): Promise<TelemetryAlertRule[]> {
+  if (ids.length === 0) return [];
+  const result = await client.query<RuleRow>(`SELECT ${RULE_COLUMNS} FROM telemetry_alert_rules WHERE id = ANY($1::int[]) ORDER BY id`, [ids]);
+  return result.rows.map(mapRule);
+}
+
+/** Its series states go with the rule (ON DELETE CASCADE). */
+export async function deleteTelemetryAlertRule(client: PoolClient, id: number): Promise<boolean> {
+  const result = await client.query('DELETE FROM telemetry_alert_rules WHERE id = $1', [id]);
   return (result.rowCount ?? 0) > 0;
 }
 
@@ -157,10 +164,15 @@ export async function recordTelemetryAlertRuleEvaluation(
   );
 }
 
-/** Disabled rules track nothing; their state goes without notifications. */
-export async function clearDisabledTelemetryAlertStates(client: PoolClient): Promise<void> {
-  await client.query(
+/**
+ * Disabled rules track nothing. Returns the cleared states so the caller can
+ * recover the ones that were firing.
+ */
+export async function clearDisabledTelemetryAlertStates(client: PoolClient): Promise<StateRow[]> {
+  const result = await client.query<StateRow>(
     `DELETE FROM telemetry_alert_states s USING telemetry_alert_rules r
-     WHERE r.id = s.rule_id AND NOT r.enabled`,
+     WHERE r.id = s.rule_id AND NOT r.enabled
+     RETURNING s.rule_id, s.series_key, s.labels_json, s.status, s.pending_since, s.firing_since, s.last_value, s.last_seen_at`,
   );
+  return result.rows;
 }

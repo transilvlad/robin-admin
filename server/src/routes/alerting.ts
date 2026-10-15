@@ -26,11 +26,10 @@ import { getConfig } from '../db/queries/config.js';
 import { routeParam } from './params.js';
 import {
   createTelemetryAlertRule,
-  deleteTelemetryAlertRule,
   listTelemetryAlertRules,
   updateTelemetryAlertRule,
 } from '../db/queries/telemetry-alert-rules.js';
-import { previewTelemetryAlertRule } from '../services/alerts/telemetry-rules.js';
+import { deleteTelemetryAlertRuleWithRecoveries, previewTelemetryAlertRule } from '../services/alerts/telemetry-rules.js';
 import { buildSentryAlertPayload, parseSentryDsn } from '../services/alerts/sentry.js';
 import { TelemetryQueryError } from '../services/telemetry/store-client.js';
 import {
@@ -508,7 +507,7 @@ router.delete('/telemetry-alert-rules/:id', requireAuth, requireAdmin, async (re
   try {
     const id = parseId(routeParam(req, 'id'));
     if (!id) return res.status(400).json({ success: false, error: 'Invalid rule ID' });
-    if (!(await deleteTelemetryAlertRule(id))) return res.status(404).json({ success: false, error: 'Rule not found' });
+    if (!(await deleteTelemetryAlertRuleWithRecoveries(id))) return res.status(404).json({ success: false, error: 'Rule not found' });
     await logAudit(req, AuditActions.TELEMETRY_ALERT_RULE_DELETE, { entityType: 'telemetry_alert_rule', entityId: String(id) });
     res.json({ success: true });
   } catch (error) {

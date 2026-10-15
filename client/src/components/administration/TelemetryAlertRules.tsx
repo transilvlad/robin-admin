@@ -323,7 +323,7 @@ export function TelemetryAlertRules() {
       </Modal>
 
       <Modal isOpen={deleting !== null} onClose={() => setDeleting(null)} title="Delete telemetry rule" size="sm">
-        <p className="text-sm">Delete “{deleting?.name}”? Series that are firing are dropped without a recovery notification.</p>
+        <p className="text-sm">Delete “{deleting?.name}”? Series that are firing get a recovery notification.</p>
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="secondary" onClick={() => setDeleting(null)}>Cancel</Button>
           <Button variant="danger" onClick={() => void remove()} disabled={working}>Delete</Button>

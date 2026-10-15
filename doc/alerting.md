@@ -38,6 +38,8 @@ Webhook URLs are encrypted at rest with `ROBIN_ADMIN_ENCRYPTION_KEY` and are wri
 | Telemetry rule | Telemetry alert rules | A rule fires or recovers for a series |
 | Email delivery failure | Robin Admin outbound email | All relays failed |
 
+Telemetry rules track each result series on its own. Editing a rule keeps that state: on the next evaluation, a firing series that no longer matches, or that the edited query no longer returns, recovers through the normal path (Slack recovery, Sentry issue resolved). Disabling or deleting a rule sends a recovery for each series it had firing.
+
 Missing timestamps, unknown deferred-message ages, and cache ratios with no request or block evidence are ignored. A bounce rate over fewer than 20 attempts counts as healthy, so a quiet relay recovers rather than alerting on a handful of messages. They do not count as failures or recoveries.
 
 ## Delivery

@@ -120,6 +120,15 @@ describe('transitionSeries', () => {
     expect(gone).toEqual({ next: null, event: 'recovery', absent: true });
   });
 
+  it('recovers a firing series at once when it goes missing after the rule was edited', () => {
+    const firing = state({ status: 'firing', firing_since: t0, last_seen_at: at(60) });
+    expect(transitionSeries({ ...base, previous: firing, observed: null, now: at(120), ruleUpdatedAt: at(90) }))
+      .toEqual({ next: null, event: 'recovery', absent: true, cleared: 'edited' });
+    // Seen since the edit: a brief gap still waits out the grace period.
+    expect(transitionSeries({ ...base, previous: firing, observed: null, now: at(120), ruleUpdatedAt: at(30) }))
+      .toEqual({ next: firing, event: null, absent: true });
+  });
+
   it('drops a missing pending series without an event', () => {
     expect(transitionSeries({ ...base, previous: state(), observed: null, now: at(30) })).toEqual({ next: null, event: null, absent: true });
   });
@@ -165,6 +174,18 @@ describe('buildTelemetryRulePayload', () => {
       now: at(900),
     });
     expect(payload.summary).toBe('SMTP egress down recovered: host=obm-cobalt, role=obm is no longer reported');
+  });
+
+  it('says when a series recovered because its rule was disabled or deleted', () => {
+    const payload = buildTelemetryRulePayload('generic', {
+      rule,
+      event: 'recovery',
+      state: state({ status: 'firing', firing_since: t0 }),
+      absent: false,
+      now: at(900),
+      cleared: 'deleted',
+    });
+    expect(payload.summary).toBe('SMTP egress down cleared for host=obm-cobalt, role=obm: the rule was deleted');
   });
 
   it('describes durations', () => {

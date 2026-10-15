@@ -11,8 +11,10 @@ import { getClient } from '../../db/connection.js';
 import { createAlertDelivery, listAlertWebhooks } from '../../db/queries/alerts.js';
 import {
   clearDisabledTelemetryAlertStates,
+  deleteTelemetryAlertRule,
   deleteTelemetryAlertState,
   listEnabledTelemetryAlertRules,
+  listTelemetryAlertRulesByIds,
   loadTelemetryAlertStates,
   recordTelemetryAlertRuleEvaluation,
   saveTelemetryAlertState,
@@ -64,15 +66,22 @@ export function formatSeriesLabels(labels: Record<string, string>): string {
   return entries.sort(([a], [b]) => a.localeCompare(b)).map(([name, value]) => `${name}=${value}`).join(', ');
 }
 
+// Why a firing series recovered without its condition clearing.
+export type TelemetryRuleClearReason = 'edited' | 'disabled' | 'deleted';
+
 export interface SeriesTransition {
   next: StateRow | null;
   event: TelemetryRuleEvent | null;
   absent: boolean;
+  cleared?: TelemetryRuleClearReason;
 }
 
 /**
  * One series' next state. `observed` is null when the series is missing from
- * this evaluation's result.
+ * this evaluation's result. `ruleUpdatedAt` is when the rule was last edited:
+ * a firing series last seen before an edit and missing after it is no longer
+ * covered by the rule, so it recovers at once instead of after the absence
+ * grace period.
  */
 export function transitionSeries(input: {
   ruleId: number;
@@ -80,11 +89,15 @@ export function transitionSeries(input: {
   previous: StateRow | null;
   observed: { key: string; labels: Record<string, string>; value: number | null; matches: boolean } | null;
   now: Date;
+  ruleUpdatedAt?: Date;
 }): SeriesTransition {
   const { previous, observed, now } = input;
   if (!observed) {
     if (!previous) return { next: null, event: null, absent: true };
     if (previous.status === 'pending') return { next: null, event: null, absent: true };
+    if (input.ruleUpdatedAt && input.ruleUpdatedAt > previous.last_seen_at) {
+      return { next: null, event: 'recovery', absent: true, cleared: 'edited' };
+    }
     if (now.getTime() - previous.last_seen_at.getTime() >= ABSENT_RESOLVE_SECONDS * 1000) {
       return { next: null, event: 'recovery', absent: true };
     }
@@ -131,6 +144,47 @@ interface PendingDelivery {
   state: StateRow;
   absent: boolean;
   now: Date;
+  cleared?: TelemetryRuleClearReason;
+}
+
+/** Recoveries for the firing series of a rule that stopped tracking them. */
+function clearedRecoveries(rule: TelemetryAlertRule, states: StateRow[], cleared: TelemetryRuleClearReason, now: Date): PendingDelivery[] {
+  return states
+    .filter((state) => state.status === 'firing')
+    .map((state) => ({ rule, event: 'recovery' as const, state, absent: false, now, cleared }));
+}
+
+async function recoverDisabledRules(client: PoolClient, now: Date): Promise<PendingDelivery[]> {
+  const firing = (await clearDisabledTelemetryAlertStates(client)).filter((state) => state.status === 'firing');
+  if (firing.length === 0) return [];
+  const rules = await listTelemetryAlertRulesByIds(client, [...new Set(firing.map((state) => state.rule_id))]);
+  return rules.flatMap((rule) => clearedRecoveries(rule, firing.filter((state) => state.rule_id === rule.id), 'disabled', now));
+}
+
+/**
+ * Deletes a rule and recovers each series it had firing, so Slack hears the
+ * recovery and the Sentry issue resolves. Waits for a running evaluation.
+ */
+export async function deleteTelemetryAlertRuleWithRecoveries(id: number, now = new Date()): Promise<boolean> {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [EVALUATOR_LOCK_ID]);
+    const [rule] = await listTelemetryAlertRulesByIds(client, [id]);
+    if (!rule) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+    await enqueueDeliveries(client, clearedRecoveries(rule, await loadTelemetryAlertStates(client, id), 'deleted', now));
+    await deleteTelemetryAlertRule(client, id);
+    await client.query('COMMIT');
+    return true;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function runTelemetryRuleEvaluation(now = new Date(), runQuery: QueryInstant = queryInstant): Promise<boolean> {
@@ -142,8 +196,7 @@ export async function runTelemetryRuleEvaluation(now = new Date(), runQuery: Que
       await client.query('ROLLBACK');
       return false;
     }
-    await clearDisabledTelemetryAlertStates(client);
-    const deliveries: PendingDelivery[] = [];
+    const deliveries = await recoverDisabledRules(client, now);
     for (const rule of await listEnabledTelemetryAlertRules(client)) {
       deliveries.push(...await evaluateRule(client, rule, now, runQuery));
     }
@@ -169,13 +222,14 @@ async function evaluateRule(client: PoolClient, rule: TelemetryAlertRule, now: D
     return [];
   }
   const previousByKey = new Map((await loadTelemetryAlertStates(client, rule.id)).map((state) => [state.series_key, state]));
+  const ruleUpdatedAt = new Date(rule.updatedAt);
   const deliveries: PendingDelivery[] = [];
   const apply = async (transition: SeriesTransition, previous: StateRow | null, key: string) => {
     if (transition.next) await saveTelemetryAlertState(client, transition.next);
     else if (previous) await deleteTelemetryAlertState(client, rule.id, key);
     if (transition.event) {
       const state = transition.event === 'failure' ? transition.next! : previous!;
-      deliveries.push({ rule, event: transition.event, state, absent: transition.absent, now });
+      deliveries.push({ rule, event: transition.event, state, absent: transition.absent, now, cleared: transition.cleared });
     }
   };
   for (const series of result.series) {
@@ -194,7 +248,7 @@ async function evaluateRule(client: PoolClient, rule: TelemetryAlertRule, now: D
   // A truncated result does not show which series are really gone, so series
   // past the cut keep their state instead of recovering as absent.
   for (const [key, previous] of result.truncated ? [] : previousByKey) {
-    await apply(transitionSeries({ ruleId: rule.id, forSeconds: rule.forSeconds, previous, observed: null, now }), previous, key);
+    await apply(transitionSeries({ ruleId: rule.id, forSeconds: rule.forSeconds, previous, observed: null, now, ruleUpdatedAt }), previous, key);
   }
   await recordTelemetryAlertRuleEvaluation(
     client,
@@ -250,14 +304,16 @@ export function describeCondition(rule: Pick<TelemetryAlertRule, 'comparator' | 
 
 export function buildTelemetryRulePayload(
   adapter: AlertWebhook['adapter'],
-  delivery: Pick<PendingDelivery, 'rule' | 'event' | 'state' | 'absent' | 'now'>,
+  delivery: Pick<PendingDelivery, 'rule' | 'event' | 'state' | 'absent' | 'now' | 'cleared'>,
 ): JsonRecord | null {
   const { rule, event, state } = delivery;
   const seriesLabel = formatSeriesLabels(state.labels_json);
   const value = state.last_value === null ? 'n/a' : String(Number(state.last_value.toFixed(4)));
-  const outcome = event === 'recovery'
-    ? (delivery.absent ? `${rule.name} recovered: ${seriesLabel} is no longer reported` : `${rule.name} recovered for ${seriesLabel}`)
-    : `${rule.name} is firing for ${seriesLabel}`;
+  const outcome = event === 'failure'
+    ? `${rule.name} is firing for ${seriesLabel}`
+    : delivery.cleared
+      ? `${rule.name} cleared for ${seriesLabel}: the rule was ${delivery.cleared}`
+      : delivery.absent ? `${rule.name} recovered: ${seriesLabel} is no longer reported` : `${rule.name} recovered for ${seriesLabel}`;
   const detail: JsonRecord = {
     version: 1,
     eventKind: event,

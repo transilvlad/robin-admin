@@ -43,11 +43,10 @@ vi.mock('../db/queries/alerts.js', () => ({
 }));
 vi.mock('../db/queries/telemetry-alert-rules.js', () => ({
   createTelemetryAlertRule: vi.fn(),
-  deleteTelemetryAlertRule: vi.fn(),
   listTelemetryAlertRules: vi.fn(),
   updateTelemetryAlertRule: vi.fn(),
 }));
-vi.mock('../services/alerts/telemetry-rules.js', () => ({ previewTelemetryAlertRule: vi.fn() }));
+vi.mock('../services/alerts/telemetry-rules.js', () => ({ deleteTelemetryAlertRuleWithRecoveries: vi.fn(), previewTelemetryAlertRule: vi.fn() }));
 vi.mock('../db/queries/config.js', () => ({
   getConfig: vi.fn(() => Promise.resolve({ alertDeliveryRetentionDays: 30 })),
 }));
@@ -169,7 +168,7 @@ describe('telemetry alert rule routes', () => {
 
   it('returns 404 when updating or deleting a missing rule', async () => {
     vi.mocked(rules.updateTelemetryAlertRule).mockResolvedValue(null);
-    vi.mocked(rules.deleteTelemetryAlertRule).mockResolvedValue(false);
+    vi.mocked(telemetryRules.deleteTelemetryAlertRuleWithRecoveries).mockResolvedValue(false);
     expect((await post('/telemetry-alert-rules/99', body, 'PUT')).status).toBe(404);
     expect((await fetch(`${baseUrl}/api/telemetry-alert-rules/99`, { method: 'DELETE' })).status).toBe(404);
   });
