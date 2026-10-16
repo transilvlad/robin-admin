@@ -12,6 +12,7 @@ import {
   statusPath,
 } from '../components/status-page/StatusPageViews';
 import { pagePalette, type StatusPalette } from '../components/status-page/statusPageTheme';
+import { statusFaviconUrl } from '../components/status-page/statusFavicon';
 import type { PublicStatusPage } from '../types/status-page';
 
 /**
@@ -66,17 +67,19 @@ export function StatusPagePublic({ basePath = '/status' }: { basePath?: string }
     };
   }, []);
 
-  // The tab shows the company, not the app: this page is the whole site on its own domain.
+  // The tab shows the company and the current status, not the app: this page
+  // is the whole site on its own domain, and the icon follows each refresh.
   const companyName = page?.settings.companyName;
-  const logoUrl = page?.settings.logoUrl;
+  const aggregateStatus = page?.aggregateStatus;
   useEffect(() => {
     if (companyName) document.title = `${companyName} status`;
-    if (logoUrl) {
+    if (aggregateStatus) {
       const icon = document.querySelector<HTMLLinkElement>('link[rel~="icon"]') ?? document.head.appendChild(document.createElement('link'));
       icon.rel = 'icon';
-      icon.href = logoUrl;
+      icon.type = 'image/svg+xml';
+      icon.href = statusFaviconUrl(aggregateStatus);
     }
-  }, [companyName, logoUrl]);
+  }, [companyName, aggregateStatus]);
 
   if (loading) return <div className="flex min-h-screen items-center justify-center bg-gray-50"><Spinner className="text-robin-orange" /></div>;
   if (error || !page) return <div className="flex min-h-screen items-center justify-center bg-gray-50 px-6 text-center text-sm text-red-700">{error || 'Status page unavailable'}</div>;
