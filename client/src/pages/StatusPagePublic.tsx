@@ -66,6 +66,18 @@ export function StatusPagePublic({ basePath = '/status' }: { basePath?: string }
     };
   }, []);
 
+  // The tab shows the company, not the app: this page is the whole site on its own domain.
+  const companyName = page?.settings.companyName;
+  const logoUrl = page?.settings.logoUrl;
+  useEffect(() => {
+    if (companyName) document.title = `${companyName} status`;
+    if (logoUrl) {
+      const icon = document.querySelector<HTMLLinkElement>('link[rel~="icon"]') ?? document.head.appendChild(document.createElement('link'));
+      icon.rel = 'icon';
+      icon.href = logoUrl;
+    }
+  }, [companyName, logoUrl]);
+
   if (loading) return <div className="flex min-h-screen items-center justify-center bg-gray-50"><Spinner className="text-robin-orange" /></div>;
   if (error || !page) return <div className="flex min-h-screen items-center justify-center bg-gray-50 px-6 text-center text-sm text-red-700">{error || 'Status page unavailable'}</div>;
 
