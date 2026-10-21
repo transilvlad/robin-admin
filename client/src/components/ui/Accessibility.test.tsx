@@ -31,6 +31,17 @@ describe('accessible UI primitives', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('keeps keyboard focus inside dialogs', () => {
+    render(<Modal isOpen onClose={() => undefined} title="Dismiss issue"><button type="button">First action</button></Modal>);
+    const close = screen.getByRole('button', { name: 'Close dialog' });
+    const first = screen.getByRole('button', { name: 'First action' });
+    close.focus();
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(document.activeElement).toBe(close);
+  });
+
   it('exposes accessible loading text and honors reduced motion', () => {
     render(<Spinner label="Loading metrics" />);
 

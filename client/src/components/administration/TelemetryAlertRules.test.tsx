@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { TelemetryAlertRules, formatLabels } from './TelemetryAlertRules';
 
 const { alertsApi } = vi.hoisted(() => ({
@@ -46,7 +47,7 @@ describe('TelemetryAlertRules', () => {
   afterEach(cleanup);
 
   it('shows each rule with its condition and firing series', async () => {
-    render(<TelemetryAlertRules />);
+    render(<MemoryRouter><TelemetryAlertRules /></MemoryRouter>);
     expect(await screen.findByText('SMTP egress down')).toBeInTheDocument();
     expect(screen.getByText('Firing (1)')).toBeInTheDocument();
     expect(screen.getByText(/< 1 for 5 min · critical/)).toBeInTheDocument();
@@ -57,7 +58,7 @@ describe('TelemetryAlertRules', () => {
     alertsApi.listTelemetryRules.mockResolvedValue({ data: [] });
     alertsApi.previewTelemetryRule.mockResolvedValue({ data: { series: [{ labels: { host: 'a' }, value: 0, matches: true }, { labels: { host: 'b' }, value: 1, matches: false }], truncated: false } });
     alertsApi.createTelemetryRule.mockResolvedValue({ data: rule });
-    render(<TelemetryAlertRules />);
+    render(<MemoryRouter><TelemetryAlertRules /></MemoryRouter>);
     fireEvent.click(await screen.findByRole('button', { name: 'Add rule' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Save rule' }));

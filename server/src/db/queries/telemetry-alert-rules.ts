@@ -26,6 +26,7 @@ interface RuleRow {
 export interface StateRow {
   rule_id: number;
   series_key: string;
+  issue_id?: string | null;
   labels_json: Record<string, string>;
   status: 'pending' | 'firing';
   pending_since: Date;
@@ -59,6 +60,7 @@ export function mapState(row: StateRow): TelemetryAlertSeriesState {
   return {
     ruleId: row.rule_id,
     seriesKey: row.series_key,
+    issueId: row.issue_id ?? null,
     labels: row.labels_json,
     status: row.status,
     pendingSince: row.pending_since.toISOString(),
@@ -71,7 +73,7 @@ export function mapState(row: StateRow): TelemetryAlertSeriesState {
 export async function listTelemetryAlertRules(): Promise<TelemetryAlertRuleWithStates[]> {
   const [rules, states] = await Promise.all([
     query<RuleRow>(`SELECT ${RULE_COLUMNS} FROM telemetry_alert_rules ORDER BY name, id`),
-    query<StateRow>(`SELECT rule_id, series_key, labels_json, status, pending_since, firing_since, last_value, last_seen_at
+    query<StateRow>(`SELECT rule_id, series_key, issue_id, labels_json, status, pending_since, firing_since, last_value, last_seen_at
                      FROM telemetry_alert_states ORDER BY status DESC, pending_since`),
   ]);
   return rules.rows.map((row) => ({
@@ -100,15 +102,20 @@ export async function createTelemetryAlertRule(input: TelemetryAlertRuleInput): 
  * that no longer match or are no longer returned, through the normal delivery
  * path. A disabled rule's state is cleared, with recoveries, by the evaluator.
  */
-export async function updateTelemetryAlertRule(id: number, input: TelemetryAlertRuleInput): Promise<TelemetryAlertRule | null> {
-  const result = await query<RuleRow>(
-    `UPDATE telemetry_alert_rules
+export async function updateTelemetryAlertRule(
+  id: number,
+  input: TelemetryAlertRuleInput,
+  client?: PoolClient,
+): Promise<TelemetryAlertRule | null> {
+  const text = `UPDATE telemetry_alert_rules
      SET name = $2, description = $3, query = $4, comparator = $5, threshold = $6, for_seconds = $7,
          severity = $8, enabled = $9, last_error = NULL, updated_at = CURRENT_TIMESTAMP
      WHERE id = $1
-     RETURNING ${RULE_COLUMNS}`,
-    [id, input.name, input.description, input.query, input.comparator, input.threshold, input.forSeconds, input.severity, input.enabled],
-  );
+     RETURNING ${RULE_COLUMNS}`;
+  const values = [id, input.name, input.description, input.query, input.comparator, input.threshold, input.forSeconds, input.severity, input.enabled];
+  const result = client
+    ? await client.query<RuleRow>(text, values)
+    : await query<RuleRow>(text, values);
   if (!result.rows[0]) return null;
   return mapRule(result.rows[0]);
 }
@@ -127,7 +134,7 @@ export async function deleteTelemetryAlertRule(client: PoolClient, id: number): 
 
 export async function loadTelemetryAlertStates(client: PoolClient, ruleId: number): Promise<StateRow[]> {
   const result = await client.query<StateRow>(
-    `SELECT rule_id, series_key, labels_json, status, pending_since, firing_since, last_value, last_seen_at
+    `SELECT rule_id, series_key, issue_id, labels_json, status, pending_since, firing_since, last_value, last_seen_at
      FROM telemetry_alert_states WHERE rule_id = $1`,
     [ruleId],
   );
@@ -137,13 +144,13 @@ export async function loadTelemetryAlertStates(client: PoolClient, ruleId: numbe
 export async function saveTelemetryAlertState(client: PoolClient, state: StateRow): Promise<void> {
   await client.query(
     `INSERT INTO telemetry_alert_states
-       (rule_id, series_key, labels_json, status, pending_since, firing_since, last_value, last_seen_at)
-     VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)
+       (rule_id, series_key, issue_id, labels_json, status, pending_since, firing_since, last_value, last_seen_at)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
      ON CONFLICT (rule_id, series_key) DO UPDATE
-       SET labels_json = EXCLUDED.labels_json, status = EXCLUDED.status, pending_since = EXCLUDED.pending_since,
+       SET issue_id = EXCLUDED.issue_id, labels_json = EXCLUDED.labels_json, status = EXCLUDED.status, pending_since = EXCLUDED.pending_since,
            firing_since = EXCLUDED.firing_since, last_value = EXCLUDED.last_value,
            last_seen_at = EXCLUDED.last_seen_at, updated_at = CURRENT_TIMESTAMP`,
-    [state.rule_id, state.series_key, JSON.stringify(state.labels_json), state.status, state.pending_since,
+    [state.rule_id, state.series_key, state.issue_id ?? null, JSON.stringify(state.labels_json), state.status, state.pending_since,
       state.firing_since, state.last_value, state.last_seen_at],
   );
 }
@@ -172,7 +179,7 @@ export async function clearDisabledTelemetryAlertStates(client: PoolClient): Pro
   const result = await client.query<StateRow>(
     `DELETE FROM telemetry_alert_states s USING telemetry_alert_rules r
      WHERE r.id = s.rule_id AND NOT r.enabled
-     RETURNING s.rule_id, s.series_key, s.labels_json, s.status, s.pending_since, s.firing_since, s.last_value, s.last_seen_at`,
+     RETURNING s.rule_id, s.series_key, s.issue_id, s.labels_json, s.status, s.pending_since, s.firing_since, s.last_value, s.last_seen_at`,
   );
   return result.rows;
 }

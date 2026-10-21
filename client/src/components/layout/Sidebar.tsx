@@ -471,6 +471,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         { type: 'item', key: 'telemetry-dashboards', to: '/telemetry', icon: appIcons.dashboard, label: 'Dashboard', show: features.telemetry, end: true },
         { type: 'item', key: 'telemetry-explore', to: '/telemetry/explore', icon: appIcons.telemetryExplore, label: 'Explore', show: features.telemetry },
         { type: 'item', key: 'telemetry-sources', to: '/telemetry/sources', icon: appIcons.telemetrySources, label: 'Sources', show: features.telemetry },
+        { type: 'item', key: 'telemetry-issues', to: '/telemetry/issues', icon: appIcons.alerts, label: 'Issues', show: isAdmin && features.telemetry },
       ],
     },
     {

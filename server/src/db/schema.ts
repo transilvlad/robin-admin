@@ -2818,7 +2818,7 @@ export async function initializeSchema(): Promise<void> {
         completed_at TIMESTAMPTZ,
         CONSTRAINT valid_alert_delivery_service_type CHECK (service_type IN (${serviceTypeSqlList()}, 'monitoring')),
         CONSTRAINT valid_alert_delivery_type CHECK (alert_type IN (${ALERT_TYPES_SQL})),
-        CONSTRAINT valid_alert_delivery_event CHECK (event_kind IN ('failure', 'repeat', 'recovery', 'test')),
+        CONSTRAINT valid_alert_delivery_event CHECK (event_kind IN ('failure', 'repeat', 'recovery', 'test', 'dismissed')),
         CONSTRAINT valid_alert_delivery_status CHECK (status IN ('pending', 'processing', 'accepted', 'failed', 'cancelled')),
         CONSTRAINT valid_alert_delivery_adapter CHECK (adapter IN ('slack', 'generic', 'sentry'))
       )
@@ -2835,6 +2835,11 @@ export async function initializeSchema(): Promise<void> {
       ALTER TABLE alert_deliveries DROP CONSTRAINT IF EXISTS valid_alert_delivery_status;
       ALTER TABLE alert_deliveries ADD CONSTRAINT valid_alert_delivery_status
         CHECK (status IN ('pending', 'processing', 'accepted', 'failed', 'cancelled', 'expired'))
+    `);
+    await client.query(`
+      ALTER TABLE alert_deliveries DROP CONSTRAINT IF EXISTS valid_alert_delivery_event;
+      ALTER TABLE alert_deliveries ADD CONSTRAINT valid_alert_delivery_event
+        CHECK (event_kind IN ('failure', 'repeat', 'recovery', 'test', 'dismissed'))
     `);
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_alert_webhooks_enabled ON alert_webhooks (enabled, id)
@@ -2901,6 +2906,104 @@ export async function initializeSchema(): Promise<void> {
         PRIMARY KEY (rule_id, series_key),
         CONSTRAINT valid_telemetry_alert_state_status CHECK (status IN ('pending', 'firing'))
       )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS telemetry_alert_issues (
+        id UUID PRIMARY KEY,
+        rule_id INTEGER NOT NULL,
+        rule_name VARCHAR(120) NOT NULL,
+        query TEXT NOT NULL,
+        comparator VARCHAR(2) NOT NULL,
+        threshold DOUBLE PRECISION NOT NULL,
+        for_seconds INTEGER NOT NULL,
+        severity VARCHAR(16) NOT NULL,
+        series_key VARCHAR(64) NOT NULL,
+        labels_json JSONB NOT NULL,
+        last_value DOUBLE PRECISION,
+        status VARCHAR(16) NOT NULL DEFAULT 'active',
+        opened_at TIMESTAMPTZ NOT NULL,
+        last_seen_at TIMESTAMPTZ NOT NULL,
+        dismissed_at TIMESTAMPTZ,
+        dismissed_by INTEGER REFERENCES admins(id) ON DELETE SET NULL,
+        dismissed_until TIMESTAMPTZ,
+        dismissal_reason VARCHAR(500),
+        revision INTEGER NOT NULL DEFAULT 1,
+        resume_notification_pending BOOLEAN NOT NULL DEFAULT false,
+        resolved_at TIMESTAMPTZ,
+        resolution_reason VARCHAR(16),
+        CONSTRAINT valid_telemetry_alert_issue_status CHECK (status IN ('active', 'dismissed', 'resolved')),
+        CONSTRAINT valid_telemetry_alert_issue_resolution CHECK (resolution_reason IS NULL OR resolution_reason IN ('recovered', 'absent', 'edited', 'disabled', 'deleted')),
+        CONSTRAINT valid_telemetry_alert_issue_revision CHECK (revision > 0)
+      )
+    `);
+    await client.query('ALTER TABLE telemetry_alert_issues ADD COLUMN IF NOT EXISTS resume_notification_pending BOOLEAN NOT NULL DEFAULT false');
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_telemetry_alert_issues_status
+      ON telemetry_alert_issues (status, opened_at DESC)
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS telemetry_alert_issue_events (
+        id BIGSERIAL PRIMARY KEY,
+        issue_id UUID NOT NULL REFERENCES telemetry_alert_issues(id) ON DELETE CASCADE,
+        event_type VARCHAR(24) NOT NULL,
+        actor_admin_id INTEGER REFERENCES admins(id) ON DELETE SET NULL,
+        actor_name VARCHAR(120),
+        reason VARCHAR(500),
+        expires_at TIMESTAMPTZ,
+        occurred_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT valid_telemetry_alert_issue_event_type CHECK (event_type IN ('firing', 'dismissed', 'resumed', 'dismissal_expired', 'severity_escalated', 'resolved'))
+      )
+    `);
+    await client.query('ALTER TABLE telemetry_alert_issue_events ADD COLUMN IF NOT EXISTS actor_name VARCHAR(120)');
+    await client.query('ALTER TABLE telemetry_alert_issue_events ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ');
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_telemetry_alert_issue_events_issue
+      ON telemetry_alert_issue_events (issue_id, occurred_at, id)
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_telemetry_alert_issues_one_open_occurrence
+      ON telemetry_alert_issues (rule_id, series_key)
+      WHERE status IN ('active', 'dismissed')
+    `);
+    await client.query('ALTER TABLE telemetry_alert_states ADD COLUMN IF NOT EXISTS issue_id UUID');
+    await client.query('ALTER TABLE alert_deliveries ADD COLUMN IF NOT EXISTS telemetry_alert_issue_id UUID');
+    await client.query('ALTER TABLE alert_deliveries ADD COLUMN IF NOT EXISTS telemetry_alert_issue_revision INTEGER');
+    await client.query(`
+      UPDATE telemetry_alert_states
+      SET issue_id = gen_random_uuid()
+      WHERE status = 'firing' AND issue_id IS NULL
+    `);
+    await client.query(`
+      INSERT INTO telemetry_alert_issues (
+        id, rule_id, rule_name, query, comparator, threshold, for_seconds, severity,
+        series_key, labels_json, last_value, status, opened_at, last_seen_at
+      )
+      SELECT s.issue_id, r.id, r.name, r.query, r.comparator, r.threshold, r.for_seconds, r.severity,
+             s.series_key, s.labels_json, s.last_value, 'active', COALESCE(s.firing_since, s.pending_since), s.last_seen_at
+      FROM telemetry_alert_states s
+      JOIN telemetry_alert_rules r ON r.id = s.rule_id
+      WHERE s.status = 'firing' AND s.issue_id IS NOT NULL
+      ON CONFLICT (id) DO NOTHING
+    `);
+    await client.query(`
+      INSERT INTO telemetry_alert_issue_events (issue_id, event_type, occurred_at)
+      SELECT i.id, 'firing', i.opened_at
+      FROM telemetry_alert_issues i
+      WHERE NOT EXISTS (
+        SELECT 1 FROM telemetry_alert_issue_events e
+        WHERE e.issue_id = i.id AND e.event_type = 'firing'
+      )
+    `);
+    await client.query(`
+      UPDATE alert_deliveries d
+      SET telemetry_alert_issue_id = i.id,
+          telemetry_alert_issue_revision = i.revision
+      FROM telemetry_alert_issues i
+      WHERE (d.telemetry_alert_issue_id IS NULL OR d.telemetry_alert_issue_revision IS NULL)
+        AND d.alert_type = 'telemetry_rule'
+        AND d.webhook_id IS NOT NULL
+        AND d.dedupe_key = 'telemetry-rule:' || i.rule_id || ':' || i.series_key || ':'
+          || (EXTRACT(EPOCH FROM i.opened_at) * 1000)::bigint || ':failure:' || d.webhook_id
     `);
 
     // ========================================================================

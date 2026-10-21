@@ -98,12 +98,12 @@ function tagValue(value: string | number | boolean): string {
 
 /**
  * What a Sentry delivery stores: an event for failures and tests, a resolve
- * request for recoveries. Repeats are not sent; Sentry's alert rules handle
- * re-notification.
+ * request for recoveries or operator dismissals. Repeats are not sent; Sentry's
+ * alert rules handle re-notification.
  */
 export function buildSentryAlertPayload(signal: SentryAlertSignal): JsonRecord | null {
   if (signal.eventKind === 'repeat') return null;
-  if (signal.eventKind === 'recovery') {
+  if (signal.eventKind === 'recovery' || signal.eventKind === 'dismissed') {
     return { sentry: { action: 'resolve', alertKey: signal.alertKey } };
   }
   const tags: Record<string, string> = {};

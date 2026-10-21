@@ -43,6 +43,7 @@ interface DeliveryRow {
   webhook_name: string;
   fleet_service_id: number | null;
   monitoring_issue_id: number | null;
+  telemetry_alert_issue_id: string | null;
   service_id: string;
   service_name: string;
   service_type: AlertServiceType;
@@ -78,10 +79,26 @@ const WEBHOOK_COLUMNS = `
 
 const DELIVERY_COLUMNS = `
   id, notification_id, webhook_id, webhook_name, fleet_service_id, monitoring_issue_id,
+  telemetry_alert_issue_id, telemetry_alert_issue_revision,
   service_id, service_name, service_type, alert_type, event_kind, status, adapter, payload_json,
   attempts, next_attempt_at, last_attempt_at, claimed_at, claim_token, response_status, error,
   created_at, updated_at, completed_at
 `;
+
+function telemetryIssueDeliveryIsCurrent(alias: string): string {
+  return `EXISTS (
+    SELECT 1 FROM telemetry_alert_issues i
+    WHERE i.id = ${alias}.telemetry_alert_issue_id
+      AND (
+        (${alias}.event_kind = 'failure' AND i.status = 'active' AND i.dismissed_at IS NULL
+          AND ${alias}.telemetry_alert_issue_revision = i.revision)
+        OR (${alias}.event_kind = 'dismissed' AND (
+          (i.status = 'dismissed' AND ${alias}.telemetry_alert_issue_revision = i.revision)
+          OR i.status = 'resolved'
+        ))
+      )
+  )`;
+}
 
 function mapWebhook(row: WebhookRow): AlertWebhook {
   return {
@@ -113,6 +130,7 @@ function mapDelivery(row: DeliveryRow): AlertDelivery {
     webhookName: row.webhook_name,
     fleetServiceId: row.fleet_service_id,
     monitoringIssueId: row.monitoring_issue_id,
+    telemetryAlertIssueId: row.telemetry_alert_issue_id,
     serviceId: row.service_id,
     serviceName: row.service_name,
     serviceType: row.service_type,
@@ -321,6 +339,8 @@ export async function createAlertDelivery(input: {
   webhookName: string;
   fleetServiceId: number | null;
   monitoringIssueId?: number | null;
+  telemetryAlertIssueId?: string | null;
+  telemetryAlertIssueRevision?: number | null;
   serviceId: string;
   serviceName: string;
   serviceType: AlertServiceType;
@@ -334,9 +354,10 @@ export async function createAlertDelivery(input: {
   const text = `WITH inserted AS (
        INSERT INTO alert_deliveries (
          notification_id, dedupe_key, webhook_id, webhook_name, fleet_service_id, monitoring_issue_id,
+         telemetry_alert_issue_id, telemetry_alert_issue_revision,
          service_id, service_name, service_type, alert_type, event_kind, adapter, payload_json
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)
        ON CONFLICT (dedupe_key) DO NOTHING
        RETURNING ${DELIVERY_COLUMNS}
      )
@@ -351,6 +372,8 @@ export async function createAlertDelivery(input: {
       input.webhookName,
       input.fleetServiceId,
       input.monitoringIssueId ?? null,
+      input.telemetryAlertIssueId ?? null,
+      input.telemetryAlertIssueRevision ?? null,
       input.serviceId,
       input.serviceName,
       input.serviceType,
@@ -393,8 +416,24 @@ export async function claimDueAlertDeliveries(limit: number): Promise<ClaimedAle
     await client.query('BEGIN');
     await client.query(`
       UPDATE alert_deliveries
-      SET status = 'pending', claim_token = NULL, claimed_at = NULL,
-          next_attempt_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      SET status = CASE WHEN telemetry_alert_issue_id IS NOT NULL
+          AND event_kind IN ('failure', 'dismissed')
+          AND NOT ${telemetryIssueDeliveryIsCurrent('alert_deliveries')}
+          THEN 'cancelled' ELSE 'pending' END,
+          error = CASE WHEN telemetry_alert_issue_id IS NOT NULL
+              AND event_kind IN ('failure', 'dismissed')
+              AND NOT ${telemetryIssueDeliveryIsCurrent('alert_deliveries')}
+              THEN 'Telemetry alert issue changed before delivery' ELSE error END,
+          claim_token = NULL, claimed_at = NULL,
+          next_attempt_at = CASE WHEN telemetry_alert_issue_id IS NOT NULL
+              AND event_kind IN ('failure', 'dismissed')
+              AND NOT ${telemetryIssueDeliveryIsCurrent('alert_deliveries')}
+              THEN NULL ELSE CURRENT_TIMESTAMP END,
+          completed_at = CASE WHEN telemetry_alert_issue_id IS NOT NULL
+              AND event_kind IN ('failure', 'dismissed')
+              AND NOT ${telemetryIssueDeliveryIsCurrent('alert_deliveries')}
+              THEN CURRENT_TIMESTAMP ELSE NULL END,
+          updated_at = CURRENT_TIMESTAMP
       WHERE status = 'processing' AND claimed_at < CURRENT_TIMESTAMP - INTERVAL '15 minutes'
     `);
     const result = await client.query<ClaimedDeliveryRow>(
@@ -407,6 +446,8 @@ export async function claimDueAlertDeliveries(limit: number): Promise<ClaimedAle
            AND w.enabled = true
            AND w.encrypted_url IS NOT NULL
            AND (w.paused_at IS NULL OR (w.paused_until IS NOT NULL AND w.paused_until <= CURRENT_TIMESTAMP))
+           AND (d.telemetry_alert_issue_id IS NULL OR d.event_kind NOT IN ('failure', 'dismissed')
+             OR ${telemetryIssueDeliveryIsCurrent('d')})
          ORDER BY d.created_at ASC, d.id ASC
          LIMIT $1
          FOR UPDATE OF d SKIP LOCKED
@@ -466,12 +507,25 @@ export async function completeAlertDelivery(input: {
 }): Promise<boolean> {
   const terminal = input.status !== 'pending';
   const result = await query(
-    `UPDATE alert_deliveries
-     SET status = $3, response_status = $4, error = $5, next_attempt_at = $6,
+    `UPDATE alert_deliveries AS d
+     SET status = CASE WHEN $3 = 'pending' AND d.telemetry_alert_issue_id IS NOT NULL
+         AND d.event_kind IN ('failure', 'dismissed')
+         AND NOT ${telemetryIssueDeliveryIsCurrent('d')} THEN 'cancelled' ELSE $3::varchar END,
+         response_status = $4,
+         error = CASE WHEN $3 = 'pending' AND d.telemetry_alert_issue_id IS NOT NULL
+             AND d.event_kind IN ('failure', 'dismissed')
+             AND NOT ${telemetryIssueDeliveryIsCurrent('d')}
+             THEN 'Telemetry alert issue changed before delivery' ELSE $5::text END,
+         next_attempt_at = CASE WHEN $3 = 'pending' AND d.telemetry_alert_issue_id IS NOT NULL
+             AND d.event_kind IN ('failure', 'dismissed')
+             AND NOT ${telemetryIssueDeliveryIsCurrent('d')} THEN NULL ELSE $6::timestamptz END,
          claim_token = NULL, claimed_at = NULL,
-         completed_at = CASE WHEN $7 THEN CURRENT_TIMESTAMP ELSE NULL END,
+         completed_at = CASE WHEN $7::boolean OR ($3 = 'pending' AND d.telemetry_alert_issue_id IS NOT NULL
+             AND d.event_kind IN ('failure', 'dismissed')
+             AND NOT ${telemetryIssueDeliveryIsCurrent('d')}) THEN CURRENT_TIMESTAMP ELSE NULL END,
          updated_at = CURRENT_TIMESTAMP
-     WHERE id = $1 AND claim_token = $2 AND status = 'processing'`,
+     WHERE d.id = $1 AND d.claim_token = $2 AND d.status = 'processing'
+    `,
     [
       input.id,
       input.claimToken,

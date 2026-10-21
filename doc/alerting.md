@@ -40,6 +40,37 @@ Webhook URLs are encrypted at rest with `ROBIN_ADMIN_ENCRYPTION_KEY` and are wri
 
 Telemetry rules track each result series on its own. Editing a rule keeps that state: on the next evaluation, a firing series that no longer matches, or that the edited query no longer returns, recovers through the normal path (Slack recovery, Sentry issue resolved). Disabling or deleting a rule sends a recovery for each series it had firing.
 
+## Telemetry issues
+
+Administrators can review rule occurrences in **Telemetry -> Issues**. **Active**
+issues are firing and need attention; **Dismissed** issues are still being
+evaluated but have been accepted by an operator; **Resolved** issues have
+recovered or are no longer tracked. Dismissal applies to one firing occurrence
+of one rule result series, not to the rule or host. A later firing after recovery
+creates a new active issue.
+
+Dismiss an issue until it resolves, or set an optional expiry. An expiry or
+**Undo dismissal** returns the issue to Active and queues one fresh notification
+only after a successful, complete telemetry evaluation confirms that same series
+is still firing. Query errors and truncated results do not trigger a fresh
+notification. There are no periodic telemetry reminders. A warning-to-critical
+severity change returns a dismissed occurrence to Active; changing only the
+numeric threshold does not. Recovery, prolonged absence, a rule edit that stops
+tracking the series, disabling the rule, or deleting it resolves the occurrence.
+
+The server cancels queued opening notifications when an issue is dismissed or
+resolved. A delivery already in flight can finish; if it fails after dismissal,
+it is not retried as an opening notification. Sentry destinations resolve their
+corresponding external issue when an operator dismisses a telemetry issue;
+without a configured Sentry organization and API token, Sentry's normal
+auto-resolve behavior applies. Older server versions do not honor dismissal
+state and may resume sending opening notifications after an upgrade rollback.
+
+On upgrade, currently firing telemetry series are imported as active issues
+without resending their original notification. Their observed rule, condition,
+series, and firing time are retained; pre-upgrade resolved occurrences are not
+fabricated.
+
 Missing timestamps, unknown deferred-message ages, and cache ratios with no request or block evidence are ignored. A bounce rate over fewer than 20 attempts counts as healthy, so a quiet relay recovers rather than alerting on a handful of messages. They do not count as failures or recoveries.
 
 ## Delivery
@@ -151,6 +182,10 @@ retry; connection/deadline failures and HTTP 408/429/5xx use the saved retry pol
 
 Administrators use:
 
+- `GET /api/telemetry-alert-issues?status=active|dismissed|resolved&limit=&offset=`
+- `GET /api/telemetry-alert-issues/:id`
+- `POST /api/telemetry-alert-issues/:id/dismiss` with `{ "expectedRevision": 1, "reason": "...", "until": "..." }`; `reason` and `until` are optional
+- `POST /api/telemetry-alert-issues/:id/resume` with `{ "expectedRevision": 2 }`
 - `GET/POST /api/alert-webhooks`
 - `PATCH/DELETE /api/alert-webhooks/:id`
 - `POST /api/alert-webhooks/:id/pause`
@@ -159,4 +194,7 @@ Administrators use:
 - `POST /api/alert-webhooks/:id/test`
 - `GET /api/alert-deliveries`
 
-The interface is available at **Administration → Alerts**.
+The issue history and dismissal controls are available at **Telemetry -> Issues**.
+Rule configuration remains under **Administration -> Alerts -> Telemetry rules**.
+Issue actions require an authenticated administrator, are CSRF-protected, and
+return `409` when the issue has changed or is no longer firing.

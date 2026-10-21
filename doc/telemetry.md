@@ -308,6 +308,12 @@ browser. Editors can turn the queries into a panel with **Add to dashboard**,
 including a new dashboard on an empty installation. Existing destinations must
 be chosen explicitly; the first dashboard is never silently edited.
 
+Administrators can review firing, dismissed, and resolved telemetry-rule
+occurrences in **Telemetry -> Issues**. Dismissing an issue does not stop
+evaluation of its series; see [Service webhook alerts](alerting.md#telemetry-issues)
+for lifecycle, expiry, notification, upgrade, and API behavior. Rule configuration
+remains under **Administration -> Alerts -> Telemetry rules**.
+
 ### Sources
 
 **Telemetry -> Sources** discovers sources using the identity label, optional
@@ -405,6 +411,10 @@ Changes need the editor role and, for API keys, `telemetry:manage`; ingest keys
 | GET | `/api/telemetry/sources` | Discovery labels, sources, windows/limits, truncation and `emptyReason`; each source includes groups, its scoped query, current series, newest sample (`null` when over a day old) and `silent` |
 | GET | `/api/telemetry/store` | Editors: store version, retention, size, disk, ingest and reject rates, top metrics |
 | GET | `/api/telemetry/annotations` | Admins: Monitoring issues open between `start` and `end`; empty while Monitoring is off |
+| GET | `/api/telemetry-alert-issues?status=active\|dismissed\|resolved&limit=&offset=` | Admins: paginated telemetry issue history |
+| GET | `/api/telemetry-alert-issues/:id` | Admins: one issue and its lifecycle history |
+| POST | `/api/telemetry-alert-issues/:id/dismiss` | Admins: dismiss one firing occurrence; accepts `expectedRevision`, optional `reason` and optional future `until` |
+| POST | `/api/telemetry-alert-issues/:id/resume` | Admins: undo dismissal using `expectedRevision` |
 | POST | `/api/telemetry/dashboards` | Create: dashboard JSON, `{ "templateKey": … }` or `{ "duplicateOf": … }` |
 | PUT | `/api/telemetry/dashboards/:uid` | Save: dashboard JSON plus the `version` it was edited from (`409` if someone saved since) |
 | DELETE | `/api/telemetry/dashboards/:uid` | Delete with its history |

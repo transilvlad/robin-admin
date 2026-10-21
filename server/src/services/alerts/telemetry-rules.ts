@@ -5,7 +5,7 @@
  * firing once it has held for the rule's duration, and recovered when it stops
  * holding. Deliveries go to webhooks subscribed to 'telemetry_rule'.
  */
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getClient } from '../../db/connection.js';
 import { createAlertDelivery, listAlertWebhooks } from '../../db/queries/alerts.js';
@@ -18,14 +18,26 @@ import {
   loadTelemetryAlertStates,
   recordTelemetryAlertRuleEvaluation,
   saveTelemetryAlertState,
+  updateTelemetryAlertRule,
   type StateRow,
 } from '../../db/queries/telemetry-alert-rules.js';
+import {
+  cancelTelemetryAlertIssueFailures,
+  cancelTelemetryAlertIssueDismissals,
+  createTelemetryAlertIssue,
+  getTelemetryAlertIssue,
+  recordTelemetryAlertIssueEvent,
+  resolveTelemetryAlertIssue,
+  updateTelemetryAlertIssueObservation,
+  updateTelemetryAlertIssueSeverity,
+} from '../../db/queries/telemetry-alert-issues.js';
 import { logger } from '../../logger.js';
 import type { AlertWebhook, JsonRecord } from '../../types/alerts.js';
 import type {
   TelemetryAlertComparator,
   TelemetryAlertPreviewSeries,
   TelemetryAlertRule,
+  TelemetryAlertRuleInput,
 } from '../../types/telemetry-alerts.js';
 import { operationsPolicy } from '../operations-settings.js';
 import { queryInstant } from '../telemetry/query.js';
@@ -40,7 +52,7 @@ export const MAX_RULE_SERIES = 500;
 export const ABSENT_RESOLVE_SECONDS = 600;
 
 type QueryInstant = typeof queryInstant;
-export type TelemetryRuleEvent = 'failure' | 'recovery';
+export type TelemetryRuleEvent = 'failure' | 'recovery' | 'dismissed';
 
 export function compareValue(value: number | null, comparator: TelemetryAlertComparator, threshold: number): boolean {
   if (value === null || !Number.isFinite(value)) return false;
@@ -71,7 +83,7 @@ export type TelemetryRuleClearReason = 'edited' | 'disabled' | 'deleted';
 
 export interface SeriesTransition {
   next: StateRow | null;
-  event: TelemetryRuleEvent | null;
+  event: Exclude<TelemetryRuleEvent, 'dismissed'> | null;
   absent: boolean;
   cleared?: TelemetryRuleClearReason;
 }
@@ -104,11 +116,17 @@ export function transitionSeries(input: {
     return { next: previous, event: null, absent: true };
   }
   if (!observed.matches) {
-    return { next: null, event: previous?.status === 'firing' ? 'recovery' : null, absent: false };
+    return {
+      next: null,
+      event: previous?.status === 'firing' ? 'recovery' : null,
+      absent: false,
+      ...(previous?.status === 'firing' && input.ruleUpdatedAt && input.ruleUpdatedAt > previous.last_seen_at ? { cleared: 'edited' as const } : {}),
+    };
   }
   const base: StateRow = {
     rule_id: input.ruleId,
     series_key: observed.key,
+    issue_id: previous?.issue_id ?? null,
     labels_json: observed.labels,
     status: previous?.status ?? 'pending',
     pending_since: previous?.pending_since ?? now,
@@ -142,6 +160,7 @@ interface PendingDelivery {
   rule: TelemetryAlertRule;
   event: TelemetryRuleEvent;
   state: StateRow;
+  issueRevision?: number;
   absent: boolean;
   now: Date;
   cleared?: TelemetryRuleClearReason;
@@ -158,6 +177,9 @@ async function recoverDisabledRules(client: PoolClient, now: Date): Promise<Pend
   const firing = (await clearDisabledTelemetryAlertStates(client)).filter((state) => state.status === 'firing');
   if (firing.length === 0) return [];
   const rules = await listTelemetryAlertRulesByIds(client, [...new Set(firing.map((state) => state.rule_id))]);
+  for (const state of firing) {
+    if (state.issue_id) await resolveTelemetryAlertIssue(client, state.issue_id, 'disabled', now);
+  }
   return rules.flatMap((rule) => clearedRecoveries(rule, firing.filter((state) => state.rule_id === rule.id), 'disabled', now));
 }
 
@@ -175,10 +197,132 @@ export async function deleteTelemetryAlertRuleWithRecoveries(id: number, now = n
       await client.query('ROLLBACK');
       return false;
     }
-    await enqueueDeliveries(client, clearedRecoveries(rule, await loadTelemetryAlertStates(client, id), 'deleted', now));
+    const states = await loadTelemetryAlertStates(client, id);
+    for (const state of states.filter((item) => item.status === 'firing' && item.issue_id)) {
+      await resolveTelemetryAlertIssue(client, state.issue_id!, 'deleted', now);
+    }
+    await enqueueDeliveries(client, clearedRecoveries(rule, states, 'deleted', now));
     await deleteTelemetryAlertRule(client, id);
     await client.query('COMMIT');
     return true;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export type TelemetryAlertIssueActionResult = 'updated' | 'not_found' | 'conflict';
+
+export async function changeTelemetryAlertIssueDismissal(input: {
+  issueId: string;
+  action: 'dismiss' | 'resume';
+  expectedRevision: number;
+  actorAdminId: number | null;
+  reason?: string | null;
+  until?: Date | null;
+  actorName?: string | null;
+}): Promise<TelemetryAlertIssueActionResult> {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [EVALUATOR_LOCK_ID]);
+    const [clock] = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows;
+    const now = clock.now;
+    if (input.action === 'dismiss' && input.until && input.until <= now) {
+      await client.query('ROLLBACK');
+      return 'conflict';
+    }
+    const issue = await getTelemetryAlertIssue(client, input.issueId, true);
+    if (!issue) {
+      await client.query('ROLLBACK');
+      return 'not_found';
+    }
+    if (issue.revision !== input.expectedRevision
+      || issue.status !== (input.action === 'dismiss' ? 'active' : 'dismissed')) {
+      await client.query('ROLLBACK');
+      return 'conflict';
+    }
+    const rules = await listTelemetryAlertRulesByIds(client, [issue.ruleId]);
+    const rule = rules[0];
+    if (!rule?.enabled) {
+      await client.query('ROLLBACK');
+      return 'conflict';
+    }
+    const states = await loadTelemetryAlertStates(client, issue.ruleId);
+    const state = states.find((item) => item.series_key === issue.seriesKey && item.status === 'firing' && item.issue_id === issue.id);
+    if (!state) {
+      await client.query('ROLLBACK');
+      return 'conflict';
+    }
+    if (input.action === 'dismiss') {
+      const updated = await client.query(
+        `UPDATE telemetry_alert_issues
+         SET status = 'dismissed', dismissed_at = $2, dismissed_by = $3, dismissed_until = $4,
+             dismissal_reason = $5, revision = revision + 1, resume_notification_pending = false
+         WHERE id = $1 AND revision = $6 AND status = 'active'`,
+        [issue.id, now, input.actorAdminId, input.until ?? null, input.reason ?? null, input.expectedRevision],
+      );
+      if ((updated.rowCount ?? 0) !== 1) {
+        await client.query('ROLLBACK');
+        return 'conflict';
+      }
+      await recordTelemetryAlertIssueEvent(
+        client, issue.id, 'dismissed', input.actorAdminId, input.reason ?? null, now, input.actorName ?? null, input.until ?? null,
+      );
+      await cancelTelemetryAlertIssueFailures(client, issue.id, 'Telemetry alert issue dismissed');
+      await enqueueDeliveries(client, [{
+        rule, event: 'dismissed', state, issueRevision: input.expectedRevision + 1, absent: false, now,
+      }]);
+    } else {
+      const updated = await client.query(
+        `UPDATE telemetry_alert_issues
+         SET status = 'active', dismissed_at = NULL, dismissed_by = NULL, dismissed_until = NULL,
+             dismissal_reason = NULL, revision = revision + 1, resume_notification_pending = true
+         WHERE id = $1 AND revision = $2 AND status = 'dismissed'`,
+        [issue.id, input.expectedRevision],
+      );
+      if ((updated.rowCount ?? 0) !== 1) {
+        await client.query('ROLLBACK');
+        return 'conflict';
+      }
+      await recordTelemetryAlertIssueEvent(client, issue.id, 'resumed', input.actorAdminId, null, now, input.actorName ?? null);
+      await cancelTelemetryAlertIssueDismissals(client, issue.id, 'Telemetry alert issue is active again');
+    }
+    await client.query('COMMIT');
+    return 'updated';
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateTelemetryAlertRuleWithRecoveries(
+  id: number,
+  input: TelemetryAlertRuleInput,
+): Promise<TelemetryAlertRule | null> {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [EVALUATOR_LOCK_ID]);
+    const [previous] = await listTelemetryAlertRulesByIds(client, [id]);
+    if (!previous) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const updated = await updateTelemetryAlertRule(id, input, client);
+    if (updated && previous.severity === 'warning' && updated.severity === 'critical') {
+      const states = await loadTelemetryAlertStates(client, id);
+      const [clock] = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows;
+      for (const state of states.filter((item) => item.status === 'firing' && item.issue_id)) {
+        await updateTelemetryAlertIssueSeverity(client, state.issue_id!, updated.severity, clock.now);
+      }
+    }
+    await client.query('COMMIT');
+    return updated;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -197,10 +341,12 @@ export async function runTelemetryRuleEvaluation(now = new Date(), runQuery: Que
       return false;
     }
     const deliveries = await recoverDisabledRules(client, now);
+    const confirmedIssueIds = new Set<string>();
     for (const rule of await listEnabledTelemetryAlertRules(client)) {
-      deliveries.push(...await evaluateRule(client, rule, now, runQuery));
+      deliveries.push(...await evaluateRule(client, rule, now, runQuery, confirmedIssueIds));
     }
     await enqueueDeliveries(client, deliveries);
+    await enqueuePendingIssueAttention(client, now, confirmedIssueIds);
     await client.query('COMMIT');
     return true;
   } catch (error) {
@@ -211,7 +357,13 @@ export async function runTelemetryRuleEvaluation(now = new Date(), runQuery: Que
   }
 }
 
-async function evaluateRule(client: PoolClient, rule: TelemetryAlertRule, now: Date, runQuery: QueryInstant): Promise<PendingDelivery[]> {
+async function evaluateRule(
+  client: PoolClient,
+  rule: TelemetryAlertRule,
+  now: Date,
+  runQuery: QueryInstant,
+  confirmedIssueIds: Set<string>,
+): Promise<PendingDelivery[]> {
   let result: Awaited<ReturnType<QueryInstant>>;
   try {
     result = await runQuery({ query: rule.query, maxSeries: MAX_RULE_SERIES });
@@ -225,11 +377,70 @@ async function evaluateRule(client: PoolClient, rule: TelemetryAlertRule, now: D
   const ruleUpdatedAt = new Date(rule.updatedAt);
   const deliveries: PendingDelivery[] = [];
   const apply = async (transition: SeriesTransition, previous: StateRow | null, key: string) => {
-    if (transition.next) await saveTelemetryAlertState(client, transition.next);
-    else if (previous) await deleteTelemetryAlertState(client, rule.id, key);
+    let next = transition.next;
+    if (next?.status === 'firing') {
+      if (transition.event === 'failure' || !next.issue_id) {
+        const issueId = randomUUID();
+        next = { ...next, issue_id: issueId };
+        await createTelemetryAlertIssue(client, {
+          id: issueId,
+          ruleId: rule.id,
+          ruleName: rule.name,
+          query: rule.query,
+          comparator: rule.comparator,
+          threshold: rule.threshold,
+          forSeconds: rule.forSeconds,
+          severity: rule.severity,
+          seriesKey: next.series_key,
+          labels: next.labels_json,
+          value: next.last_value,
+          openedAt: next.firing_since ?? now,
+        });
+      } else if (next.issue_id) {
+        if (!transition.absent) {
+          if (!result.truncated) confirmedIssueIds.add(next.issue_id);
+          await updateTelemetryAlertIssueObservation(client, next.issue_id, {
+            rule,
+            labels: next.labels_json,
+            value: next.last_value,
+            lastSeenAt: next.last_seen_at,
+          });
+        }
+      }
+      if (next.issue_id && transition.event === null && !transition.absent) {
+        const expired = await client.query<{ revision: number }>(
+          `UPDATE telemetry_alert_issues
+           SET status = 'active', dismissed_at = NULL, dismissed_by = NULL, dismissed_until = NULL,
+               dismissal_reason = NULL, revision = revision + 1, resume_notification_pending = true
+           WHERE id = $1 AND status = 'dismissed' AND dismissed_until IS NOT NULL AND dismissed_until <= $2
+           RETURNING revision`,
+          [next.issue_id, now],
+        );
+        if (expired.rows[0]) {
+          await recordTelemetryAlertIssueEvent(client, next.issue_id, 'dismissal_expired', null, null, now);
+          await cancelTelemetryAlertIssueDismissals(client, next.issue_id, 'Telemetry alert issue is active again');
+        }
+      }
+    }
+    if (next) await saveTelemetryAlertState(client, next);
+    else if (previous) {
+      if (previous.issue_id) {
+        await resolveTelemetryAlertIssue(client, previous.issue_id,
+          transition.cleared === 'edited' ? 'edited' : transition.absent ? 'absent' : 'recovered', now);
+      }
+      await deleteTelemetryAlertState(client, rule.id, key);
+    }
     if (transition.event) {
-      const state = transition.event === 'failure' ? transition.next! : previous!;
-      deliveries.push({ rule, event: transition.event, state, absent: transition.absent, now, cleared: transition.cleared });
+      const state = transition.event === 'failure' ? next! : previous!;
+      deliveries.push({
+        rule,
+        event: transition.event,
+        state,
+        ...(transition.event === 'failure' ? { issueRevision: 1 } : {}),
+        absent: transition.absent,
+        now,
+        cleared: transition.cleared,
+      });
     }
   };
   for (const series of result.series) {
@@ -242,6 +453,7 @@ async function evaluateRule(client: PoolClient, rule: TelemetryAlertRule, now: D
       previous,
       observed: { key, labels: series.labels, value: series.value, matches: compareValue(series.value, rule.comparator, rule.threshold) },
       now,
+      ruleUpdatedAt,
     });
     await apply(transition, previous, key);
   }
@@ -263,6 +475,7 @@ function subscribed(webhook: AlertWebhook, event: TelemetryRuleEvent, now: Date)
   const paused = webhook.pausedAt !== null && (webhook.pausedUntil === null || webhook.pausedUntil > now);
   return webhook.enabled && !paused
     && (event !== 'recovery' || webhook.notifyRecovery)
+    && (event !== 'dismissed' || webhook.adapter === 'sentry')
     && webhook.subscriptions.some((subscription) => subscription.alertType === 'telemetry_rule' && subscription.enabled);
 }
 
@@ -277,7 +490,9 @@ async function enqueueDeliveries(client: PoolClient, deliveries: PendingDelivery
       const payload = buildTelemetryRulePayload(webhook.adapter, delivery);
       if (!payload) continue;
       await createAlertDelivery({
-        dedupeKey: `telemetry-rule:${delivery.rule.id}:${delivery.state.series_key}:${firingSince.getTime()}:${delivery.event}:${webhook.id}`,
+        dedupeKey: delivery.event === 'dismissed' && delivery.state.issue_id
+          ? `telemetry-issue:${delivery.state.issue_id}:dismissed:${delivery.issueRevision}:${webhook.id}`
+          : `telemetry-rule:${delivery.rule.id}:${delivery.state.series_key}:${firingSince.getTime()}:${delivery.event}:${webhook.id}`,
         webhookId: webhook.id,
         webhookName: webhook.name,
         fleetServiceId: null,
@@ -286,6 +501,8 @@ async function enqueueDeliveries(client: PoolClient, deliveries: PendingDelivery
         serviceType: 'monitoring',
         alertType: 'telemetry_rule',
         eventKind: delivery.event,
+        telemetryAlertIssueId: delivery.state.issue_id ?? null,
+        telemetryAlertIssueRevision: delivery.issueRevision ?? null,
         adapter: webhook.adapter,
         payload,
         client,
@@ -293,6 +510,68 @@ async function enqueueDeliveries(client: PoolClient, deliveries: PendingDelivery
     }
   }
   logger.info('Telemetry alert rule notifications queued', { count: deliveries.length });
+}
+
+async function enqueuePendingIssueAttention(client: PoolClient, now: Date, confirmedIssueIds: Set<string>): Promise<void> {
+  if (!operationsPolicy().alertsEnabled || confirmedIssueIds.size === 0) return;
+  const webhooks = await listAlertWebhooks();
+  const pending = await client.query<{
+    id: string; rule_id: number; rule_name: string; query: string; comparator: TelemetryAlertComparator;
+    threshold: number; for_seconds: number; severity: TelemetryAlertRule['severity']; series_key: string;
+    labels_json: Record<string, string>; last_value: number | null; opened_at: Date; revision: number;
+  }>(
+    `SELECT id, rule_id, rule_name, query, comparator, threshold, for_seconds, severity, series_key,
+            labels_json, last_value, opened_at, revision
+     FROM telemetry_alert_issues
+     WHERE status = 'active' AND resume_notification_pending = true
+       AND id = ANY($1::uuid[])
+     ORDER BY opened_at`,
+    [[...confirmedIssueIds]],
+  );
+  for (const issue of pending.rows) {
+    const rule = {
+      id: issue.rule_id, name: issue.rule_name, description: null, query: issue.query, comparator: issue.comparator,
+      threshold: Number(issue.threshold), forSeconds: issue.for_seconds, severity: issue.severity, enabled: true,
+      lastEvaluatedAt: null, lastError: null, createdAt: issue.opened_at.toISOString(), updatedAt: issue.opened_at.toISOString(),
+    };
+    const state: StateRow = {
+      rule_id: issue.rule_id, series_key: issue.series_key, issue_id: issue.id, labels_json: issue.labels_json,
+      status: 'firing', pending_since: issue.opened_at, firing_since: issue.opened_at,
+      last_value: issue.last_value, last_seen_at: now,
+    };
+    const eligible = webhooks.filter((item) => item.adapter !== 'sentry' && subscribed(item, 'failure', now));
+    const sentry = webhooks.filter((item) => item.adapter === 'sentry' && subscribed(item, 'failure', now));
+    let queued = false;
+    for (const webhook of [...eligible, ...sentry]) {
+      const payload = buildTelemetryRulePayload(webhook.adapter, {
+        rule, event: 'failure', state, absent: false, now,
+      });
+      if (!payload) continue;
+      await createAlertDelivery({
+        dedupeKey: `telemetry-issue:${issue.id}:attention:${issue.revision}:${webhook.id}`,
+        webhookId: webhook.id,
+        webhookName: webhook.name,
+        fleetServiceId: null,
+        serviceId: `telemetry-rule-${issue.rule_id}`,
+        serviceName: `${issue.rule_name} · ${formatSeriesLabels(issue.labels_json)}`.slice(0, 160),
+        serviceType: 'monitoring',
+        alertType: 'telemetry_rule',
+        eventKind: 'failure',
+        telemetryAlertIssueId: issue.id,
+        telemetryAlertIssueRevision: issue.revision,
+        adapter: webhook.adapter,
+        payload,
+        client,
+      });
+      queued = true;
+    }
+    if (queued) {
+      await client.query(
+        'UPDATE telemetry_alert_issues SET resume_notification_pending = false WHERE id = $1 AND revision = $2',
+        [issue.id, issue.revision],
+      );
+    }
+  }
 }
 
 export function describeCondition(rule: Pick<TelemetryAlertRule, 'comparator' | 'threshold' | 'forSeconds'>): string {
@@ -307,11 +586,14 @@ export function buildTelemetryRulePayload(
   delivery: Pick<PendingDelivery, 'rule' | 'event' | 'state' | 'absent' | 'now' | 'cleared'>,
 ): JsonRecord | null {
   const { rule, event, state } = delivery;
+  if (event === 'dismissed' && adapter !== 'sentry') return null;
   const seriesLabel = formatSeriesLabels(state.labels_json);
   const value = state.last_value === null ? 'n/a' : String(Number(state.last_value.toFixed(4)));
   const outcome = event === 'failure'
     ? `${rule.name} is firing for ${seriesLabel}`
-    : delivery.cleared
+    : event === 'dismissed'
+      ? `${rule.name} was dismissed while still firing for ${seriesLabel}`
+      : delivery.cleared
       ? `${rule.name} cleared for ${seriesLabel}: the rule was ${delivery.cleared}`
       : delivery.absent ? `${rule.name} recovered: ${seriesLabel} is no longer reported` : `${rule.name} recovered for ${seriesLabel}`;
   const detail: JsonRecord = {

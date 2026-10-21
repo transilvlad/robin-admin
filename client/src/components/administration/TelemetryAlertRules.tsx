@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { alertsApi, ApiError } from '../../api/client';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -194,10 +195,13 @@ export function TelemetryAlertRules() {
             “Telemetry rule” receive the notifications.
           </p>
         </div>
-        <Button onClick={() => openForm(null)}>
-          <Plus aria-hidden="true" className="h-4 w-4" />
-          Add rule
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Link className="btn btn-secondary" to="/telemetry/issues">View issues</Link>
+          <Button onClick={() => openForm(null)}>
+            <Plus aria-hidden="true" className="h-4 w-4" />
+            Add rule
+          </Button>
+        </div>
       </div>
       {error && <p role="alert" className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
 

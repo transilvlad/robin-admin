@@ -27,9 +27,14 @@ import { routeParam } from './params.js';
 import {
   createTelemetryAlertRule,
   listTelemetryAlertRules,
-  updateTelemetryAlertRule,
 } from '../db/queries/telemetry-alert-rules.js';
-import { deleteTelemetryAlertRuleWithRecoveries, previewTelemetryAlertRule } from '../services/alerts/telemetry-rules.js';
+import {
+  changeTelemetryAlertIssueDismissal,
+  deleteTelemetryAlertRuleWithRecoveries,
+  previewTelemetryAlertRule,
+  updateTelemetryAlertRuleWithRecoveries,
+} from '../services/alerts/telemetry-rules.js';
+import { getTelemetryAlertIssueById, listTelemetryAlertIssues } from '../db/queries/telemetry-alert-issues.js';
 import { buildSentryAlertPayload, parseSentryDsn } from '../services/alerts/sentry.js';
 import { TelemetryQueryError } from '../services/telemetry/store-client.js';
 import {
@@ -43,6 +48,11 @@ const router = Router();
 function actorId(req: Request): number | null {
   const admin = getCurrentAdmin(req);
   return admin?.adminId && admin.adminId > 0 ? admin.adminId : null;
+}
+
+function actorName(req: Request): string | null {
+  const name = getCurrentAdmin(req)?.name;
+  return typeof name === 'string' && name.length > 0 ? name.slice(0, 120) : null;
 }
 
 function parseId(value: string): number | null {
@@ -455,6 +465,109 @@ router.get('/telemetry-alert-rules', requireAuth, requireAdmin, async (_req, res
   }
 });
 
+router.get('/telemetry-alert-issues', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const status = req.query.status;
+    if (status !== undefined && status !== 'active' && status !== 'dismissed' && status !== 'resolved') {
+      return res.status(400).json({ success: false, error: 'status must be active, dismissed or resolved' });
+    }
+    const limitValue = req.query.limit === undefined ? 100 : Number(req.query.limit);
+    const offsetValue = req.query.offset === undefined ? 0 : Number(req.query.offset);
+    if (!Number.isInteger(limitValue) || limitValue < 1 || limitValue > 200
+      || !Number.isSafeInteger(offsetValue) || offsetValue < 0) {
+      return res.status(400).json({ success: false, error: 'limit must be 1 to 200 and offset must be a non-negative integer' });
+    }
+    res.json({ success: true, data: await listTelemetryAlertIssues({ status, limit: limitValue, offset: offsetValue }) });
+  } catch (error) {
+    routeError(res, 'Failed to load telemetry alert issues', error);
+  }
+});
+
+router.get('/telemetry-alert-issues/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = routeParam(req, 'id');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid telemetry alert issue ID' });
+    }
+    const issue = await getTelemetryAlertIssueById(id);
+    if (!issue) return res.status(404).json({ success: false, error: 'Telemetry alert issue not found' });
+    res.json({ success: true, data: issue });
+  } catch (error) {
+    routeError(res, 'Failed to load telemetry alert issue', error);
+  }
+});
+
+function parseTelemetryIssueAction(body: unknown): {
+  expectedRevision: number;
+  reason: string | null;
+  until: Date | null;
+} {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Request body must be an object');
+  const values = body as Record<string, unknown>;
+  const expectedRevision = integerValue(values.expectedRevision, 'expectedRevision', 1, Number.MAX_SAFE_INTEGER);
+  const reason = optionalString(values.reason, 'reason', 500) ?? null;
+  let until: Date | null = null;
+  if (values.until !== undefined && values.until !== null && values.until !== '') {
+    if (typeof values.until !== 'string') throw new Error('until must be a future date');
+    until = new Date(values.until);
+    if (Number.isNaN(until.getTime()) || until <= new Date()) throw new Error('until must be a future date');
+  }
+  return { expectedRevision, reason, until };
+}
+
+router.post('/telemetry-alert-issues/:id/dismiss', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = routeParam(req, 'id');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid telemetry alert issue ID' });
+    }
+    const action = parseTelemetryIssueAction(req.body);
+    const result = await changeTelemetryAlertIssueDismissal({
+      issueId: id,
+      action: 'dismiss',
+      ...action,
+      actorAdminId: actorId(req),
+      actorName: actorName(req),
+    });
+    if (result === 'not_found') return res.status(404).json({ success: false, error: 'Telemetry alert issue not found' });
+    if (result === 'conflict') return res.status(409).json({ success: false, error: 'Telemetry alert issue changed or is no longer firing. Refresh and try again.' });
+    await logAudit(req, AuditActions.TELEMETRY_ALERT_ISSUE_DISMISS, {
+      entityType: 'telemetry_alert_issue',
+      entityId: id,
+      newValues: { reason: action.reason, until: action.until?.toISOString() ?? null },
+    });
+    res.json({ success: true, data: await getTelemetryAlertIssueById(id) });
+  } catch (error) {
+    routeError(res, 'Failed to dismiss telemetry alert issue', error);
+  }
+});
+
+router.post('/telemetry-alert-issues/:id/resume', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = routeParam(req, 'id');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid telemetry alert issue ID' });
+    }
+    const action = parseTelemetryIssueAction(req.body);
+    const result = await changeTelemetryAlertIssueDismissal({
+      issueId: id,
+      action: 'resume',
+      expectedRevision: action.expectedRevision,
+      actorAdminId: actorId(req),
+      actorName: actorName(req),
+    });
+    if (result === 'not_found') return res.status(404).json({ success: false, error: 'Telemetry alert issue not found' });
+    if (result === 'conflict') return res.status(409).json({ success: false, error: 'Telemetry alert issue changed or is no longer dismissed. Refresh and try again.' });
+    await logAudit(req, AuditActions.TELEMETRY_ALERT_ISSUE_RESUME, {
+      entityType: 'telemetry_alert_issue',
+      entityId: id,
+    });
+    res.json({ success: true, data: await getTelemetryAlertIssueById(id) });
+  } catch (error) {
+    routeError(res, 'Failed to resume telemetry alert issue', error);
+  }
+});
+
 router.post('/telemetry-alert-rules/preview', requireAuth, requireAdmin, async (req, res) => {
   try {
     const preview = await previewTelemetryAlertRule({
@@ -490,7 +603,7 @@ router.put('/telemetry-alert-rules/:id', requireAuth, requireAdmin, async (req, 
   try {
     const id = parseId(routeParam(req, 'id'));
     if (!id) return res.status(400).json({ success: false, error: 'Invalid rule ID' });
-    const rule = await updateTelemetryAlertRule(id, parseRuleInput(req.body));
+    const rule = await updateTelemetryAlertRuleWithRecoveries(id, parseRuleInput(req.body));
     if (!rule) return res.status(404).json({ success: false, error: 'Rule not found' });
     await logAudit(req, AuditActions.TELEMETRY_ALERT_RULE_UPDATE, {
       entityType: 'telemetry_alert_rule',

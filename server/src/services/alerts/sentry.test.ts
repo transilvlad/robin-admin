@@ -76,6 +76,7 @@ describe('buildSentryAlertPayload', () => {
 
   it('resolves on recovery and sends nothing for repeats', () => {
     expect(buildSentryAlertPayload({ ...signal, eventKind: 'recovery' })).toEqual({ sentry: { action: 'resolve', alertKey: 'monitoring:check:7' } });
+    expect(buildSentryAlertPayload({ ...signal, eventKind: 'dismissed' })).toEqual({ sentry: { action: 'resolve', alertKey: 'monitoring:check:7' } });
     expect(buildSentryAlertPayload({ ...signal, eventKind: 'repeat' })).toBeNull();
   });
 });

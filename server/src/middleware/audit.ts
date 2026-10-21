@@ -157,5 +157,7 @@ export const AuditActions = {
   TELEMETRY_ALERT_RULE_CREATE: 'telemetry_alert_rule.create',
   TELEMETRY_ALERT_RULE_UPDATE: 'telemetry_alert_rule.update',
   TELEMETRY_ALERT_RULE_DELETE: 'telemetry_alert_rule.delete',
+  TELEMETRY_ALERT_ISSUE_DISMISS: 'telemetry_alert_issue.dismiss',
+  TELEMETRY_ALERT_ISSUE_RESUME: 'telemetry_alert_issue.resume',
   ALERT_WEBHOOK_RESUME: 'alert_webhook.resume',
 } as const;

@@ -16,12 +16,57 @@ export interface TelemetryAlertRuleInput {
 export interface TelemetryAlertSeriesState {
   ruleId: number;
   seriesKey: string;
+  issueId: string | null;
   labels: Record<string, string>;
   status: 'pending' | 'firing';
   pendingSince: string;
   firingSince: string | null;
   lastValue: number | null;
   lastSeenAt: string;
+}
+
+export type TelemetryAlertIssueStatus = 'active' | 'dismissed' | 'resolved';
+export type TelemetryAlertIssueResolution = 'recovered' | 'absent' | 'edited' | 'disabled' | 'deleted';
+export type TelemetryAlertIssueEventType =
+  | 'firing'
+  | 'dismissed'
+  | 'resumed'
+  | 'dismissal_expired'
+  | 'severity_escalated'
+  | 'resolved';
+
+export interface TelemetryAlertIssueEvent {
+  id: number;
+  eventType: TelemetryAlertIssueEventType;
+  actorName: string | null;
+  reason: string | null;
+  expiresAt: string | null;
+  occurredAt: string;
+}
+
+export interface TelemetryAlertIssue {
+  id: string;
+  ruleId: number;
+  ruleName: string;
+  query: string;
+  comparator: TelemetryAlertComparator;
+  threshold: number;
+  forSeconds: number;
+  severity: TelemetryAlertSeverity;
+  seriesKey: string;
+  labels: Record<string, string>;
+  lastValue: number | null;
+  status: TelemetryAlertIssueStatus;
+  openedAt: string;
+  lastSeenAt: string;
+  dismissedAt: string | null;
+  dismissedBy: string | null;
+  dismissedUntil: string | null;
+  dismissalReason: string | null;
+  revision: number;
+  resolvedAt: string | null;
+  resolutionReason: TelemetryAlertIssueResolution | null;
+  events: TelemetryAlertIssueEvent[];
 }
 
 export interface TelemetryAlertRule extends TelemetryAlertRuleInput {

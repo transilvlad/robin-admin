@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:https';
 import { request as httpsRequest } from 'node:https';
 import { once } from 'node:events';
@@ -8,7 +9,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initializeSchema } from '../../db/schema.js';
 import { query, closePool } from '../../db/connection.js';
-import { createAlertWebhook, createAlertDelivery, claimDueAlertDeliveries, listAlertDeliveries } from '../../db/queries/alerts.js';
+import {
+  createAlertWebhook,
+  createAlertDelivery,
+  claimDueAlertDeliveries,
+  completeAlertDelivery,
+  listAlertDeliveries,
+} from '../../db/queries/alerts.js';
 import { updateConfig } from '../../db/queries/config.js';
 import { processAlertDelivery } from './delivery-worker.js';
 import { createAlertTransport, sendAlertWebhook } from './webhook-transport.js';
@@ -72,5 +79,91 @@ describe.skipIf(!run)('Encrypted queue to verified TLS receiver', () => {
     const [second] = await claimDueAlertDeliveries(1); await processAlertDelivery(second);
     expect((await listAlertDeliveries()).find(value => value.id === item.id)).toMatchObject({ status: 'failed', attempts: 2 });
     expect(await claimDueAlertDeliveries(1)).toEqual([]);
+  });
+
+  it('cancels old firing deliveries after dismissal, including after a later undo', async () => {
+    const issueId = randomUUID();
+    const suffix = randomUUID();
+    await query(
+      `INSERT INTO telemetry_alert_issues
+         (id, rule_id, rule_name, query, comparator, threshold, for_seconds, severity, series_key,
+          labels_json, last_value, opened_at, last_seen_at)
+       VALUES ($1, 900001, 'Fixture rule', 'up', '>', 0, 0, 'critical', 'fixture-series',
+          '{"host":"fixture"}'::jsonb, 1, NOW(), NOW())`,
+      [issueId],
+    );
+    const delivery = await createAlertDelivery({
+      dedupeKey: `telemetry-dismissal-revision-fixture:${suffix}`,
+      webhookId,
+      webhookName: 'Disposable TLS receiver',
+      fleetServiceId: null,
+      serviceId: 'telemetry-rule-900001',
+      serviceName: 'Fixture rule · host=fixture',
+      serviceType: 'monitoring',
+      alertType: 'telemetry_rule',
+      eventKind: 'failure',
+      telemetryAlertIssueId: issueId,
+      telemetryAlertIssueRevision: 1,
+      adapter: 'slack',
+      payload: { text: 'fixture-only' },
+    });
+    const [claimed] = await claimDueAlertDeliveries(1);
+    expect(claimed?.id).toBe(delivery.id);
+
+    await query(
+      `UPDATE telemetry_alert_issues
+       SET status = 'dismissed', dismissed_at = NOW(), revision = revision + 1 WHERE id = $1`,
+      [issueId],
+    );
+    expect(await completeAlertDelivery({
+      id: delivery.id,
+      claimToken: claimed.claimToken,
+      status: 'pending',
+      error: 'fixture retry',
+      nextAttemptAt: new Date(),
+    })).toBe(true);
+    expect((await listAlertDeliveries()).find((item) => item.id === delivery.id)).toMatchObject({
+      status: 'cancelled',
+      error: 'Telemetry alert issue changed before delivery',
+    });
+
+    await query(
+      `UPDATE telemetry_alert_issues
+       SET status = 'active', dismissed_at = NULL, revision = revision + 1 WHERE id = $1`,
+      [issueId],
+    );
+    expect(await claimDueAlertDeliveries(1)).toEqual([]);
+
+    const stale = await createAlertDelivery({
+      dedupeKey: `telemetry-dismissal-revision-stale-worker-fixture:${suffix}`,
+      webhookId,
+      webhookName: 'Disposable TLS receiver',
+      fleetServiceId: null,
+      serviceId: 'telemetry-rule-900001',
+      serviceName: 'Fixture rule · host=fixture',
+      serviceType: 'monitoring',
+      alertType: 'telemetry_rule',
+      eventKind: 'failure',
+      telemetryAlertIssueId: issueId,
+      telemetryAlertIssueRevision: 3,
+      adapter: 'slack',
+      payload: { text: 'fixture-only' },
+    });
+    const [staleClaim] = await claimDueAlertDeliveries(1);
+    expect(staleClaim?.id).toBe(stale.id);
+    await query(
+      `UPDATE telemetry_alert_issues
+       SET status = 'dismissed', dismissed_at = NOW(), revision = revision + 1
+       WHERE id = $1`,
+      [issueId],
+    );
+    await query(
+      `UPDATE alert_deliveries
+       SET claimed_at = CURRENT_TIMESTAMP - INTERVAL '16 minutes'
+       WHERE id = $1`,
+      [stale.id],
+    );
+    expect(await claimDueAlertDeliveries(1)).toEqual([]);
+    expect((await listAlertDeliveries()).find((item) => item.id === stale.id)?.status).toBe('cancelled');
   });
 });

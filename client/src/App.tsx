@@ -25,6 +25,7 @@ const StatusPageAdmin = lazy(() => import('./pages/StatusPageAdmin').then((m) =>
 const TelemetryPage = lazy(() => import('./pages/Telemetry').then((m) => ({ default: m.TelemetryPage })));
 const TelemetryExplorePage = lazy(() => import('./pages/TelemetryExplore').then((m) => ({ default: m.TelemetryExplorePage })));
 const TelemetrySourcesPage = lazy(() => import('./pages/TelemetrySources').then((m) => ({ default: m.TelemetrySourcesPage })));
+const TelemetryIssuesPage = lazy(() => import('./pages/TelemetryIssues').then((m) => ({ default: m.TelemetryIssuesPage })));
 const StatusPagePublic = lazy(() => import('./pages/StatusPagePublic').then((m) => ({ default: m.StatusPagePublic })));
 const EmailDeliveryPage = lazy(() => import('./pages/EmailDelivery').then((m) => ({ default: m.EmailDeliveryPage })));
 const UsersPage = lazy(() => import('./pages/Users').then((m) => ({ default: m.UsersPage })));
@@ -320,6 +321,7 @@ export function App() {
                   <Route path="telemetry" element={<TelemetryRoute><Suspended><TelemetryPage /></Suspended></TelemetryRoute>} />
                   <Route path="telemetry/explore" element={<TelemetryRoute><Suspended><TelemetryExplorePage /></Suspended></TelemetryRoute>} />
                   <Route path="telemetry/sources" element={<TelemetryRoute><Suspended><TelemetrySourcesPage /></Suspended></TelemetryRoute>} />
+                  <Route path="telemetry/issues" element={<AdminRoute><TelemetryRoute><Suspended><TelemetryIssuesPage /></Suspended></TelemetryRoute></AdminRoute>} />
                   <Route path="dmarc" element={<ReportingRoute><Suspended><DmarcPage /></Suspended></ReportingRoute>} />
                   <Route path="tlsrpt" element={<ReportingRoute><Suspended><TlsrptPage /></Suspended></ReportingRoute>} />
                   <Route path="forensic" element={<ReportingRoute><Suspended><ForensicPage /></Suspended></ReportingRoute>} />

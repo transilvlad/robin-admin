@@ -5,6 +5,7 @@ import type { Server } from 'node:http';
 import router from './alerting.js';
 import * as alerts from '../db/queries/alerts.js';
 import * as rules from '../db/queries/telemetry-alert-rules.js';
+import * as issues from '../db/queries/telemetry-alert-issues.js';
 import * as telemetryRules from '../services/alerts/telemetry-rules.js';
 
 vi.mock('../middleware/auth.js', () => ({
@@ -26,6 +27,8 @@ vi.mock('../middleware/audit.js', () => ({
     TELEMETRY_ALERT_RULE_CREATE: 'telemetry_alert_rule.create',
     TELEMETRY_ALERT_RULE_UPDATE: 'telemetry_alert_rule.update',
     TELEMETRY_ALERT_RULE_DELETE: 'telemetry_alert_rule.delete',
+    TELEMETRY_ALERT_ISSUE_DISMISS: 'telemetry_alert_issue.dismiss',
+    TELEMETRY_ALERT_ISSUE_RESUME: 'telemetry_alert_issue.resume',
   },
   logAudit: vi.fn(),
 }));
@@ -46,7 +49,16 @@ vi.mock('../db/queries/telemetry-alert-rules.js', () => ({
   listTelemetryAlertRules: vi.fn(),
   updateTelemetryAlertRule: vi.fn(),
 }));
-vi.mock('../services/alerts/telemetry-rules.js', () => ({ deleteTelemetryAlertRuleWithRecoveries: vi.fn(), previewTelemetryAlertRule: vi.fn() }));
+vi.mock('../db/queries/telemetry-alert-issues.js', () => ({
+  getTelemetryAlertIssueById: vi.fn(),
+  listTelemetryAlertIssues: vi.fn(),
+}));
+vi.mock('../services/alerts/telemetry-rules.js', () => ({
+  changeTelemetryAlertIssueDismissal: vi.fn(),
+  deleteTelemetryAlertRuleWithRecoveries: vi.fn(),
+  previewTelemetryAlertRule: vi.fn(),
+  updateTelemetryAlertRuleWithRecoveries: vi.fn(),
+}));
 vi.mock('../db/queries/config.js', () => ({
   getConfig: vi.fn(() => Promise.resolve({ alertDeliveryRetentionDays: 30 })),
 }));
@@ -167,7 +179,7 @@ describe('telemetry alert rule routes', () => {
   });
 
   it('returns 404 when updating or deleting a missing rule', async () => {
-    vi.mocked(rules.updateTelemetryAlertRule).mockResolvedValue(null);
+    vi.mocked(telemetryRules.updateTelemetryAlertRuleWithRecoveries).mockResolvedValue(null);
     vi.mocked(telemetryRules.deleteTelemetryAlertRuleWithRecoveries).mockResolvedValue(false);
     expect((await post('/telemetry-alert-rules/99', body, 'PUT')).status).toBe(404);
     expect((await fetch(`${baseUrl}/api/telemetry-alert-rules/99`, { method: 'DELETE' })).status).toBe(404);
@@ -178,5 +190,34 @@ describe('telemetry alert rule routes', () => {
     const response = await post('/telemetry-alert-rules/preview', { query: body.query, comparator: '<', threshold: 1 });
     expect(response.status).toBe(200);
     expect((await response.json()).data.series[0].matches).toBe(true);
+  });
+
+  it('validates issue filters and returns a paginated issue list', async () => {
+    vi.mocked(issues.listTelemetryAlertIssues).mockResolvedValue({ issues: [], total: 0 });
+    expect((await fetch(`${baseUrl}/api/telemetry-alert-issues?status=unknown`)).status).toBe(400);
+    const response = await fetch(`${baseUrl}/api/telemetry-alert-issues?status=active&limit=10&offset=0`);
+    expect(response.status).toBe(200);
+    expect(issues.listTelemetryAlertIssues).toHaveBeenCalledWith({ status: 'active', limit: 10, offset: 0 });
+  });
+
+  it('rejects invalid dismissal input and returns conflicts for stale issue actions', async () => {
+    const invalid = await post('/telemetry-alert-issues/11a00195-51c9-49a8-812a-31ae48541c23/dismiss', {
+      expectedRevision: 0,
+    });
+    expect(invalid.status).toBe(400);
+    expect(telemetryRules.changeTelemetryAlertIssueDismissal).not.toHaveBeenCalled();
+
+    vi.mocked(telemetryRules.changeTelemetryAlertIssueDismissal).mockResolvedValue('conflict');
+    const stale = await post('/telemetry-alert-issues/11a00195-51c9-49a8-812a-31ae48541c23/dismiss', {
+      expectedRevision: 1,
+      reason: 'Reviewed',
+    });
+    expect(stale.status).toBe(409);
+    expect(telemetryRules.changeTelemetryAlertIssueDismissal).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'dismiss',
+      expectedRevision: 1,
+      reason: 'Reviewed',
+      actorAdminId: 1,
+    }));
   });
 });

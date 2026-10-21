@@ -13,6 +13,11 @@ const LATE_COLUMNS: Array<[table: string, column: string]> = [
   ['fleet_agents', 'services_json'],
   ['fleet_services', 'software_version'],
   ['rspamd_dkim_selectors', 'private_key_enc'],
+  ['telemetry_alert_states', 'issue_id'],
+  ['alert_deliveries', 'telemetry_alert_issue_id'],
+  ['alert_deliveries', 'telemetry_alert_issue_revision'],
+  ['telemetry_alert_issue_events', 'actor_name'],
+  ['telemetry_alert_issue_events', 'expires_at'],
 ];
 
 async function hasColumn(table: string, column: string): Promise<boolean> {

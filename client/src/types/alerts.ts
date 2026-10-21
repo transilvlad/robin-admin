@@ -93,11 +93,12 @@ export interface AlertDelivery {
   webhookName: string;
   fleetServiceId: number | null;
   monitoringIssueId: number | null;
+  telemetryAlertIssueId?: string | null;
   serviceId: string;
   serviceName: string;
   serviceType: AlertServiceType;
   alertType: AlertType;
-  eventKind: 'failure' | 'repeat' | 'recovery' | 'test';
+  eventKind: 'failure' | 'repeat' | 'recovery' | 'test' | 'dismissed';
   status: AlertDeliveryStatus;
   attempts: number;
   nextAttemptAt: string | null;

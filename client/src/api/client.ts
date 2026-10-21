@@ -18,7 +18,13 @@
  *   JWT token is managed by AuthContext, not this module.
  */
 
-import type { TelemetryAlertPreview, TelemetryAlertRule, TelemetryAlertRuleInput } from '../types/telemetry-alerts';
+import type {
+  TelemetryAlertIssue,
+  TelemetryAlertIssueStatus,
+  TelemetryAlertPreview,
+  TelemetryAlertRule,
+  TelemetryAlertRuleInput,
+} from '../types/telemetry-alerts';
 import type {
   ApiResponse,
   PaginatedResponse,
@@ -2022,6 +2028,26 @@ export const alertsApi = {
 
   listTelemetryRules: () =>
     request<ApiResponse<TelemetryAlertRule[]>>('/telemetry-alert-rules'),
+
+  listTelemetryIssues: (status: TelemetryAlertIssueStatus, limit = 100, offset = 0) => {
+    const params = new URLSearchParams({ status, limit: String(limit), offset: String(offset) });
+    return request<ApiResponse<{ issues: TelemetryAlertIssue[]; total: number }>>(`/telemetry-alert-issues?${params}`);
+  },
+
+  getTelemetryIssue: (id: string) =>
+    request<ApiResponse<TelemetryAlertIssue>>(`/telemetry-alert-issues/${encodeURIComponent(id)}`),
+
+  dismissTelemetryIssue: (id: string, data: { expectedRevision: number; reason: string | null; until: string | null }) =>
+    request<ApiResponse<TelemetryAlertIssue>>(`/telemetry-alert-issues/${encodeURIComponent(id)}/dismiss`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  resumeTelemetryIssue: (id: string, data: { expectedRevision: number }) =>
+    request<ApiResponse<TelemetryAlertIssue>>(`/telemetry-alert-issues/${encodeURIComponent(id)}/resume`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   createTelemetryRule: (data: TelemetryAlertRuleInput) =>
     request<ApiResponse<TelemetryAlertRule>>('/telemetry-alert-rules', { method: 'POST', body: JSON.stringify(data) }),

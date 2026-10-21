@@ -23,7 +23,7 @@ export const ALERT_TYPES = [
 export type AlertType = (typeof ALERT_TYPES)[number];
 export type AlertServiceType = FleetServiceType | 'monitoring';
 export type AlertWebhookAdapter = 'slack' | 'generic' | 'sentry';
-export type AlertEventKind = 'failure' | 'repeat' | 'recovery' | 'test';
+export type AlertEventKind = 'failure' | 'repeat' | 'recovery' | 'test' | 'dismissed';
 export type AlertDeliveryStatus = 'pending' | 'processing' | 'accepted' | 'failed' | 'cancelled' | 'expired';
 export type JsonRecord = Record<string, unknown>;
 
@@ -73,6 +73,7 @@ export interface AlertDelivery {
   webhookName: string;
   fleetServiceId: number | null;
   monitoringIssueId: number | null;
+  telemetryAlertIssueId?: string | null;
   serviceId: string;
   serviceName: string;
   serviceType: AlertServiceType;
