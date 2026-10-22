@@ -210,6 +210,12 @@ describe('rate alert evidence', () => {
     expect(result).toMatchObject({ value: 0, failing: false });
   });
 
+  it('evaluates Cyrus authentication spikes from its own history', () => {
+    const subscription = { alertType: 'cyrus_auth_failures' as const, enabled: true, threshold: 100 };
+    expect(buildEvidence(row({ service_type: 'cyrus', cyrus_timestamp: sampledAt, cyrus_window_auth_failures: '250' }), subscription, now)).toMatchObject({ value: 250, failing: true, unit: 'failures' });
+    expect(buildEvidence(row({ service_type: 'cyrus', cyrus_timestamp: null }), subscription, now)).toMatchObject({ value: null, failing: null });
+  });
+
   it('fails the auth failure spike above the threshold and is unknown without samples', () => {
     const subscription = { alertType: 'dovecot_auth_failures' as const, enabled: true, threshold: 100 };
     expect(buildEvidence(row({

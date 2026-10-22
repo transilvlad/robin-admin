@@ -43,6 +43,7 @@ async function clampLines(n: number): Promise<number> {
 interface FileLogSource { unit?: string; file?: string; dir?: string; glob?: string; filter?: string }
 const FILE_LOG_SOURCES: Partial<Record<FleetServiceType, FileLogSource>> = {
   clamav: { unit: 'clamav-daemon', file: '/var/log/clamav/clamav.log' },
+  cyrus: { unit: 'cyrus-imapd', file: '/var/log/mail.log', filter: 'cyrus/' },
   dovecot: { unit: 'dovecot', file: '/var/log/mail.log', filter: 'dovecot' },
   postfix: { unit: 'postfix@-', file: '/var/log/mail.log', filter: 'postfix/' },
   redis: { unit: 'redis-server', file: '/var/log/redis/redis-server.log' },

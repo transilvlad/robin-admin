@@ -283,6 +283,7 @@ function listConfigFileEntries(serviceType: FleetServiceType, serviceId: string)
     case 'dovecot': return listDovecotConfigStoreEntriesForService(serviceId);
     case 'postfix': return listPostfixConfigStoreEntriesForService(serviceId);
     case 'clamav': return listClamavConfigStoreEntriesForService(serviceId);
+    case 'cyrus':
     case 'redis':
     case 'postgres':
     case 'mariadb': return Promise.resolve([]);

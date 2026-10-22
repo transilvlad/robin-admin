@@ -13,7 +13,7 @@ The metrics poll interval also applies live, without overlapping active cycles.
 
 Robin Admin manages a fleet of co-located mail services from one dashboard. A
 fleet is a set of **services**, each with a type — `robin`, `rspamd`, `clamav`,
-`dovecot`, `postfix`, `redis`, `postgres` or `mariadb` — registered in the
+`dovecot`, `cyrus`, `postfix`, `redis`, `postgres` or `mariadb` — registered in the
 `fleet_services` registry.
 
 ## Overview
@@ -53,7 +53,7 @@ Open the **Fleet** page to add, edit, enable/disable, and health-check services.
 Provide:
 
 - **Service ID**: unique identifier (e.g. `production`, `staging`, `eu-west`)
-- **Service type**: `robin` / `rspamd` / `clamav` / `dovecot` / `postfix` / `redis` / `postgres` / `mariadb`
+- **Service type**: `robin` / `rspamd` / `clamav` / `dovecot` / `cyrus` / `postfix` / `redis` / `postgres` / `mariadb`
 - **Name** and optional **description**
 - **API URL**: the service's API/health endpoint (Robin, Rspamd and ClamAV only)
 - **Metrics URL**: optional OpenMetrics/exporter URL (defaults to the API URL).
@@ -336,3 +336,25 @@ and 3579, or use `RELIABILITY_PORT` to choose a different base port.
 3. Check the metrics poller logs: `docker logs suite-admin`.
 4. Confirm the service is exposing its metrics endpoint (e.g. Robin's
    `/actuator/prometheus`).
+
+## Cyrus IMAP
+
+Register a service with type `cyrus` and assign its metrics axis to a robin-agent
+with access to Cyrus IMAP 3.6+ tools. Cyrus has no direct metrics collector:
+registration alone does not make metrics available. The agent reads
+`/var/lib/cyrus/config/stats/report.txt`, collects processes with `cyr_info proc`,
+and reports `master -V`. Enable `prometheus_enabled: yes` in `imapd.conf`
+and run `promstatsd` in the `DAEMON` section of `cyrus.conf` to generate the report.
+The agent must be able to read the report and inspect processes and quota roots.
+
+The metrics page includes authentication, IMAP commands, LMTP deliveries, users,
+mailboxes, sessions, quota, and mailbox-path lookups. Quota STORAGE values are
+reported in KiB and displayed as storage sizes. An empty process list is normal
+when idle; a nonexistent quota root returns an empty result.
+
+Cyrus configuration stays operator-managed. There is no config page, config
+sync, reload, or disconnect action. The full agent assignment collects metrics
+and logs, but never applies config for Cyrus. For containerized Cyrus, use
+`ROBIN_AGENT_EXEC_PREFIX=mailbox=docker exec mailbox`, where `mailbox` is the
+registered service ID. This applies equally to collectors and operational commands.
+Override the agent log path with `ROBIN_AGENT_CYRUS_LOG_FILE` when needed.

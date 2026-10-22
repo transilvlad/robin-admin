@@ -32,6 +32,10 @@ import {
   type DovecotLiveMetrics,
 } from './dovecot.js';
 import {
+  buildCyrusSnapshotFromRaw,
+  type CyrusLiveMetrics,
+} from './cyrus.js';
+import {
   getPostfixLiveMetrics,
   buildPostfixSnapshotFromRaw,
   countPostfixLogLines,
@@ -160,6 +164,7 @@ export interface RspamdMetricsHistoryRow extends RspamdMetricsSnapshot {}
 export interface ClamavMetricsHistoryRow extends ClamavLiveMetrics {}
 
 export interface DovecotMetricsHistoryRow extends DovecotLiveMetrics {}
+export interface CyrusMetricsHistoryRow extends CyrusLiveMetrics { }
 
 export interface PostfixMetricsHistoryRow extends PostfixLiveMetrics {}
 
@@ -169,10 +174,10 @@ export interface PostgresMetricsHistoryRow extends PostgresLiveMetrics {}
 
 export interface MariadbMetricsHistoryRow extends MariadbLiveMetrics {}
 
-export type ServiceMetricsSnapshot = RobinMetricsSnapshot | RspamdMetricsSnapshot | ClamavLiveMetrics | DovecotLiveMetrics | PostfixLiveMetrics | RedisLiveMetrics | PostgresLiveMetrics | MariadbLiveMetrics;
-export type ServiceMetricsHistoryRow = RobinMetricsHistoryRow | RspamdMetricsHistoryRow | ClamavMetricsHistoryRow | DovecotMetricsHistoryRow | PostfixMetricsHistoryRow | RedisMetricsHistoryRow | PostgresMetricsHistoryRow | MariadbMetricsHistoryRow;
+export type ServiceMetricsSnapshot = RobinMetricsSnapshot | RspamdMetricsSnapshot | ClamavLiveMetrics | DovecotLiveMetrics | CyrusLiveMetrics | PostfixLiveMetrics | RedisLiveMetrics | PostgresLiveMetrics | MariadbLiveMetrics;
+export type ServiceMetricsHistoryRow = RobinMetricsHistoryRow | RspamdMetricsHistoryRow | ClamavMetricsHistoryRow | DovecotMetricsHistoryRow | CyrusMetricsHistoryRow | PostfixMetricsHistoryRow | RedisMetricsHistoryRow | PostgresMetricsHistoryRow | MariadbMetricsHistoryRow;
 
-type HistoryTable = 'robin_metrics_history' | 'rspamd_metrics_history' | 'clamav_metrics_history' | 'dovecot_metrics_history' | 'postfix_metrics_history' | 'redis_metrics_history' | 'postgres_metrics_history' | 'mariadb_metrics_history';
+type HistoryTable = 'robin_metrics_history' | 'rspamd_metrics_history' | 'clamav_metrics_history' | 'dovecot_metrics_history' | 'cyrus_metrics_history' | 'postfix_metrics_history' | 'redis_metrics_history' | 'postgres_metrics_history' | 'mariadb_metrics_history';
 export type { MetricsServiceType } from '../db/queries/service-metrics.js';
 
 interface RobinRates {
@@ -322,6 +327,29 @@ interface DovecotHistoryRowDb {
   mail_deliveries: number | string;
   session_count: number | string;
   user_count: number | string;
+  raw_stats: string | null;
+}
+
+interface CyrusHistoryRowDb {
+  fleet_service_id: number;
+  service_id: string;
+  current_service_id?: string | null;
+  timestamp: Date;
+  reachable: boolean;
+  imap_connections: number | string;
+  active_connections: number | string;
+  auth_success: number | string;
+  auth_failure: number | string;
+  login_count: number | string;
+  imap_commands: number | string;
+  lmtp_connections: number | string;
+  mail_deliveries: number | string;
+  lmtp_recipients: number | string;
+  lmtp_bytes: number | string;
+  user_count: number | string;
+  mailbox_count: number | string;
+  quota_commitment: number | string;
+  session_count: number | string;
   raw_stats: string | null;
 }
 
@@ -1337,6 +1365,41 @@ async function storeDovecotSnapshot(
   );
 }
 
+async function storeCyrusSnapshot(snapshot: CyrusLiveMetrics, fleetServiceId: number | null): Promise<void> {
+  if (!snapshot.serviceId || fleetServiceId === null) return;
+  await query(
+    `INSERT INTO cyrus_metrics_history (
+       fleet_service_id, service_id, timestamp, reachable,
+       imap_connections, active_connections, auth_success, auth_failure, login_count,
+       imap_commands, lmtp_connections, mail_deliveries, lmtp_recipients, lmtp_bytes,
+       user_count, mailbox_count, quota_commitment, session_count, raw_stats
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+     )`,
+    [
+      fleetServiceId,
+      snapshot.serviceId,
+      snapshot.timestamp,
+      snapshot.reachable,
+      snapshot.imapConnections,
+      snapshot.activeConnections,
+      snapshot.authSuccess,
+      snapshot.authFailure,
+      snapshot.loginCount,
+      snapshot.imapCommands,
+      snapshot.lmtpConnections,
+      snapshot.mailDeliveries,
+      snapshot.lmtpRecipients,
+      snapshot.lmtpBytes,
+      snapshot.userCount,
+      snapshot.mailboxCount,
+      snapshot.quotaCommitment,
+      snapshot.sessionCount,
+      snapshot.rawStats,
+    ]
+  );
+}
+
 // Cumulative Postfix message counters live in postfix_message_counters, so
 // every server replica adds to the same totals and a restart keeps them. A
 // service without a counters row starts from its newest stored snapshot.
@@ -1690,7 +1753,7 @@ async function pruneOldMetrics(): Promise<void> {
   try {
     const config = await getConfig();
     const retentionDays = Math.max(1, Math.min(3650, config.metricsRetentionDays || RETENTION_DAYS));
-    const [robinResult, rspamdResult, clamavResult, dovecotResult, postfixResult, redisResult, postgresResult, mariadbResult] = await Promise.all([
+    const [robinResult, rspamdResult, clamavResult, dovecotResult, cyrusResult, postfixResult, redisResult, postgresResult, mariadbResult] = await Promise.all([
       query(
         `DELETE FROM robin_metrics_history
          WHERE timestamp < NOW() - ($1::int * INTERVAL '1 day')`,
@@ -1711,6 +1774,7 @@ async function pruneOldMetrics(): Promise<void> {
          WHERE timestamp < NOW() - ($1::int * INTERVAL '1 day')`,
         [retentionDays]
       ),
+      query(`DELETE FROM cyrus_metrics_history WHERE timestamp < NOW() - ($1::int * INTERVAL '1 day')`, [retentionDays]),
       query(
         `DELETE FROM postfix_metrics_history
          WHERE timestamp < NOW() - ($1::int * INTERVAL '1 day')`,
@@ -1733,7 +1797,7 @@ async function pruneOldMetrics(): Promise<void> {
       ),
     ]);
 
-    const pruned = (robinResult.rowCount ?? 0) + (rspamdResult.rowCount ?? 0) + (clamavResult.rowCount ?? 0) + (dovecotResult.rowCount ?? 0) + (postfixResult.rowCount ?? 0) + (redisResult.rowCount ?? 0) + (postgresResult.rowCount ?? 0) + (mariadbResult.rowCount ?? 0);
+    const pruned = (robinResult.rowCount ?? 0) + (rspamdResult.rowCount ?? 0) + (clamavResult.rowCount ?? 0) + (dovecotResult.rowCount ?? 0) + (cyrusResult.rowCount ?? 0) + (postfixResult.rowCount ?? 0) + (redisResult.rowCount ?? 0) + (postgresResult.rowCount ?? 0) + (mariadbResult.rowCount ?? 0);
     if (pruned > 0) {
       logger.debug(`Pruned ${pruned} old metrics records`);
     }
@@ -1768,6 +1832,12 @@ async function resolveDovecotService(serviceId?: string): Promise<MetricsFleetSe
     return getMetricsFleetServiceById(serviceId, 'dovecot');
   }
   return getPrimaryMetricsFleetService('dovecot');
+}
+async function resolveCyrusService(serviceId?: string): Promise<MetricsFleetService | null> {
+  if (serviceId) {
+    return getMetricsFleetServiceById(serviceId, 'cyrus');
+  }
+  return getPrimaryMetricsFleetService('cyrus');
 }
 
 async function resolvePostfixService(serviceId?: string): Promise<MetricsFleetService | null> {
@@ -1875,6 +1945,10 @@ export async function getLiveDovecotMetrics(serviceId?: string): Promise<Dovecot
     return null;
   }
 }
+export async function getLiveCyrusMetrics(serviceId?: string): Promise<CyrusLiveMetrics | null> {
+  const service = await resolveCyrusService(serviceId);
+  return service?.collectionMode === 'agent' ? getLatestAgentSnapshot('cyrus', service.serviceId) as Promise<CyrusLiveMetrics | null> : null;
+}
 
 export async function getLivePostfixMetrics(serviceId?: string): Promise<PostfixLiveMetrics | null> {
   try {
@@ -1965,6 +2039,9 @@ export async function getLiveServiceMetrics(
   if (serviceType === 'dovecot') {
     return getLiveDovecotMetrics(serviceId);
   }
+  if (serviceType === 'cyrus') {
+    return getLiveCyrusMetrics(serviceId);
+  }
   if (serviceType === 'postfix') {
     return getLivePostfixMetrics(serviceId);
   }
@@ -2006,6 +2083,7 @@ async function loadLatestAgentSnapshot(
 ): Promise<ServiceMetricsSnapshot | null> {
   switch (serviceType) {
     case 'dovecot': return loadLatestHistoryRow<DovecotHistoryRowDb, DovecotMetricsHistoryRow>('dovecot_metrics_history', serviceType, serviceId, mapDovecotHistoryRow);
+    case 'cyrus': return loadLatestHistoryRow<CyrusHistoryRowDb, CyrusMetricsHistoryRow>('cyrus_metrics_history', serviceType, serviceId, mapCyrusHistoryRow);
     case 'postfix': return loadLatestHistoryRow<PostfixHistoryRowDb, PostfixMetricsHistoryRow>('postfix_metrics_history', serviceType, serviceId, mapPostfixHistoryRow);
     case 'redis': return loadLatestHistoryRow<RedisHistoryRowDb, RedisMetricsHistoryRow>('redis_metrics_history', serviceType, serviceId, mapRedisHistoryRow);
     case 'clamav': return loadLatestHistoryRow<ClamavHistoryRowDb, ClamavMetricsHistoryRow>('clamav_metrics_history', serviceType, serviceId, mapClamavHistoryRow);
@@ -2022,7 +2100,7 @@ async function loadLatestAgentSnapshot(
  */
 export async function ingestAgentMetrics(
   service: { id: number; serviceId: string; serviceType: MetricsServiceType },
-  body: { statsDump?: string; who?: string; postqueue?: string; info?: string; version?: string; stats?: string; metrics?: string; stat?: string; prometheus?: string; snapshot?: string }
+  body: { statsDump?: string; who?: string; proc?: string; postqueue?: string; info?: string; version?: string; stats?: string; metrics?: string; stat?: string; prometheus?: string; snapshot?: string }
 ): Promise<ServiceMetricsSnapshot> {
   if (service.serviceType === 'dovecot') {
     if (typeof body.statsDump !== 'string' || !body.statsDump.trim()) {
@@ -2032,6 +2110,14 @@ export async function ingestAgentMetrics(
     await storeDovecotSnapshot(snapshot, service.id);
     // `dovecot --version`, e.g. "2.4.2 (0962ed2104)": config renders for it.
     const version = body.version?.trim().split(/\s+/)[0];
+    if (version) await setFleetServiceSoftwareVersion(service.id, version.slice(0, 64));
+    return snapshot;
+  }
+  if (service.serviceType === 'cyrus') {
+    if (typeof body.prometheus !== 'string' || !body.prometheus.trim()) throw new Error('prometheus is required for cyrus agent metrics');
+    const snapshot = buildCyrusSnapshotFromRaw(service.serviceId, body.prometheus, body.proc);
+    await storeCyrusSnapshot(snapshot, service.id);
+    const version = body.version?.trim().replace(/^cyrus-imapd\s+/i, '');
     if (version) await setFleetServiceSoftwareVersion(service.id, version.slice(0, 64));
     return snapshot;
   }
@@ -2182,6 +2268,9 @@ export async function getRawDovecotMetrics(serviceId?: string): Promise<string> 
     return `# Error fetching stats: ${(error as Error).message}`;
   }
 }
+export async function getRawCyrusMetrics(serviceId?: string): Promise<string> {
+  return (await getLiveCyrusMetrics(serviceId))?.rawStats || '# No Cyrus metrics available';
+}
 
 export async function getRawPostfixMetrics(serviceId?: string): Promise<string> {
   const service = await resolvePostfixService(serviceId);
@@ -2271,6 +2360,9 @@ export async function getRawServiceMetrics(
   }
   if (serviceType === 'dovecot') {
     return getRawDovecotMetrics(serviceId);
+  }
+  if (serviceType === 'cyrus') {
+    return getRawCyrusMetrics(serviceId);
   }
   if (serviceType === 'postfix') {
     return getRawPostfixMetrics(serviceId);
@@ -2596,6 +2688,30 @@ function mapDovecotHistoryRow(row: DovecotHistoryRowDb): DovecotMetricsHistoryRo
   };
 }
 
+function mapCyrusHistoryRow(row: CyrusHistoryRowDb): CyrusMetricsHistoryRow {
+  return {
+    serviceId: row.current_service_id ?? row.service_id,
+    serviceType: 'cyrus',
+    timestamp: row.timestamp,
+    reachable: row.reachable,
+    imapConnections: toNumber(row.imap_connections),
+    activeConnections: toNumber(row.active_connections),
+    authSuccess: toNumber(row.auth_success),
+    authFailure: toNumber(row.auth_failure),
+    loginCount: toNumber(row.login_count),
+    imapCommands: toNumber(row.imap_commands),
+    lmtpConnections: toNumber(row.lmtp_connections),
+    mailDeliveries: toNumber(row.mail_deliveries),
+    lmtpRecipients: toNumber(row.lmtp_recipients),
+    lmtpBytes: toNumber(row.lmtp_bytes),
+    userCount: toNumber(row.user_count),
+    mailboxCount: toNumber(row.mailbox_count),
+    quotaCommitment: toNumber(row.quota_commitment),
+    sessionCount: toNumber(row.session_count),
+    rawStats: row.raw_stats ?? '',
+  };
+}
+
 export async function getDovecotMetricsHistory(
   hours: number = 24,
   maxPoints: number = 500,
@@ -2614,6 +2730,25 @@ export async function getDovecotMetricsHistory(
     service.id
   );
   return rows.map(mapDovecotHistoryRow);
+}
+export async function getCyrusMetricsHistory(
+  hours: number = 24,
+  maxPoints: number = 500,
+  serviceId?: string | null
+): Promise<CyrusMetricsHistoryRow[]> {
+  // Without a serviceId this is the primary service, as for live metrics;
+  // never every service of the type mixed together.
+  const service = await resolveCyrusService(serviceId ?? undefined);
+  if (!service) {
+    return [];
+  }
+  const rows = await loadHistoryRows<CyrusHistoryRowDb>(
+    'cyrus_metrics_history',
+    hours,
+    maxPoints,
+    service.id
+  );
+  return rows.map(mapCyrusHistoryRow);
 }
 
 function mapPostfixHistoryRow(row: PostfixHistoryRowDb): PostfixMetricsHistoryRow {
@@ -2831,6 +2966,9 @@ export async function getServiceMetricsHistory(
   }
   if (serviceType === 'dovecot') {
     return getDovecotMetricsHistory(hours, maxPoints, serviceId);
+  }
+  if (serviceType === 'cyrus') {
+    return getCyrusMetricsHistory(hours, maxPoints, serviceId);
   }
   if (serviceType === 'postfix') {
     return getPostfixMetricsHistory(hours, maxPoints, serviceId);

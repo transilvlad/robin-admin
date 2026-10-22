@@ -1126,6 +1126,32 @@ export async function initializeSchema(): Promise<void> {
     `);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS cyrus_metrics_history (
+        id BIGSERIAL PRIMARY KEY,
+        fleet_service_id INTEGER NOT NULL REFERENCES fleet_services(id) ON DELETE CASCADE ON UPDATE CASCADE,
+        service_id VARCHAR(64) NOT NULL,
+        timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        reachable BOOLEAN NOT NULL DEFAULT false,
+        imap_connections BIGINT NOT NULL DEFAULT 0,
+        active_connections BIGINT NOT NULL DEFAULT 0,
+        auth_success BIGINT NOT NULL DEFAULT 0,
+        auth_failure BIGINT NOT NULL DEFAULT 0,
+        login_count BIGINT NOT NULL DEFAULT 0,
+        imap_commands BIGINT NOT NULL DEFAULT 0,
+        lmtp_connections BIGINT NOT NULL DEFAULT 0,
+        mail_deliveries BIGINT NOT NULL DEFAULT 0,
+        lmtp_recipients BIGINT NOT NULL DEFAULT 0,
+        lmtp_bytes BIGINT NOT NULL DEFAULT 0,
+        user_count BIGINT NOT NULL DEFAULT 0,
+        mailbox_count BIGINT NOT NULL DEFAULT 0,
+        quota_commitment BIGINT NOT NULL DEFAULT 0,
+        session_count BIGINT NOT NULL DEFAULT 0,
+        raw_stats TEXT NOT NULL DEFAULT ''
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_cyrus_metrics_history_service_time ON cyrus_metrics_history (fleet_service_id, timestamp DESC)`);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS dovecot_metrics_history (
         id BIGSERIAL PRIMARY KEY,
         fleet_service_id INTEGER NOT NULL

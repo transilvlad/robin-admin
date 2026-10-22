@@ -388,6 +388,17 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         },
         {
           type: 'group',
+          key: 'fleet-cyrus',
+          icon: appIcons.cyrus,
+          label: 'Cyrus IMAP',
+          show: features.cyrus,
+          children: [
+            { type: 'item', key: 'fleet-cyrus-metrics', to: '/cyrus/metrics', icon: appIcons.cyrusMetrics, label: 'Metrics', show: can('cyrus', 'metrics') },
+            { type: 'item', key: 'fleet-cyrus-logs', to: '/cyrus/logs', icon: appIcons.logs, label: 'Logs', show: can('cyrus', 'logs') && isAdmin },
+          ],
+        },
+        {
+          type: 'group',
           key: 'fleet-dovecot',
           icon: appIcons.dovecot,
           label: 'Dovecot',

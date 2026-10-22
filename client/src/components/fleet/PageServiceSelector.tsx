@@ -18,7 +18,7 @@ export function PageServiceSelector({ serviceType = 'robin', capability }: PageS
     robinServices,
     rspamdServices,
     clamavServices,
-    dovecotServices,
+    dovecotServices, cyrusServices,
     postfixServices,
     redisServices,
     postgresServices,
@@ -26,7 +26,7 @@ export function PageServiceSelector({ serviceType = 'robin', capability }: PageS
     selectedRobinService,
     selectedRspamdService,
     selectedClamavService,
-    selectedDovecotService,
+    selectedDovecotService, selectedCyrusService,
     selectedPostfixService,
     selectedRedisService,
     selectedPostgresService,
@@ -34,7 +34,7 @@ export function PageServiceSelector({ serviceType = 'robin', capability }: PageS
     setSelectedRobinService,
     setSelectedRspamdService,
     setSelectedClamavService,
-    setSelectedDovecotService,
+    setSelectedDovecotService, setSelectedCyrusService,
     setSelectedPostfixService,
     setSelectedRedisService,
     setSelectedPostgresService,
@@ -54,6 +54,9 @@ export function PageServiceSelector({ serviceType = 'robin', capability }: PageS
     if (serviceType === 'dovecot') {
       return dovecotServices;
     }
+    if (serviceType === 'cyrus') {
+      return cyrusServices;
+    }
     if (serviceType === 'postfix') {
       return postfixServices;
     }
@@ -67,7 +70,7 @@ export function PageServiceSelector({ serviceType = 'robin', capability }: PageS
       return mariadbServices;
     }
     return robinServices;
-  }, [clamavServices, dovecotServices, mariadbServices, postfixServices, postgresServices, redisServices, robinServices, rspamdServices, serviceType]);
+  }, [clamavServices, dovecotServices, cyrusServices, mariadbServices, postfixServices, postgresServices, redisServices, robinServices, rspamdServices, serviceType]);
   const enabledServices = useMemo(() => {
     if (!capability || !features.capabilities) return typeServices;
     const capable = new Set((features.capabilities?.services ?? [])
@@ -79,7 +82,7 @@ export function PageServiceSelector({ serviceType = 'robin', capability }: PageS
     ? selectedRspamdService
     : serviceType === 'clamav'
       ? selectedClamavService
-      : serviceType === 'dovecot'
+      : serviceType === 'cyrus' ? selectedCyrusService : serviceType === 'dovecot'
         ? selectedDovecotService
         : serviceType === 'postfix'
           ? selectedPostfixService
@@ -94,7 +97,7 @@ export function PageServiceSelector({ serviceType = 'robin', capability }: PageS
     ? 'Select Rspamd service'
     : serviceType === 'clamav'
       ? 'Select ClamAV service'
-      : serviceType === 'dovecot'
+      : serviceType === 'cyrus' ? 'Select Cyrus service' : serviceType === 'dovecot'
         ? 'Select Dovecot service'
         : serviceType === 'postfix'
           ? 'Select Postfix service'
@@ -109,7 +112,7 @@ export function PageServiceSelector({ serviceType = 'robin', capability }: PageS
     ? ShieldAlert
     : serviceType === 'clamav'
       ? Bug
-      : serviceType === 'dovecot'
+      : serviceType === 'cyrus' ? Inbox : serviceType === 'dovecot'
         ? Inbox
         : serviceType === 'postfix'
           ? Mail
@@ -156,6 +159,8 @@ export function PageServiceSelector({ serviceType = 'robin', capability }: PageS
       setSelectedRspamdService(service);
     } else if (serviceType === 'clamav') {
       setSelectedClamavService(service);
+    } else if (serviceType === 'cyrus') {
+      setSelectedCyrusService(service);
     } else if (serviceType === 'dovecot') {
       setSelectedDovecotService(service);
     } else if (serviceType === 'postfix') {
@@ -170,7 +175,7 @@ export function PageServiceSelector({ serviceType = 'robin', capability }: PageS
       setSelectedRobinService(service as RobinInstance);
     }
     setIsOpen(false);
-  }, [serviceType, setSelectedClamavService, setSelectedDovecotService, setSelectedMariadbService, setSelectedPostfixService, setSelectedPostgresService, setSelectedRedisService, setSelectedRobinService, setSelectedRspamdService]);
+  }, [serviceType, setSelectedClamavService, setSelectedDovecotService, setSelectedCyrusService, setSelectedMariadbService, setSelectedPostfixService, setSelectedPostgresService, setSelectedRedisService, setSelectedRobinService, setSelectedRspamdService]);
 
   // The selection is shared across a type's pages; on a page the selected
   // service can't support, switch to one that can.
@@ -189,7 +194,7 @@ export function PageServiceSelector({ serviceType = 'robin', capability }: PageS
     return (
       <div className="flex items-center gap-1.5 rounded-sm bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
         <Icon className="h-3 w-3" />
-        <span>{serviceType === 'rspamd' ? 'No Rspamd services' : serviceType === 'clamav' ? 'No ClamAV services' : serviceType === 'dovecot' ? 'No Dovecot services' : serviceType === 'postfix' ? 'No Postfix services' : serviceType === 'redis' ? 'No Redis services' : serviceType === 'postgres' ? 'No Postgres services' : serviceType === 'mariadb' ? 'No MariaDB services' : 'No Robin services'}</span>
+        <span>{serviceType === 'rspamd' ? 'No Rspamd services' : serviceType === 'clamav' ? 'No ClamAV services' : serviceType === 'cyrus' ? 'No Cyrus services' : serviceType === 'dovecot' ? 'No Dovecot services' : serviceType === 'postfix' ? 'No Postfix services' : serviceType === 'redis' ? 'No Redis services' : serviceType === 'postgres' ? 'No Postgres services' : serviceType === 'mariadb' ? 'No MariaDB services' : 'No Robin services'}</span>
       </div>
     );
   }

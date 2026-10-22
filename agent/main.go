@@ -839,8 +839,9 @@ func postStatus(client *http.Client, c config, s state, serviceID string, result
 // metricsSample pairs a request-body field with the command that produces its
 // raw output. robin-admin parses the output; the agent stays a thin executor.
 type metricsSample struct {
-	field string
-	argv  []string
+	field    string
+	argv     []string
+	combined bool
 }
 
 // Per-type raw metrics commands the agent runs locally. The first sample's
@@ -848,6 +849,11 @@ type metricsSample struct {
 // are listed here; network-reachable types stay direct and are polled by
 // robin-admin.
 var metricsCollectors = map[string][]metricsSample{
+	"cyrus": {
+		{field: "prometheus", argv: []string{"cat", "/var/lib/cyrus/config/stats/report.txt"}},
+		{field: "proc", argv: []string{"cyr_info", "proc"}},
+		{field: "version", argv: []string{"master", "-V"}, combined: true},
+	},
 	"dovecot": {
 		{field: "statsDump", argv: []string{"doveadm", "stats", "dump"}},
 		{field: "who", argv: []string{"doveadm", "who"}},
@@ -986,7 +992,7 @@ func pushServiceMetrics(parent context.Context, client *http.Client, c config, s
 		if _, err := exec.LookPath(full[0]); err != nil {
 			continue
 		}
-		out, err := captureProcess(ctx, full, false)
+		out, err := captureProcess(ctx, full, sample.combined)
 		if err != nil {
 			if i == 0 || ctx.Err() != nil || errors.Is(err, errProcessOutputLimit) || errors.Is(err, exec.ErrWaitDelay) {
 				log.Printf("robin-agent: metrics collect for %s failed: %v", svc.ServiceID, err)
@@ -1029,6 +1035,7 @@ type logSource struct {
 // upper-cased, other characters as `_`) when one agent runs several services
 // of a type — e.g. ROBIN_AGENT_LOG_MX2_FILE=/var/log/mx2/mail.log.
 var logCollectors = map[string]logSource{
+	"cyrus":    {unit: "cyrus-imapd", file: "/var/log/mail.log", filter: "cyrus/"},
 	"clamav":   {unit: "clamav-daemon", file: "/var/log/clamav/clamav.log"},
 	"dovecot":  {unit: "dovecot", file: "/var/log/mail.log", filter: "dovecot"},
 	"postfix":  {unit: "postfix@-", file: "/var/log/mail.log", filter: "postfix/"},

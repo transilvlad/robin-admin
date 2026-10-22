@@ -517,7 +517,7 @@ export async function assignFleetServiceConfigAgent(serviceId: string, configAge
   const result = await query<DbFleetService>(
     `UPDATE fleet_services
      SET config_agent_id = $2, updated_at = CURRENT_TIMESTAMP
-     WHERE service_id = $1
+     WHERE service_id = $1 AND ($2::text IS NULL OR service_type <> 'cyrus')
      RETURNING id, service_id, service_type, name, description, api_url, health_url, metrics_url, controller_url, normal_url, telemetry_source, enabled, agent_id, collection_mode, log_agent_id, config_agent_id, created_at, updated_at`,
     [serviceId, configAgentId]
   );
@@ -562,13 +562,13 @@ export async function getAgentServiceResponsibilities(agentId: string): Promise<
  * ship its logs twice.
  */
 export function agentAxesFor(
-  service: Pick<FleetService, 'collectionMode' | 'agentId' | 'configAgentId' | 'logAgentId'>,
+  service: Pick<FleetService, 'collectionMode' | 'agentId' | 'configAgentId' | 'logAgentId'> & Partial<Pick<FleetService, 'serviceType'>>,
   agentId: string,
 ): Pick<AgentServiceResponsibility, 'collectMetrics' | 'collectConfig' | 'collectLogs'> {
   const metricsOwned = service.collectionMode === 'agent' && service.agentId === agentId;
   return {
     collectMetrics: metricsOwned,
-    collectConfig: service.configAgentId ? service.configAgentId === agentId : metricsOwned,
+    collectConfig: service.serviceType !== 'cyrus' && (service.configAgentId ? service.configAgentId === agentId : metricsOwned),
     collectLogs: service.logAgentId ? service.logAgentId === agentId : metricsOwned,
   };
 }

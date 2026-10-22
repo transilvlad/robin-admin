@@ -10,6 +10,7 @@ describe('alert type catalog', () => {
       ['postfix_deferred_age', 900],
       ['postfix_bounce_rate', 20],
       ['dovecot_auth_failures', 100],
+      ['cyrus_auth_failures', 100],
       ['postgres_connections', 80],
       ['postgres_cache_hit', 95],
       ['mariadb_connections', 80],
@@ -29,7 +30,7 @@ describe('alert type catalog', () => {
     const subscriptions = normalizeAlertSubscriptions([
       { alertType: 'postfix_queue', enabled: true, threshold: 2000 },
     ]);
-    expect(subscriptions).toHaveLength(17);
+    expect(subscriptions).toHaveLength(18);
     expect(subscriptions.find((item) => item.alertType === 'postfix_queue')).toMatchObject({
       enabled: true,
       threshold: 2000,

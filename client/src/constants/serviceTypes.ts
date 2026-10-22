@@ -4,8 +4,8 @@ import { formatBytes, formatMetricNumber, formatMetricPercent, formatMetricRatio
 import type {
   ClamavFleetMetrics,
   ClamavFleetTotals,
-  DovecotFleetMetrics,
-  DovecotFleetTotals,
+  DovecotFleetMetrics, CyrusFleetMetrics,
+  DovecotFleetTotals, CyrusFleetTotals,
   FleetDashboardService,
   MariadbFleetMetrics,
   MariadbFleetTotals,
@@ -27,7 +27,7 @@ import type {
  * selectors all iterate this registry so every registered service shows up
  * generically — adding a type is one entry here, never per-file branching.
  */
-export const FLEET_SERVICE_TYPES = ['robin', 'rspamd', 'clamav', 'dovecot', 'postfix', 'redis', 'postgres', 'mariadb'] as const;
+export const FLEET_SERVICE_TYPES = ['robin', 'rspamd', 'clamav', 'dovecot', 'cyrus', 'postfix', 'redis', 'postgres', 'mariadb'] as const;
 export type FleetServiceType = (typeof FLEET_SERVICE_TYPES)[number];
 
 export type ServiceTone = 'blue' | 'purple' | 'amber' | 'teal' | 'indigo' | 'rose' | 'sky' | 'emerald';
@@ -296,6 +296,36 @@ export const SERVICE_TYPE_REGISTRY: Record<FleetServiceType, ServiceTypeMeta> = 
       { label: 'Dovecot users', value: fmt(peak<{ userCount: number }>(services, (m) => m.userCount)) },
     ],
   },
+  cyrus: {
+    type: 'cyrus',
+    label: 'Cyrus IMAP',
+    icon: Inbox,
+    tone: 'teal',
+    badgeClass: BADGE.teal,
+    routeBase: '/cyrus',
+    hasMetricsPage: true,
+    hasConfigPage: false,
+    headlineCard: (entry) => {
+      const t = entry.totals as CyrusFleetTotals;
+      return {
+        title: 'Cyrus', status: status(entry), tone: 'teal',
+        primaryLabel: 'Sessions', primaryValue: fmt(t.sessions),
+        secondaryLabel: 'Logins (24h)', secondaryValue: fmt(t.logins24h),
+        footer: `Users ${fmt(t.users)} · Auth fail ${fmt(t.authFailure24h)} (24h)`,
+      };
+    },
+    throughputCards: (entry) => {
+      const t = entry.totals as CyrusFleetTotals;
+      return [
+        { title: 'Cyrus logins', value: fmt(t.logins24h), subtitle: `Sessions ${fmt(t.sessions)}`, tone: 'blue' },
+        { title: 'Cyrus IMAP cmds', value: fmt(t.imapCommands24h), subtitle: `Deliveries ${fmt(t.mailDeliveries24h)}`, tone: 'green' },
+      ];
+    },
+    capacityPeaks: (services) => [
+      { label: 'Cyrus peak sessions', value: fmt(peak<{ peakSessions24h: number }>(services, (m) => m.peakSessions24h)) },
+      { label: 'Cyrus users', value: fmt(peak<{ userCount: number }>(services, (m) => m.userCount)) },
+    ],
+  },
   postfix: {
     type: 'postfix',
     label: 'Postfix',
@@ -509,6 +539,21 @@ export function getServiceTableRow(service: FleetDashboardService): ServiceTable
     }
     case 'dovecot': {
       const m = service.metrics as DovecotFleetMetrics;
+      return {
+        activity: [
+          { label: 'Logins', value: fmt(m.logins24h) },
+          { label: 'Authentication failures', value: fmt(m.authFailure24h) },
+          { label: 'IMAP commands', value: fmt(m.imapCommands24h) },
+          { label: 'Mail deliveries', value: fmt(m.mailDeliveries24h) },
+        ],
+        state: [
+          { label: 'Sessions', value: fmt(m.sessionCount) },
+          { label: 'Users', value: fmt(m.userCount) },
+        ],
+      };
+    }
+    case 'cyrus': {
+      const m = service.metrics as CyrusFleetMetrics;
       return {
         activity: [
           { label: 'Logins', value: fmt(m.logins24h) },

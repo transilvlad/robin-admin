@@ -8,7 +8,7 @@
  * module — never by editing a copy-pasted union.
  */
 
-export const FLEET_SERVICE_TYPES = ['robin', 'rspamd', 'clamav', 'dovecot', 'postfix', 'redis', 'postgres', 'mariadb'] as const;
+export const FLEET_SERVICE_TYPES = ['robin', 'rspamd', 'clamav', 'dovecot', 'cyrus', 'postfix', 'redis', 'postgres', 'mariadb'] as const;
 
 export type FleetServiceType = (typeof FLEET_SERVICE_TYPES)[number];
 

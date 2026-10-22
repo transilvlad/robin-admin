@@ -433,6 +433,7 @@ export interface FleetServiceCounts {
   rspamd: number;
   clamav: number;
   dovecot: number;
+  cyrus: number;
   postfix: number;
   redis: number;
   postgres: number;
@@ -826,6 +827,7 @@ export interface Features {
   rspamd: boolean;
   clamav: boolean;
   dovecot: boolean;
+  cyrus: boolean;
   postfix: boolean;
   redis: boolean;
   postgres: boolean;
@@ -1824,6 +1826,32 @@ export interface DovecotFleetMetrics {
   peakSessions24h: number;
   unreachableSamples24h: number;
 }
+export interface CyrusFleetMetrics {
+  imapConnections: number;
+  activeConnections: number;
+  lmtpConnections: number;
+  lmtpRecipients: number;
+  lmtpBytes: number;
+  mailboxCount: number;
+  quotaCommitment: number;
+  serviceId: string | null;
+  serviceType: 'cyrus';
+  reachable: boolean;
+  authSuccess: number;
+  authFailure: number;
+  loginCount: number;
+  imapCommands: number;
+  mailDeliveries: number;
+  sessionCount: number;
+  userCount: number;
+  logins24h: number;
+  authSuccess24h: number;
+  authFailure24h: number;
+  imapCommands24h: number;
+  mailDeliveries24h: number;
+  peakSessions24h: number;
+  unreachableSamples24h: number;
+}
 
 export interface PostfixFleetMetrics {
   serviceId: string | null;
@@ -1981,6 +2009,13 @@ export interface DovecotFleetDashboardService {
   healthy: boolean;
   metrics: DovecotFleetMetrics | null;
 }
+export interface CyrusFleetDashboardService {
+  serviceId: string;
+  serviceType: 'cyrus';
+  name: string;
+  healthy: boolean;
+  metrics: CyrusFleetMetrics | null;
+}
 
 export interface PostfixFleetDashboardService {
   serviceId: string;
@@ -2014,7 +2049,7 @@ export interface MariadbFleetDashboardService {
   metrics: MariadbFleetMetrics | null;
 }
 
-export type FleetDashboardService = RobinFleetDashboardService | RspamdFleetDashboardService | ClamavFleetDashboardService | DovecotFleetDashboardService | PostfixFleetDashboardService | RedisFleetDashboardService | PostgresFleetDashboardService | MariadbFleetDashboardService;
+export type FleetDashboardService = RobinFleetDashboardService | RspamdFleetDashboardService | ClamavFleetDashboardService | DovecotFleetDashboardService | CyrusFleetDashboardService | PostfixFleetDashboardService | RedisFleetDashboardService | PostgresFleetDashboardService | MariadbFleetDashboardService;
 
 export interface RobinFleetTotals {
   totalInstances: number;
@@ -2065,6 +2100,20 @@ export interface ClamavFleetTotals {
 }
 
 export interface DovecotFleetTotals {
+  totalServices: number;
+  healthyServices: number;
+  availableServices: number;
+  sessions: number;
+  users: number;
+  logins24h: number;
+  authSuccess24h: number;
+  authFailure24h: number;
+  imapCommands24h: number;
+  mailDeliveries24h: number;
+  peakSessions24h: number;
+  unreachableSamples24h: number;
+}
+export interface CyrusFleetTotals {
   totalServices: number;
   healthyServices: number;
   availableServices: number;
@@ -2173,6 +2222,11 @@ export interface FleetDashboard {
         healthyServices: number;
         totals: DovecotFleetTotals;
       };
+      cyrus: {
+        totalServices: number;
+        healthyServices: number;
+        totals: CyrusFleetTotals;
+      };
       postfix: {
         totalServices: number;
         healthyServices: number;
@@ -2202,6 +2256,7 @@ export interface FleetDashboard {
     rspamd: RspamdFleetDashboardService[];
     clamav: ClamavFleetDashboardService[];
     dovecot: DovecotFleetDashboardService[];
+    cyrus: CyrusFleetDashboardService[];
     postfix: PostfixFleetDashboardService[];
     redis: RedisFleetDashboardService[];
     postgres: PostgresFleetDashboardService[];
@@ -2274,6 +2329,27 @@ export interface ClamavMetricsSnapshot {
 export interface DovecotMetricsSnapshot {
   serviceId: string | null;
   serviceType: 'dovecot';
+  timestamp: string;
+  reachable: boolean;
+  authSuccess: number;
+  authFailure: number;
+  loginCount: number;
+  imapCommands: number;
+  mailDeliveries: number;
+  sessionCount: number;
+  userCount: number;
+  rawStats: string;
+}
+export interface CyrusMetricsSnapshot {
+  imapConnections: number;
+  activeConnections: number;
+  lmtpConnections: number;
+  lmtpRecipients: number;
+  lmtpBytes: number;
+  mailboxCount: number;
+  quotaCommitment: number;
+  serviceId: string | null;
+  serviceType: 'cyrus';
   timestamp: string;
   reachable: boolean;
   authSuccess: number;
@@ -2559,6 +2635,37 @@ export interface DovecotMetricsStats {
   };
   historyCount: number;
 }
+export interface CyrusMetricsStats {
+  serviceType: 'cyrus';
+  serviceId: string | null;
+  live: {
+    imapConnections: number;
+    activeConnections: number;
+    lmtpConnections: number;
+    lmtpRecipients: number;
+    lmtpBytes: number;
+    mailboxCount: number;
+    quotaCommitment: number;
+    reachable: boolean;
+    authSuccess: number;
+    authFailure: number;
+    loginCount: number;
+    imapCommands: number;
+    mailDeliveries: number;
+    sessionCount: number;
+    userCount: number;
+  } | null;
+  totals24h: {
+    logins: number;
+    authSuccess: number;
+    authFailure: number;
+    imapCommands: number;
+    mailDeliveries: number;
+    peakSessions: number;
+    unreachableSamples: number;
+  };
+  historyCount: number;
+}
 
 export interface PostfixMetricsStats {
   serviceType: 'postfix';
@@ -2690,3 +2797,24 @@ export interface ClamavScanResult {
 }
 
 export * from './alerts';
+
+export interface CyrusSession {
+  pid: string;
+  service: string;
+  host: string;
+  ip: string;
+  user: string;
+  mailbox: string;
+  state: string;
+}
+export interface CyrusQuotaRow {
+  root: string;
+  user: string;
+  storageUsedKiB: number;
+  storageLimitKiB: number | null;
+  storagePercent: number | null;
+  messages: number;
+  folders: number;
+}
+export interface CyrusQuotaResult { available: boolean; reason: string | null; rows: CyrusQuotaRow[]; }
+export interface CyrusUserLookup { user: string; exists: boolean; fields: Record<string, string>; quota: CyrusQuotaResult | null; }

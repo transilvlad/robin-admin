@@ -19,7 +19,7 @@ export function ServerScopeSelect({
   const services = useServices();
   const list = serviceType === 'rspamd' ? services.rspamdServices
     : serviceType === 'clamav' ? services.clamavServices
-    : serviceType === 'dovecot' ? services.dovecotServices
+      : serviceType === 'cyrus' ? services.cyrusServices : serviceType === 'dovecot' ? services.dovecotServices
     : serviceType === 'postfix' ? services.postfixServices
     : serviceType === 'redis' ? services.redisServices
     : serviceType === 'postgres' ? services.postgresServices

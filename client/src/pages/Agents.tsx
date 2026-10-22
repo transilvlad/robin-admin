@@ -408,7 +408,7 @@ export function AgentsPage() {
           </div>
           <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
             {insecure && <>Self-signed target: <code>ROBIN_AGENT_INSECURE=1</code> is included — drop it once robin-admin has a trusted certificate. </>}
-            Exec-only services (Postfix, Dovecot) need their tooling on the host (<code>postqueue</code>, <code>doveadm</code>); network services (Redis/Postgres/MariaDB) usually stay in direct mode, unless robin-admin cannot reach them (a loopback-only MariaDB: give the agent <code>ROBIN_AGENT_MARIADB_DSN</code>).{' '}
+            Exec-only services (Postfix, Dovecot, Cyrus IMAP) need their tooling on the host (<code>postqueue</code>, <code>doveadm</code>, <code>cyr_info</code>, <code>quota</code>, <code>mbpath</code>); network services (Redis/Postgres/MariaDB) usually stay in direct mode, unless robin-admin cannot reach them (a loopback-only MariaDB: give the agent <code>ROBIN_AGENT_MARIADB_DSN</code>).{' '}
             <a href={deployConfig.agentDeployGuideUrl} target="_blank" rel="noreferrer" className="text-robin-orange hover:underline">Deployment guide →</a>
           </p>
         </div>
@@ -514,7 +514,7 @@ export function AgentsPage() {
                 className="min-w-[160px] flex-1 rounded-sm border border-gray-300 px-3 py-2 text-sm dark:border-robin-gray-700 dark:bg-robin-gray-900"
               >
                 <option value="">Config only…</option>
-                {allServices.filter((s) => s.configAgentId !== managing.agentId && (s.collectionMode ?? 'direct') !== 'agent').map((s) => (
+                {allServices.filter((s) => s.serviceType !== 'cyrus' && s.configAgentId !== managing.agentId && (s.collectionMode ?? 'direct') !== 'agent').map((s) => (
                   <option key={s.serviceId} value={s.serviceId}>{s.name} ({s.serviceType})</option>
                 ))}
               </select>

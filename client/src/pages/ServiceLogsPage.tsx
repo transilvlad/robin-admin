@@ -15,7 +15,7 @@ export function ServiceLogsPage({ serviceType }: { serviceType: FleetServiceType
   const selected = serviceType === 'robin' ? services.selectedRobinService
     : serviceType === 'rspamd' ? services.selectedRspamdService
     : serviceType === 'clamav' ? services.selectedClamavService
-    : serviceType === 'dovecot' ? services.selectedDovecotService
+        : serviceType === 'cyrus' ? services.selectedCyrusService : serviceType === 'dovecot' ? services.selectedDovecotService
     : serviceType === 'postfix' ? services.selectedPostfixService
     : serviceType === 'redis' ? services.selectedRedisService
     : serviceType === 'postgres' ? services.selectedPostgresService

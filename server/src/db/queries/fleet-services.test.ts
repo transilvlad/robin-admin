@@ -150,6 +150,7 @@ describe('Fleet service queries', () => {
         clamav: { total: 1, enabled: 0 },
         // Registry-driven: every type is counted; absent columns default to 0.
         dovecot: { total: 0, enabled: 0 },
+        cyrus: { total: 0, enabled: 0 },
         postfix: { total: 0, enabled: 0 },
         redis: { total: 0, enabled: 0 },
         postgres: { total: 0, enabled: 0 },
@@ -200,6 +201,10 @@ describe('Fleet service queries', () => {
 });
 
 describe('agentAxesFor', () => {
+  it('never assigns the config axis to a Cyrus agent', () => {
+    expect(instances.agentAxesFor({ serviceType: 'cyrus', collectionMode: 'agent', agentId: 'a1', configAgentId: null, logAgentId: null }, 'a1')).toEqual({ collectMetrics: true, collectConfig: false, collectLogs: true });
+    expect(instances.agentAxesFor({ serviceType: 'cyrus', collectionMode: 'agent', agentId: 'a1', configAgentId: 'a2', logAgentId: null }, 'a2').collectConfig).toBe(false);
+  });
   const full = { collectionMode: 'agent' as const, agentId: 'a1', configAgentId: null, logAgentId: null };
 
   it('gives a full metrics agent every axis nobody else was named for', () => {

@@ -5,6 +5,7 @@ export type AlertType =
   | 'telemetry_stale'
   | 'postfix_queue'
   | 'postfix_deferred_age'
+  | 'cyrus_auth_failures'
   | 'postgres_connections'
   | 'postgres_cache_hit'
   | 'mariadb_connections'

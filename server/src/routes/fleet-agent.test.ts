@@ -285,6 +285,18 @@ describe('agent log batches', () => {
   });
 });
 
+describe('Cyrus agent collection', () => {
+  it('accepts Cyrus collector fields but refuses config access for its metrics agent', async () => {
+    mockGetFleetServiceById.mockResolvedValue(buildService({ serviceType: 'cyrus', agentId: 'full-agent', collectionMode: 'agent' }) as never);
+    const headers = { Authorization: 'Bearer test-token', 'x-robin-agent-id': 'full-agent' };
+    const fields = { reachable: true, prometheus: 'cyrus_imap_active_connections 1', proc: '', version: 'cyrus-imapd 3.6.1' };
+    const result = await requestJson('/services/svc-1/metrics', { method: 'POST', headers, body: JSON.stringify(fields) });
+    expect(result.response.status).toBe(200);
+    expect(mockIngestMetrics).toHaveBeenLastCalledWith(expect.objectContaining({ serviceType: 'cyrus' }), expect.objectContaining({ prometheus: fields.prometheus, proc: '', version: fields.version }));
+    expect((await requestJson('/services/svc-1/manifest', { headers })).response.status).toBe(401);
+  });
+});
+
 describe('agent command channel', () => {
   const headers = { Authorization: 'Bearer token', 'x-robin-agent-id': 'full-agent' };
 

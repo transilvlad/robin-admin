@@ -76,6 +76,12 @@ const GUIDES: Record<FleetServiceType, TypeGuide> = {
       'OpenMetrics carries counters only: sessions, users and quota need an agent.',
     ],
   },
+  cyrus: {
+    fields: [],
+    agentNeeds: <>Cyrus IMAP 3.6+ tools <code>cyr_info</code>, <code>quota</code>, <code>mbpath</code>, and <code>master</code>. Enable <code>prometheus_enabled: yes</code> and the <code>promstatsd</code> daemon; the agent reads <code>/var/lib/cyrus/config/stats/report.txt</code>.</>,
+    agentEnv: ['ROBIN_AGENT_CYRUS_LOG_FILE=/var/log/cyrus.log'],
+    notes: ['Agent-only metrics, sessions, quota and user lookup. Configuration is not managed; disconnect and reload are not supported.'],
+  },
   postfix: {
     fields: [{ label: 'OpenMetrics URL', value: 'http://postfix.example:9154/metrics', when: 'reachable' }],
     agentNeeds: <><code>postqueue</code>, <code>postsuper</code>, <code>postcat</code>, <code>postconf</code> and <code>postfix</code>, and write access to <code>/etc/postfix</code>.</>,

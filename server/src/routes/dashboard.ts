@@ -14,9 +14,9 @@ import { getForensicStats } from '../db/queries/forensic.js';
 import { checkRobinHealth } from '../services/robin-api.js';
 import {
   getClamavMetricsHistory,
-  getDovecotMetricsHistory,
+  getDovecotMetricsHistory, getCyrusMetricsHistory,
   getLiveClamavMetrics,
-  getLiveDovecotMetrics,
+  getLiveDovecotMetrics, getLiveCyrusMetrics,
   getLivePostfixMetrics,
   getLiveRedisMetrics,
   getLivePostgresMetrics,
@@ -30,7 +30,7 @@ import {
   getRobinMetricsHistory,
   getRspamdMetricsHistory,
   type ClamavMetricsHistoryRow,
-  type DovecotMetricsHistoryRow,
+  type DovecotMetricsHistoryRow, type CyrusMetricsHistoryRow,
   type MetricsServiceType,
   type PostfixMetricsHistoryRow,
   type RedisMetricsHistoryRow,
@@ -43,6 +43,7 @@ import {
 } from '../services/metrics-poller.js';
 import type { ClamavLiveMetrics } from '../services/clamav.js';
 import type { DovecotLiveMetrics } from '../services/dovecot.js';
+import type { CyrusLiveMetrics } from '../services/cyrus.js';
 import type { PostfixLiveMetrics } from '../services/postfix.js';
 import { agentLogsLive } from '../services/service-logs.js';
 import type { RedisLiveMetrics } from '../services/redis.js';
@@ -102,6 +103,13 @@ interface DovecotFleetDashboardService {
   healthy: boolean;
   metrics: ReturnType<typeof buildDovecotDashboardMetrics> | null;
 }
+interface CyrusFleetDashboardService {
+  serviceId: string;
+  serviceType: 'cyrus';
+  name: string;
+  healthy: boolean;
+  metrics: ReturnType<typeof buildCyrusDashboardMetrics> | null;
+}
 
 interface PostfixFleetDashboardService {
   serviceId: string;
@@ -139,7 +147,7 @@ type FleetDashboardService =
   | RobinFleetDashboardService
   | RspamdFleetDashboardService
   | ClamavFleetDashboardService
-  | DovecotFleetDashboardService
+  | DovecotFleetDashboardService | CyrusFleetDashboardService
   | PostfixFleetDashboardService
   | RedisFleetDashboardService
   | PostgresFleetDashboardService
@@ -313,6 +321,29 @@ function calculateClamavActivity24h(history: ClamavMetricsHistoryRow[]) {
 }
 
 function calculateDovecotActivity24h(history: DovecotMetricsHistoryRow[]) {
+  if (history.length <= 1) {
+    return {
+      logins: 0,
+      authSuccess: 0,
+      authFailure: 0,
+      imapCommands: 0,
+      mailDeliveries: 0,
+      peakSessions: history.reduce((max, row) => Math.max(max, row.sessionCount), 0),
+      unreachableSamples: history.filter((row) => !row.reachable).length,
+    };
+  }
+
+  return {
+    logins: sumDelta(history, (row) => row.loginCount),
+    authSuccess: sumDelta(history, (row) => row.authSuccess),
+    authFailure: sumDelta(history, (row) => row.authFailure),
+    imapCommands: sumDelta(history, (row) => row.imapCommands),
+    mailDeliveries: sumDelta(history, (row) => row.mailDeliveries),
+    peakSessions: history.reduce((max, row) => Math.max(max, row.sessionCount), 0),
+    unreachableSamples: history.filter((row) => !row.reachable).length,
+  };
+}
+function calculateCyrusActivity24h(history: CyrusMetricsHistoryRow[]) {
   if (history.length <= 1) {
     return {
       logins: 0,
@@ -617,6 +648,34 @@ function buildDovecotDashboardMetrics(metrics: DovecotLiveMetrics, activity24h =
     unreachableSamples24h: activity24h.unreachableSamples,
   };
 }
+function buildCyrusDashboardMetrics(metrics: CyrusLiveMetrics, activity24h = calculateCyrusActivity24h([])) {
+  return {
+    serviceId: metrics.serviceId,
+    serviceType: metrics.serviceType,
+    imapConnections: metrics.imapConnections,
+    activeConnections: metrics.activeConnections,
+    lmtpConnections: metrics.lmtpConnections,
+    lmtpRecipients: metrics.lmtpRecipients,
+    lmtpBytes: metrics.lmtpBytes,
+    mailboxCount: metrics.mailboxCount,
+    quotaCommitment: metrics.quotaCommitment,
+    reachable: metrics.reachable,
+    authSuccess: metrics.authSuccess,
+    authFailure: metrics.authFailure,
+    loginCount: metrics.loginCount,
+    imapCommands: metrics.imapCommands,
+    mailDeliveries: metrics.mailDeliveries,
+    sessionCount: metrics.sessionCount,
+    userCount: metrics.userCount,
+    logins24h: activity24h.logins,
+    authSuccess24h: activity24h.authSuccess,
+    authFailure24h: activity24h.authFailure,
+    imapCommands24h: activity24h.imapCommands,
+    mailDeliveries24h: activity24h.mailDeliveries,
+    peakSessions24h: activity24h.peakSessions,
+    unreachableSamples24h: activity24h.unreachableSamples,
+  };
+}
 
 function buildPostfixDashboardMetrics(metrics: PostfixLiveMetrics, activity24h = calculatePostfixActivity24h([]), messageCounters = false) {
   return {
@@ -726,6 +785,9 @@ function getFleetActivityScore(service: FleetDashboardService): number {
   if (service.serviceType === 'dovecot') {
     return service.metrics.logins24h + service.metrics.imapCommands24h + service.metrics.sessionCount;
   }
+  if (service.serviceType === 'cyrus') {
+    return service.metrics.logins24h + service.metrics.imapCommands24h + service.metrics.sessionCount;
+  }
 
   if (service.serviceType === 'postfix') {
     return service.metrics.queueTotal + service.metrics.peakQueue24h;
@@ -814,6 +876,21 @@ function buildDovecotFleetDashboardService(
     metrics: live ? buildDovecotDashboardMetrics(live, activity24h) : null,
   };
 }
+function buildCyrusFleetDashboardService(
+  service: MetricsFleetService,
+  live: CyrusLiveMetrics | null,
+  history: CyrusMetricsHistoryRow[]
+): CyrusFleetDashboardService {
+  const activity24h = calculateCyrusActivity24h(history);
+
+  return {
+    serviceId: service.serviceId,
+    serviceType: 'cyrus',
+    name: service.name,
+    healthy: Boolean(live?.reachable),
+    metrics: live ? buildCyrusDashboardMetrics(live, activity24h) : null,
+  };
+}
 
 function buildPostfixFleetDashboardService(
   service: MetricsFleetService,
@@ -891,6 +968,7 @@ const EMPTY_FLEET_COUNTS = {
     rspamd: { total: 0, enabled: 0 },
     clamav: { total: 0, enabled: 0 },
     dovecot: { total: 0, enabled: 0 },
+    cyrus: { total: 0, enabled: 0 },
     postfix: { total: 0, enabled: 0 },
     redis: { total: 0, enabled: 0 },
     postgres: { total: 0, enabled: 0 },
@@ -938,6 +1016,7 @@ router.get('/features', async (req: Request, res: Response) => {
         rspamd: fleetCounts.byType.rspamd.enabled > 0,
         clamav: fleetCounts.byType.clamav.enabled > 0,
         dovecot: fleetCounts.byType.dovecot.enabled > 0,
+        cyrus: fleetCounts.byType.cyrus.enabled > 0,
         postfix: fleetCounts.byType.postfix.enabled > 0,
         redis: fleetCounts.byType.redis.enabled > 0,
         postgres: fleetCounts.byType.postgres.enabled > 0,
@@ -953,6 +1032,7 @@ router.get('/features', async (req: Request, res: Response) => {
           rspamd: fleetCounts.byType.rspamd.total,
           clamav: fleetCounts.byType.clamav.total,
           dovecot: fleetCounts.byType.dovecot.total,
+          cyrus: fleetCounts.byType.cyrus.total,
           postfix: fleetCounts.byType.postfix.total,
           redis: fleetCounts.byType.redis.total,
           postgres: fleetCounts.byType.postgres.total,
@@ -1001,7 +1081,10 @@ router.get('/', async (req: Request, res: Response) => {
           getLiveClamavMetrics(serviceId ?? undefined).catch(() => null),
           getClamavMetricsHistory(24, 500, serviceId).catch(() => []),
         ])
-        : serviceType === 'dovecot'
+        : serviceType === 'cyrus' ? Promise.all([
+          getLiveCyrusMetrics(serviceId ?? undefined).catch(() => null),
+          getCyrusMetricsHistory(24, 500, serviceId).catch(() => []),
+        ]) : serviceType === 'dovecot'
           ? Promise.all([
             getLiveDovecotMetrics(serviceId ?? undefined).catch(() => null),
             getDovecotMetricsHistory(24, 500, serviceId).catch(() => []),
@@ -1069,6 +1152,9 @@ router.get('/', async (req: Request, res: Response) => {
     const dovecotActivity24h = serviceType === 'dovecot'
       ? calculateDovecotActivity24h(metricsHistory as DovecotMetricsHistoryRow[])
       : calculateDovecotActivity24h([]);
+    const cyrusActivity24h = serviceType === 'cyrus'
+      ? calculateCyrusActivity24h(metricsHistory as CyrusMetricsHistoryRow[])
+      : calculateCyrusActivity24h([]);
     const postfixActivity24h = serviceType === 'postfix'
       ? calculatePostfixActivity24h(metricsHistory as PostfixMetricsHistoryRow[])
       : calculatePostfixActivity24h([]);
@@ -1086,7 +1172,7 @@ router.get('/', async (req: Request, res: Response) => {
       ? (liveMetrics as RspamdMetricsSnapshot | null)?.serviceId ?? serviceId
       : serviceType === 'clamav'
         ? (liveMetrics as ClamavLiveMetrics | null)?.serviceId ?? serviceId
-        : serviceType === 'dovecot'
+        : serviceType === 'cyrus' ? (liveMetrics as CyrusLiveMetrics | null)?.serviceId ?? serviceId : serviceType === 'dovecot'
           ? (liveMetrics as DovecotLiveMetrics | null)?.serviceId ?? serviceId
           : serviceType === 'postfix'
             ? (liveMetrics as PostfixLiveMetrics | null)?.serviceId ?? serviceId
@@ -1123,7 +1209,9 @@ router.get('/', async (req: Request, res: Response) => {
             ? (liveMetrics && liveMetrics.serviceType === 'clamav'
               ? buildClamavDashboardMetrics(liveMetrics, clamavActivity24h)
               : null)
-            : serviceType === 'dovecot'
+            : serviceType === 'cyrus' ? (liveMetrics && liveMetrics.serviceType === 'cyrus'
+              ? buildCyrusDashboardMetrics(liveMetrics, cyrusActivity24h)
+              : null) : serviceType === 'dovecot'
               ? (liveMetrics && liveMetrics.serviceType === 'dovecot'
                 ? buildDovecotDashboardMetrics(liveMetrics, dovecotActivity24h)
                 : null)
@@ -1150,7 +1238,7 @@ router.get('/', async (req: Request, res: Response) => {
           ? rspamdActivity24h
           : serviceType === 'clamav'
             ? clamavActivity24h
-            : serviceType === 'dovecot'
+            : serviceType === 'cyrus' ? cyrusActivity24h : serviceType === 'dovecot'
               ? dovecotActivity24h
               : serviceType === 'postfix'
                 ? postfixActivity24h
@@ -1222,6 +1310,14 @@ router.get('/fleet', async (_req: Request, res: Response) => {
 
         return buildDovecotFleetDashboardService(service, liveMetrics, metricsHistory);
       }
+      if (service.serviceType === 'cyrus') {
+        const [liveMetrics, metricsHistory] = await Promise.all([
+          getLiveCyrusMetrics(service.serviceId).catch(() => null),
+          getCyrusMetricsHistory(24, 500, service.serviceId).catch(() => []),
+        ]);
+
+        return buildCyrusFleetDashboardService(service, liveMetrics, metricsHistory);
+      }
 
       if (service.serviceType === 'postfix') {
         const [liveMetrics, metricsHistory, messageCounters] = await Promise.all([
@@ -1278,6 +1374,9 @@ router.get('/fleet', async (_req: Request, res: Response) => {
     const dovecotServices = serviceSummaries.filter(
       (service): service is DovecotFleetDashboardService => service.serviceType === 'dovecot'
     );
+    const cyrusServices = serviceSummaries.filter(
+      (service): service is CyrusFleetDashboardService => service.serviceType === 'cyrus'
+    );
     const postfixServices = serviceSummaries.filter(
       (service): service is PostfixFleetDashboardService => service.serviceType === 'postfix'
     );
@@ -1317,6 +1416,12 @@ router.get('/fleet', async (_req: Request, res: Response) => {
       return (b.metrics?.peakQueue24h ?? 0) - (a.metrics?.peakQueue24h ?? 0);
     });
     const sortedDovecotServices = [...dovecotServices].sort((a, b) => {
+      if (a.healthy !== b.healthy) {
+        return a.healthy ? -1 : 1;
+      }
+      return (b.metrics?.logins24h ?? 0) - (a.metrics?.logins24h ?? 0);
+    });
+    const sortedCyrusServices = [...cyrusServices].sort((a, b) => {
       if (a.healthy !== b.healthy) {
         return a.healthy ? -1 : 1;
       }
@@ -1406,6 +1511,20 @@ router.get('/fleet', async (_req: Request, res: Response) => {
       totalServices: dovecotServices.length,
       healthyServices: dovecotServices.filter((service) => service.healthy).length,
       availableServices: dovecotServices.filter((service) => service.metrics !== null).length,
+      sessions: 0,
+      users: 0,
+      logins24h: 0,
+      authSuccess24h: 0,
+      authFailure24h: 0,
+      imapCommands24h: 0,
+      mailDeliveries24h: 0,
+      peakSessions24h: 0,
+      unreachableSamples24h: 0,
+    };
+    const cyrusFleet = {
+      totalServices: cyrusServices.length,
+      healthyServices: cyrusServices.filter((service) => service.healthy).length,
+      availableServices: cyrusServices.filter((service) => service.metrics !== null).length,
       sessions: 0,
       users: 0,
       logins24h: 0,
@@ -1592,6 +1711,21 @@ router.get('/fleet', async (_req: Request, res: Response) => {
       dovecotFleet.peakSessions24h = Math.max(dovecotFleet.peakSessions24h, service.metrics.peakSessions24h);
       dovecotFleet.unreachableSamples24h += service.metrics.unreachableSamples24h;
     }
+    for (const service of cyrusServices) {
+      if (!service.metrics) {
+        continue;
+      }
+
+      cyrusFleet.sessions += service.metrics.sessionCount;
+      cyrusFleet.users += service.metrics.userCount;
+      cyrusFleet.logins24h += service.metrics.logins24h;
+      cyrusFleet.authSuccess24h += service.metrics.authSuccess24h;
+      cyrusFleet.authFailure24h += service.metrics.authFailure24h;
+      cyrusFleet.imapCommands24h += service.metrics.imapCommands24h;
+      cyrusFleet.mailDeliveries24h += service.metrics.mailDeliveries24h;
+      cyrusFleet.peakSessions24h = Math.max(cyrusFleet.peakSessions24h, service.metrics.peakSessions24h);
+      cyrusFleet.unreachableSamples24h += service.metrics.unreachableSamples24h;
+    }
 
     for (const service of postfixServices) {
       if (!service.metrics) {
@@ -1721,6 +1855,11 @@ router.get('/fleet', async (_req: Request, res: Response) => {
               healthyServices: dovecotFleet.healthyServices,
               totals: dovecotFleet,
             },
+            cyrus: {
+              totalServices: cyrusFleet.totalServices,
+              healthyServices: cyrusFleet.healthyServices,
+              totals: cyrusFleet,
+            },
             postfix: {
               totalServices: postfixFleet.totalServices,
               healthyServices: postfixFleet.healthyServices,
@@ -1750,6 +1889,7 @@ router.get('/fleet', async (_req: Request, res: Response) => {
           rspamd: sortedRspamdServices,
           clamav: sortedClamavServices,
           dovecot: sortedDovecotServices,
+          cyrus: sortedCyrusServices,
           postfix: sortedPostfixServices,
           redis: sortedRedisServices,
           postgres: sortedPostgresServices,

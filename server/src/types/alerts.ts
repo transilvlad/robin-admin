@@ -7,6 +7,7 @@ export const ALERT_TYPES = [
   'postfix_deferred_age',
   'postfix_bounce_rate',
   'dovecot_auth_failures',
+  'cyrus_auth_failures',
   'postgres_connections',
   'postgres_cache_hit',
   'mariadb_connections',

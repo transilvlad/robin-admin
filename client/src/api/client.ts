@@ -1,3 +1,4 @@
+import type { CyrusSession, CyrusQuotaResult, CyrusUserLookup, CyrusMetricsSnapshot, CyrusMetricsStats } from '../types';
 /**
  * API client for Robin Admin backend.
  * 
@@ -2733,3 +2734,22 @@ export type {
 };
 
 export { ApiError };
+
+export const cyrusApi = {
+  getSessions: (serviceId: string) =>
+    request<ApiResponse<CyrusSession[]>>(`/cyrus/sessions?serviceId=${encodeURIComponent(serviceId)}`),
+  getQuota: (serviceId: string) =>
+    request<ApiResponse<CyrusQuotaResult>>(`/cyrus/quota?serviceId=${encodeURIComponent(serviceId)}`),
+  lookupUser: (serviceId: string, user: string) =>
+    request<ApiResponse<CyrusUserLookup>>(`/cyrus/users/${encodeURIComponent(user)}?serviceId=${encodeURIComponent(serviceId)}`),
+  getMetricsHistory: (serviceId: string, hours = 24) =>
+    request<ApiResponse<CyrusMetricsSnapshot[]>>(`/metrics/history?serviceType=cyrus&serviceId=${encodeURIComponent(serviceId)}&hours=${hours}`),
+  getMetricsStats: (serviceId: string) =>
+    request<ApiResponse<CyrusMetricsStats>>(`/metrics/stats?serviceType=cyrus&serviceId=${encodeURIComponent(serviceId)}`),
+  getMetricsRaw: async (serviceId: string) => {
+    const response = await fetch(`${API_BASE}/metrics/raw?serviceType=cyrus&serviceId=${encodeURIComponent(serviceId)}`, {
+      credentials: 'include',
+    });
+    return response.text();
+  }
+};

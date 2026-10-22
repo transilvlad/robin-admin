@@ -202,9 +202,11 @@ router.post('/:agentId/config-services', async (req: Request, res: Response) => 
     if (!serviceId) {
       return res.status(400).json({ success: false, error: 'serviceId is required' });
     }
-    if (!(await getFleetServiceById(serviceId))) {
+    const service = await getFleetServiceById(serviceId);
+    if (!service) {
       return res.status(404).json({ success: false, error: 'Service not found' });
     }
+    if (service?.serviceType === 'cyrus') return res.status(400).json({ success: false, error: 'Cyrus configuration is not managed' });
     const updated = await assignFleetServiceConfigAgent(serviceId, routeParam(req, 'agentId'));
     await logAudit(req, 'fleet_agent.assign_config_service', { entityType: 'fleet_service', entityId: serviceId, newValues: { configAgentId: routeParam(req, 'agentId') } });
     res.json({ success: true, data: updated && toPublicFleetService(updated) });

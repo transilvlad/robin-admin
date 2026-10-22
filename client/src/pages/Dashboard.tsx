@@ -1216,6 +1216,7 @@ function serviceNeedsAttention(service: FleetDashboardService): boolean {
   if (!service.metrics) return false;
   if (isRobinService(service)) return service.metrics.memoryPct >= 80 || service.metrics.cpuPct >= 80;
   if (isRspamdService(service)) return !service.metrics.normalWorkerPingOk || !service.metrics.controllerAuthenticated;
+  if (service.serviceType === 'cyrus') return !service.metrics.reachable;
   if (isDovecotService(service)) return !service.metrics.reachable;
   if (isPostfixService(service)) return !service.metrics.reachable || service.metrics.queueDeferred > 0;
   if (isClamavService(service)) return !service.metrics.pingOk;

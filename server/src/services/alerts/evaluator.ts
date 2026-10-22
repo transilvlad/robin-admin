@@ -40,6 +40,8 @@ export interface EvaluationRow {
   postfix_window_delivered: string | null;
   postfix_window_deferred: string | null;
   postfix_window_bounced: string | null;
+  cyrus_timestamp: Date | null;
+  cyrus_window_auth_failures: string | null;
   dovecot_timestamp: Date | null;
   dovecot_window_auth_failures: string | null;
   postgres_timestamp: Date | null;
@@ -367,6 +369,11 @@ export function buildEvidence(row: EvaluationRow, subscription: AlertSubscriptio
       observationKey = row.postfix_timestamp?.toISOString() ?? 'missing';
       break;
     }
+    case 'cyrus_auth_failures':
+      value = row.reachable === true && row.cyrus_timestamp ? numberValue(row.cyrus_window_auth_failures) ?? 0 : null;
+      observedAt = row.cyrus_timestamp ?? observedAt;
+      observationKey = row.cyrus_timestamp?.toISOString() ?? 'missing';
+      break;
     case 'dovecot_auth_failures':
       value = row.reachable === true && row.dovecot_timestamp ? numberValue(row.dovecot_window_auth_failures) ?? 0 : null;
       observedAt = row.dovecot_timestamp ?? observedAt;
@@ -560,7 +567,8 @@ async function loadEvaluationRows(client: PoolClient): Promise<EvaluationRow[]> 
            cl.timestamp AS clamav_timestamp, cl.database_updated_at,
            pfw.delivered AS postfix_window_delivered, pfw.deferred AS postfix_window_deferred,
            pfw.bounced AS postfix_window_bounced,
-           dv.timestamp AS dovecot_timestamp, dvw.auth_failures AS dovecot_window_auth_failures
+           dv.timestamp AS dovecot_timestamp, dvw.auth_failures AS dovecot_window_auth_failures,
+           cy.timestamp AS cyrus_timestamp, cyw.auth_failures AS cyrus_window_auth_failures
     FROM fleet_services fs
     LEFT JOIN fleet_service_observations o ON o.fleet_service_id = fs.id
     LEFT JOIN LATERAL (
@@ -610,6 +618,17 @@ async function loadEvaluationRows(client: PoolClient): Promise<EvaluationRow[]> 
         WHERE fleet_service_id = fs.id AND timestamp >= NOW() - INTERVAL '${RATE_WINDOW_MINUTES} minutes'
       ) steps
     ) dvw ON fs.service_type = 'dovecot'
+    LEFT JOIN LATERAL (
+      SELECT timestamp FROM cyrus_metrics_history WHERE fleet_service_id = fs.id ORDER BY timestamp DESC LIMIT 1
+    ) cy ON fs.service_type = 'cyrus'
+    LEFT JOIN LATERAL (
+      SELECT ${windowIncrease('auth_failure')} AS auth_failures
+      FROM (
+        SELECT auth_failure, LAG(auth_failure) OVER (ORDER BY timestamp) AS prev_auth_failure
+        FROM cyrus_metrics_history
+        WHERE fleet_service_id = fs.id AND timestamp >= NOW() - INTERVAL '${RATE_WINDOW_MINUTES} minutes'
+      ) steps
+    ) cyw ON fs.service_type = 'cyrus'
     LEFT JOIN LATERAL (
       SELECT ${windowIncrease('buffer_pool_read_requests')} AS read_requests,
              ${windowIncrease('buffer_pool_reads')} AS reads

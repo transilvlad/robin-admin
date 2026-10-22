@@ -13,6 +13,21 @@ function available(facts: CapabilityFacts): string[] {
 }
 
 describe('capability rules', () => {
+  it('keeps Cyrus agent-only and never offers config, reload or disconnect', () => {
+    const direct = evaluateCapabilities(setupFacts('cyrus', { agent: 'none', reachable: true }));
+    expect(direct.metrics.available).toBe(false);
+    expect(direct.raw.available).toBe(false);
+    const caps = evaluateCapabilities(setupFacts('cyrus', { agent: 'container', reachable: false }));
+    for (const id of ['metrics', 'raw', 'sessions', 'quota', 'user']) expect(caps[id].available).toBe(true);
+    expect(caps.config.available).toBe(false);
+    expect(caps.reload.available).toBe(false);
+    expect(caps.kick).toBeUndefined();
+    expect(caps.configSync).toBeUndefined();
+    const facts = setupFacts('cyrus', { agent: 'local', reachable: false });
+    facts.metricsAgent = { ...facts.metricsAgent!, actions: new Set(['cyrus.sessions']) };
+    expect(evaluateCapabilities(facts).quota.available).toBe(false);
+    expect(evaluateCapabilities(facts).user.available).toBe(false);
+  });
   it('gives every hidden feature a reason', () => {
     for (const type of FLEET_SERVICE_TYPES) {
       for (const setup of SETUP_CHOICES) {

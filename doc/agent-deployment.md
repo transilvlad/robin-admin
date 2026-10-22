@@ -209,3 +209,33 @@ settings are in [agent-co-location.md](agent-co-location.md#collector-configurat
   robin-admin.
 - **Managed databases** (RDS-style Postgres/Redis): no agent — direct mode with
   an admin DSN.
+
+## Cyrus IMAP collection
+
+Cyrus IMAP 3.6+ supports agent-backed metrics, sessions, quota, mailbox lookup,
+and logs, but not managed configuration, reload, or disconnect operations.
+Assign the registered `cyrus` service to an agent with the Cyrus tools on
+`PATH`, or use `ROBIN_AGENT_EXEC_PREFIX` to run them in its container or host.
+The agent probes for the tools before advertising these fixed actions:
+
+| Action | Command |
+| --- | --- |
+| `cyrus.sessions` | `cyr_info proc` |
+| `cyrus.quota` | `quota`, or `quota user/<user>` |
+| `cyrus.user` | `mbpath -u -- <user>` |
+
+Mailbox user arguments are validated and passed as separate command arguments.
+The metrics collectors read `/var/lib/cyrus/config/stats/report.txt`, run
+`cyr_info proc`, and report `master -V`. Set `prometheus_enabled: yes` in
+`imapd.conf` and enable `promstatsd` in the `DAEMON` section of
+`cyrus.conf`. The primary report must be readable. Missing optional process/version tools or
+nonzero command exits do not discard a valid report; collection timeouts and
+output-limit failures still report a collection failure.
+
+The default log source is the `cyrus-imapd` journal unit or
+`/var/log/mail.log`, filtered by `cyrus/` syslog tags. Set
+`ROBIN_AGENT_CYRUS_LOG_FILE=/var/log/cyrus.log` for a dedicated file; an
+explicit file override removes the shared syslog filter. A mounted log can use
+another path, such as `/logs/cyrus/cyrus.log`. Log paths are resolved on the
+agent, independently of the command exec prefix. For logs read by robin-admin
+itself, the equivalent override is `CYRUS_LOG_FILE`.

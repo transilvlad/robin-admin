@@ -32,9 +32,9 @@ services:
       # The co-located agent, pre-enrolled with a fixed credential.
       - 'FLEET_AGENTS_BOOTSTRAP_JSON=${FLEET_AGENTS_BOOTSTRAP_JSON:-[{"agentId":"suite-admin-agent","name":"Suite Agent","credential":"${SUITE_AGENT_CREDENTIAL:?Set SUITE_AGENT_CREDENTIAL to a unique high-entropy value}","os":"linux","arch":"amd64"}]}'
       # The suite's services. Network services are reached directly by role;
-      # the agent runs Dovecot tooling, applies Rspamd and ClamAV config and
-      # tails root-owned logs.
-      - 'FLEET_SERVICES_BOOTSTRAP_JSON=${FLEET_SERVICES_BOOTSTRAP_JSON:-[{"serviceId":"suite-redis","serviceType":"redis","name":"Suite Redis","description":"Redis — direct via REDIS_ADMIN_DSN; logs via the suite agent.","logAgentId":"suite-admin-agent"},{"serviceId":"suite-postgres","serviceType":"postgres","name":"Suite PostgreSQL","description":"PostgreSQL — direct via POSTGRES_ADMIN_DSN; logs via the suite agent.","logAgentId":"suite-admin-agent"},{"serviceId":"suite-clamav","serviceType":"clamav","name":"Suite ClamAV","description":"ClamAV — direct via clamd; config and logs via the suite agent.","apiUrl":"http://antivirus-backend:3310","logAgentId":"suite-admin-agent","configAgentId":"suite-admin-agent"},{"serviceId":"rspamd","configAgentId":"suite-admin-agent"},{"serviceId":"suite-dovecot","serviceType":"dovecot","name":"Suite Dovecot","description":"Dovecot — metrics, sessions, users, and logs via the suite agent (docker exec suite-dovecot).","agentId":"suite-admin-agent"}]}'
+      # the agent runs the mailbox server's tooling (Dovecot or Cyrus, chosen by
+      # MAILBOX_BACKEND), applies Rspamd and ClamAV config and tails root-owned logs.
+      - 'FLEET_SERVICES_BOOTSTRAP_JSON=${FLEET_SERVICES_BOOTSTRAP_JSON:-[{"serviceId":"suite-redis","serviceType":"redis","name":"Suite Redis","description":"Redis — direct via REDIS_ADMIN_DSN; logs via the suite agent.","logAgentId":"suite-admin-agent"},{"serviceId":"suite-postgres","serviceType":"postgres","name":"Suite PostgreSQL","description":"PostgreSQL — direct via POSTGRES_ADMIN_DSN; logs via the suite agent.","logAgentId":"suite-admin-agent"},{"serviceId":"suite-clamav","serviceType":"clamav","name":"Suite ClamAV","description":"ClamAV — direct via clamd; config and logs via the suite agent.","apiUrl":"http://antivirus-backend:3310","logAgentId":"suite-admin-agent","configAgentId":"suite-admin-agent"},{"serviceId":"rspamd","configAgentId":"suite-admin-agent"},{"serviceId":"suite-${MAILBOX_BACKEND:-dovecot}","serviceType":"${MAILBOX_BACKEND:-dovecot}","name":"Suite Mailbox","description":"Mailbox server — metrics, sessions, users, and logs via the suite agent (docker exec suite-${MAILBOX_BACKEND:-dovecot}).","agentId":"suite-admin-agent"}]}'
     volumes:
       - ${RSPAMD_CONFIG_MOUNT:-../robin/.suite/etc/rspamd/local.d}:/mnt/rspamd/local.d
       - ${RSPAMD_STORE_MOUNT:-../robin/store/rspamd}:/mnt/rspamd/store
@@ -85,10 +85,11 @@ services:
       - ROBIN_AGENT_MANAGED_ROOT=/tmp/managed
       - ROBIN_AGENT_APPLY_ONLY=1
       - ROBIN_AGENT_DOVECOT_LOG_FILE=/logs/dovecot/dovecot.log
+      - ROBIN_AGENT_CYRUS_LOG_FILE=/logs/cyrus/cyrus.log
       - ROBIN_AGENT_CLAMAV_LOG_FILE=/logs/clamav/clamd.log
       - ROBIN_AGENT_POSTGRES_LOG_DIR=/logs/postgres
       - ROBIN_AGENT_REDIS_LOG_CONTAINER=suite-redis
-      - ROBIN_AGENT_EXEC_PREFIX=suite-dovecot=docker exec suite-dovecot,rspamd=docker exec suite-rspamd,suite-clamav=docker exec suite-clamav
+      - ROBIN_AGENT_EXEC_PREFIX=suite-${MAILBOX_BACKEND:-dovecot}=docker exec suite-${MAILBOX_BACKEND:-dovecot},rspamd=docker exec suite-rspamd,suite-clamav=docker exec suite-clamav
     volumes:
       - ${SUITE_LOG_MOUNT:-../robin/log}:/logs:ro
       - suite-admin-agent-state:/var/lib/robin-agent

@@ -56,7 +56,7 @@ export interface CapabilityRule {
 }
 
 /** Types whose agent snapshots keep the collector's raw output (see getRawServiceMetrics). */
-export const AGENT_RAW_TYPES: readonly FleetServiceType[] = ['clamav', 'dovecot', 'postfix', 'redis', 'postgres', 'mariadb'];
+export const AGENT_RAW_TYPES: readonly FleetServiceType[] = ['clamav', 'dovecot', 'cyrus', 'postfix', 'redis', 'postgres', 'mariadb'];
 
 /** Types robin-admin manages over an admin connection string rather than files. */
 const DSN_TYPES: readonly FleetServiceType[] = ['redis', 'postgres', 'mariadb'];
@@ -67,6 +67,7 @@ const DIRECT_ENDPOINT: Record<FleetServiceType, string> = {
   robin: 'the Robin metrics URL',
   rspamd: 'the Rspamd controller URL',
   clamav: 'the clamd address (tcp://host:3310)',
+  cyrus: 'an assigned metrics agent (Cyrus has no direct collector)',
   dovecot: "Dovecot's OpenMetrics URL",
   postfix: 'a postfix_exporter metrics URL',
   redis: 'a redis:// URL (or REDIS_ADMIN_DSN)',
@@ -97,6 +98,7 @@ export const CAPABILITY_RULES: readonly CapabilityRule[] = [
     types: ALL_TYPES,
     check: (f) => {
       if (f.metricsMode === 'agent') return f.metricsAgent ? null : 'Agent mode needs an assigned agent';
+      if (f.serviceType === 'cyrus') return 'Cyrus needs an assigned metrics agent';
       return f.endpoint ? null : `Direct mode needs ${DIRECT_ENDPOINT[f.serviceType]}`;
     },
   },
@@ -110,6 +112,7 @@ export const CAPABILITY_RULES: readonly CapabilityRule[] = [
         if (!f.metricsAgent) return 'Agent mode needs an assigned agent';
         return AGENT_RAW_TYPES.includes(f.serviceType) ? null : 'The agent ships parsed metrics for this type, not the raw output';
       }
+      if (f.serviceType === 'cyrus') return 'Cyrus needs an assigned metrics agent';
       return f.endpoint ? null : `Direct mode needs ${DIRECT_ENDPOINT[f.serviceType]}`;
     },
   },
@@ -126,6 +129,7 @@ export const CAPABILITY_RULES: readonly CapabilityRule[] = [
     surface: 'Config page',
     types: ALL_TYPES,
     check: (f) => {
+      if (f.serviceType === 'cyrus') return 'Cyrus configuration is not managed';
       if (f.serviceType === 'robin') return f.robinConfigStore ? null : 'Robin Config needs the robin_config_store table';
       if (DSN_TYPES.includes(f.serviceType)) return needsAdminDsn(f);
       return configFiles(f);
@@ -145,6 +149,7 @@ export const CAPABILITY_RULES: readonly CapabilityRule[] = [
     types: ALL_TYPES,
     check: (f) => {
       switch (f.serviceType) {
+        case 'cyrus': return 'Cyrus reload is not supported';
         case 'robin': return f.robinApi ? null : 'Needs the Robin API (ROBIN_API_ENABLED)';
         case 'clamav': return f.clamdAddress ? null : 'Needs the clamd address to send RELOAD';
         case 'redis':
@@ -212,9 +217,9 @@ export const CAPABILITY_RULES: readonly CapabilityRule[] = [
   {
     id: 'sessions',
     label: 'Sessions',
-    surface: 'Dovecot → Metrics → Sessions, session and user counts',
-    types: ['dovecot'],
-    check: (f) => agentRuns(f.metricsMode === 'agent' ? f.metricsAgent : null, 'dovecot.who', 'Needs Dovecot in agent mode (OpenMetrics has no session list)'),
+    surface: 'Mailbox server → Metrics → Sessions',
+    types: ['dovecot', 'cyrus'],
+    check: (f) => agentRuns(f.metricsMode === 'agent' ? f.metricsAgent : null, f.serviceType === 'cyrus' ? 'cyrus.sessions' : 'dovecot.who', 'Needs a mailbox server in agent mode (OpenMetrics has no session list)'),
   },
   {
     id: 'kick',
@@ -226,14 +231,16 @@ export const CAPABILITY_RULES: readonly CapabilityRule[] = [
   {
     id: 'quota',
     label: 'Quota',
-    surface: 'Dovecot → Metrics → Quota',
-    types: ['dovecot'],
+    surface: 'Mailbox server → Metrics → Quota',
+    types: ['dovecot', 'cyrus'],
     check: (f) => {
+      if (f.serviceType === 'cyrus') return agentRuns(f.metricsMode === 'agent' ? f.metricsAgent : null, 'cyrus.quota', 'Needs Cyrus in agent mode');
       const reason = agentRuns(f.metricsMode === 'agent' ? f.metricsAgent : null, 'dovecot.quota', 'Needs Dovecot in agent mode');
       // The agent probes doveadm's quota command, which exists only with the plugin loaded.
       return reason?.includes('tool is missing') ? 'Needs the Dovecot quota plugin (mail_plugins = quota)' : reason;
     },
   },
+  { id: 'user', label: 'User lookup', surface: 'Cyrus → Metrics → Quota', types: ['cyrus'], check: (f) => agentRuns(f.metricsMode === 'agent' ? f.metricsAgent : null, 'cyrus.user', 'Needs Cyrus in agent mode') },
   {
     id: 'postfixQueue',
     label: 'Queue browser',
@@ -303,6 +310,7 @@ export interface SetupChoice {
 /** Every action a type's agent can run, assuming the service's tools are installed. */
 export const AGENT_ACTIONS_BY_TYPE: Partial<Record<FleetServiceType, readonly string[]>> = {
   postfix: ['postfix.queue.list', 'postfix.queue.show', 'postfix.queue.hold', 'postfix.queue.release', 'postfix.queue.requeue', 'postfix.queue.delete', 'postfix.queue.deliver', 'postfix.queue.flush', 'postfix.reload'],
+  cyrus: ['cyrus.sessions', 'cyrus.quota', 'cyrus.user'],
   dovecot: ['dovecot.reload', 'dovecot.who', 'dovecot.kick', 'dovecot.quota', 'dovecot.user'],
   rspamd: ['rspamd.reload'],
 };

@@ -210,7 +210,15 @@ export interface DovecotSaveLdaConfig {
 }
 
 // Dovecot configuration (dovecot.json5)
+export interface DovecotProxyAuthConfig {
+  enabled?: boolean;
+  imap?: string;
+  pop3?: string;
+  failureWait?: number;
+}
+
 export interface DovecotConfig {
+  proxyAuth?: DovecotProxyAuthConfig;
   auth?: boolean;
   userLookup?: boolean;
   authSocket?: DovecotAuthSocketConfig;

@@ -119,6 +119,24 @@ func postsuper(flag string) func(map[string]any) ([][]string, error) {
 }
 
 var commandSpecs = map[string]commandSpec{
+	"cyrus.sessions": {"cyrus", fixed("cyr_info", "proc")},
+	"cyrus.quota": {"cyrus", func(args map[string]any) ([][]string, error) {
+		if args["user"] == nil || args["user"] == "" {
+			return [][]string{{"quota"}}, nil
+		}
+		user, err := userArg(args)
+		if err != nil {
+			return nil, err
+		}
+		return [][]string{{"quota", "user/" + user}}, nil
+	}},
+	"cyrus.user": {"cyrus", func(args map[string]any) ([][]string, error) {
+		user, err := userArg(args)
+		if err != nil {
+			return nil, err
+		}
+		return [][]string{{"mbpath", "-u", "--", user}}, nil
+	}},
 	"postfix.queue.list": {"postfix", fixed("postqueue", "-j")},
 	"postfix.queue.show": {"postfix", func(args map[string]any) ([][]string, error) {
 		id, err := queueIDArg(args)

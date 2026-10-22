@@ -11,6 +11,7 @@ interface ServiceContextType {
   rspamdServices: FleetService[];
   clamavServices: FleetService[];
   dovecotServices: FleetService[];
+  cyrusServices: FleetService[];
   postfixServices: FleetService[];
   redisServices: FleetService[];
   postgresServices: FleetService[];
@@ -19,6 +20,7 @@ interface ServiceContextType {
   selectedRspamdService: FleetService | null;
   selectedClamavService: FleetService | null;
   selectedDovecotService: FleetService | null;
+  selectedCyrusService: FleetService | null;
   selectedPostfixService: FleetService | null;
   selectedRedisService: FleetService | null;
   selectedPostgresService: FleetService | null;
@@ -30,6 +32,7 @@ interface ServiceContextType {
   setSelectedRspamdService: (service: FleetService) => void;
   setSelectedClamavService: (service: FleetService) => void;
   setSelectedDovecotService: (service: FleetService) => void;
+  setSelectedCyrusService: (service: FleetService) => void;
   setSelectedPostfixService: (service: FleetService) => void;
   setSelectedRedisService: (service: FleetService) => void;
   setSelectedPostgresService: (service: FleetService) => void;
@@ -43,6 +46,7 @@ const STORAGE_KEYS: Record<FleetServiceType, string> = {
   rspamd: 'robin-admin-service-rspamd',
   clamav: 'robin-admin-service-clamav',
   dovecot: 'robin-admin-service-dovecot',
+  cyrus: 'robin-admin-service-cyrus',
   postfix: 'robin-admin-service-postfix',
   redis: 'robin-admin-service-redis',
   postgres: 'robin-admin-service-postgres',
@@ -88,6 +92,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
     rspamd: null,
     clamav: null,
     dovecot: null,
+    cyrus: null,
     postfix: null,
     redis: null,
     postgres: null,
@@ -113,6 +118,10 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
   );
   const dovecotServices = useMemo(
     () => services.filter((service) => service.serviceType === 'dovecot').sort(byCreatedAtAscending),
+    [services],
+  );
+  const cyrusServices = useMemo(
+    () => services.filter((service) => service.serviceType === 'cyrus').sort(byCreatedAtAscending),
     [services],
   );
   const postfixServices = useMemo(
@@ -155,6 +164,9 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
   const setSelectedDovecotService = useCallback((service: FleetService) => {
     setSelectedService('dovecot', service);
   }, [setSelectedService]);
+  const setSelectedCyrusService = useCallback((service: FleetService) => {
+    setSelectedService('cyrus', service);
+  }, [setSelectedService]);
 
   const setSelectedPostfixService = useCallback((service: FleetService) => {
     setSelectedService('postfix', service);
@@ -177,7 +189,10 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
 
     if (!isAuthenticated) {
       setServices([]);
-      setSelectedIds({ robin: null, rspamd: null, clamav: null, dovecot: null, postfix: null, redis: null, postgres: null, mariadb: null });
+      setSelectedIds({
+        robin: null, rspamd: null, clamav: null, dovecot: null,
+        cyrus: null, postfix: null, redis: null, postgres: null, mariadb: null
+      });
       setIsLoading(isAuthLoading);
       return;
     }
@@ -206,6 +221,10 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
         nextServices.filter((service) => service.serviceType === 'dovecot'),
         'dovecot',
       );
+      const nextCyrus = pickSavedService(
+        nextServices.filter((service) => service.serviceType === 'cyrus'),
+        'cyrus',
+      );
       const nextPostfix = pickSavedService(
         nextServices.filter((service) => service.serviceType === 'postfix'),
         'postfix',
@@ -228,6 +247,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
         rspamd: nextRspamd?.serviceId ?? null,
         clamav: nextClamav?.serviceId ?? null,
         dovecot: nextDovecot?.serviceId ?? null,
+        cyrus: nextCyrus?.serviceId ?? null,
         postfix: nextPostfix?.serviceId ?? null,
         redis: nextRedis?.serviceId ?? null,
         postgres: nextPostgres?.serviceId ?? null,
@@ -252,6 +272,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
     const nextRspamd = rspamdServices.find((service) => service.serviceId === selectedIds.rspamd) ?? rspamdServices[0] ?? null;
     const nextClamav = clamavServices.find((service) => service.serviceId === selectedIds.clamav) ?? clamavServices[0] ?? null;
     const nextDovecot = dovecotServices.find((service) => service.serviceId === selectedIds.dovecot) ?? dovecotServices[0] ?? null;
+    const nextCyrus = cyrusServices.find((service) => service.serviceId === selectedIds.cyrus) ?? cyrusServices[0] ?? null;
     const nextPostfix = postfixServices.find((service) => service.serviceId === selectedIds.postfix) ?? postfixServices[0] ?? null;
     const nextRedis = redisServices.find((service) => service.serviceId === selectedIds.redis) ?? redisServices[0] ?? null;
     const nextPostgres = postgresServices.find((service) => service.serviceId === selectedIds.postgres) ?? postgresServices[0] ?? null;
@@ -262,6 +283,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
       rspamd: nextRspamd?.serviceId ?? null,
       clamav: nextClamav?.serviceId ?? null,
       dovecot: nextDovecot?.serviceId ?? null,
+      cyrus: nextCyrus?.serviceId ?? null,
       postfix: nextPostfix?.serviceId ?? null,
       redis: nextRedis?.serviceId ?? null,
       postgres: nextPostgres?.serviceId ?? null,
@@ -272,7 +294,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
       desired.robin !== selectedIds.robin
       || desired.rspamd !== selectedIds.rspamd
       || desired.clamav !== selectedIds.clamav
-      || desired.dovecot !== selectedIds.dovecot
+      || desired.dovecot !== selectedIds.dovecot || desired.cyrus !== selectedIds.cyrus
       || desired.postfix !== selectedIds.postfix
       || desired.redis !== selectedIds.redis
       || desired.postgres !== selectedIds.postgres
@@ -288,7 +310,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem(STORAGE_KEYS[serviceType]);
       }
     }
-  }, [clamavServices, dovecotServices, mariadbServices, postfixServices, postgresServices, redisServices, robinServices, rspamdServices, selectedIds.clamav, selectedIds.dovecot, selectedIds.mariadb, selectedIds.postfix, selectedIds.postgres, selectedIds.redis, selectedIds.robin, selectedIds.rspamd]);
+  }, [clamavServices, dovecotServices, cyrusServices, mariadbServices, postfixServices, postgresServices, redisServices, robinServices, rspamdServices, selectedIds.clamav, selectedIds.dovecot, selectedIds.cyrus, selectedIds.mariadb, selectedIds.postfix, selectedIds.postgres, selectedIds.redis, selectedIds.robin, selectedIds.rspamd]);
 
   const selectedRobinService = useMemo(
     () => robinServices.find((service) => service.serviceId === selectedIds.robin) ?? robinServices[0] ?? null,
@@ -305,6 +327,10 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
   const selectedDovecotService = useMemo(
     () => dovecotServices.find((service) => service.serviceId === selectedIds.dovecot) ?? dovecotServices[0] ?? null,
     [dovecotServices, selectedIds.dovecot],
+  );
+  const selectedCyrusService = useMemo(
+    () => cyrusServices.find((service) => service.serviceId === selectedIds.cyrus) ?? cyrusServices[0] ?? null,
+    [cyrusServices, selectedIds.cyrus],
   );
   const selectedPostfixService = useMemo(
     () => postfixServices.find((service) => service.serviceId === selectedIds.postfix) ?? postfixServices[0] ?? null,
@@ -328,7 +354,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
     robinServices,
     rspamdServices,
     clamavServices,
-    dovecotServices,
+    dovecotServices, cyrusServices,
     postfixServices,
     redisServices,
     postgresServices,
@@ -336,7 +362,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
     selectedRobinService,
     selectedRspamdService,
     selectedClamavService,
-    selectedDovecotService,
+    selectedDovecotService, selectedCyrusService,
     selectedPostfixService,
     selectedRedisService,
     selectedPostgresService,
@@ -347,7 +373,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
     setSelectedRobinService,
     setSelectedRspamdService,
     setSelectedClamavService,
-    setSelectedDovecotService,
+    setSelectedDovecotService, setSelectedCyrusService,
     setSelectedPostfixService,
     setSelectedRedisService,
     setSelectedPostgresService,
@@ -357,7 +383,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
     robinServices,
     rspamdServices,
     clamavServices,
-    dovecotServices,
+    dovecotServices, cyrusServices,
     postfixServices,
     redisServices,
     postgresServices,
@@ -365,7 +391,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
     selectedRobinService,
     selectedRspamdService,
     selectedClamavService,
-    selectedDovecotService,
+    selectedDovecotService, selectedCyrusService,
     selectedPostfixService,
     selectedRedisService,
     selectedPostgresService,
@@ -376,7 +402,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
     setSelectedRobinService,
     setSelectedRspamdService,
     setSelectedClamavService,
-    setSelectedDovecotService,
+    setSelectedDovecotService, setSelectedCyrusService,
     setSelectedPostfixService,
     setSelectedRedisService,
     setSelectedPostgresService,

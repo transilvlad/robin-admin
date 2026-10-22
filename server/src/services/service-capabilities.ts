@@ -58,6 +58,7 @@ function directEndpoint(service: FleetService): boolean {
     case 'robin': return Boolean(service.metricsUrl || service.apiUrl);
     case 'rspamd': return Boolean(service.controllerUrl);
     case 'clamav': return clamdEndpointOf(service) !== null;
+    case 'cyrus': return false;
     case 'dovecot':
     case 'postfix': return isHttpUrl(service.metricsUrl);
     case 'redis': return isRedisUrl(resolveRedisDsn(service));

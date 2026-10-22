@@ -21,6 +21,10 @@ const FAKE_ENTRY: Record<string, { totalServices: number; healthyServices: numbe
     totalServices: 1, healthyServices: 1,
     totals: { queueItems: 0, peakQueue24h: 2, staleDatabaseServices: 0, unhealthySamples24h: 0 },
   },
+  cyrus: {
+    totalServices: 1, healthyServices: 1,
+    totals: { sessions: 3, users: 2, logins24h: 4, authFailure24h: 0, imapCommands24h: 7, mailDeliveries24h: 1 },
+  },
   dovecot: {
     totalServices: 1, healthyServices: 1,
     totals: { sessions: 3, users: 2, logins24h: 4, authFailure24h: 0, imapCommands24h: 7, mailDeliveries24h: 1 },
@@ -44,6 +48,9 @@ const FAKE_ENTRY: Record<string, { totalServices: number; healthyServices: numbe
 };
 
 describe('service-type registry', () => {
+  it('provides Cyrus IMAP monitoring without managed configuration', () => {
+    expect(SERVICE_TYPE_REGISTRY.cyrus).toMatchObject({ label: 'Cyrus IMAP', routeBase: '/cyrus', hasMetricsPage: true, hasConfigPage: false });
+  });
   it('has a complete entry for every registered type', () => {
     for (const type of FLEET_SERVICE_TYPES) {
       const meta = getServiceTypeMeta(type);

@@ -48,6 +48,9 @@ export const AGENT_COMMAND_ACTIONS = [
   'dovecot.kick',
   'dovecot.quota',
   'dovecot.user',
+  'cyrus.sessions',
+  'cyrus.quota',
+  'cyrus.user',
 ] as const;
 
 export type AgentCommandAction = typeof AGENT_COMMAND_ACTIONS[number];

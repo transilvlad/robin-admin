@@ -10,12 +10,13 @@ analysis, modular extensions, access control, and audit logging in one console.
 
 - **Mailboxes**: users, aliases, and auto aliases
 - **Fleet operations**: service registry, health checks, aggregated metrics, and
-  per-service views for Robin, Rspamd, ClamAV, Dovecot, Postfix, Redis, and PostgreSQL
+  per-service views for Robin, Rspamd, ClamAV, Dovecot, Cyrus IMAP, Postfix, Redis, and PostgreSQL
 - **Robin**: queue control, delivery tests, metrics, JSON5 configuration, and logs
 - **Rspamd**: managed configuration, structured rules, DKIM key lifecycle, scan
   lab, classifier experiments, training corpus, metrics, and logs
 - **ClamAV**: scan lab, bounded configuration, metrics, and logs
 - **Postfix**: queue browser (view, hold/release, requeue, delete, deliver, flush), message-flow counters, bounded configuration, metrics, and logs via robin-agent
+- **Cyrus IMAP**: agent-backed authentication and IMAP/LMTP metrics, sessions, mailbox lookup, quota, and logs; no configuration management
 - **Dovecot**: live sessions with disconnect, mailbox lookup and quota, bounded configuration, metrics, and logs via robin-agent
 - **Redis and PostgreSQL**: native metrics, bounded live configuration, operational controls, and conditional logs
 - **Reporting intelligence**: overview, sending sources, domain conformance, and a record-level explorer
@@ -30,7 +31,7 @@ analysis, modular extensions, access control, and audit logging in one console.
 ```mermaid
 flowchart LR
   Bots["Report bots<br/>DMARC / TLS-RPT / Forensic"] --> API["Robin Admin API"]
-  Services["Robin / Rspamd / ClamAV / Dovecot<br/>Postfix / Redis / PostgreSQL"] --> API
+  Services["Robin / Rspamd / ClamAV / Dovecot / Cyrus IMAP<br/>Postfix / Redis / PostgreSQL"] --> API
   Authority["Module authority<br/>catalog / license validation"] -. manual sync / activation .-> API
   API --> DB["PostgreSQL"]
   Modules["Federated module runtime"] -. hosted when reachable .-> UI
@@ -50,6 +51,7 @@ flowchart LR
   - Rspamd: scan, training, DKIM keys, rules, metrics, config, and logs
   - ClamAV: scan, metrics, config, and logs
   - Dovecot: metrics (sessions, quota), config, and logs
+  - Cyrus IMAP: metrics (sessions, quota, mailbox lookup) and logs
   - Postfix: queue, metrics, config, and logs
   - Redis and PostgreSQL: metrics, config, operational controls, and logs when available
 - **Monitoring**: external checks, status-page management, and email-delivery monitoring

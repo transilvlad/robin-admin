@@ -141,6 +141,7 @@ Errors:
 | Modules | Catalog, activation, installation lifecycle, runtime status, and authenticated module-backend proxy routes |
 | Rspamd | `GET /rspamd/status`, `GET/PUT /rspamd/settings`, `GET/PUT /rspamd/config`, `GET /rspamd/config/scopes`, `PUT/DELETE /rspamd/config/files/:key`, `POST /rspamd/reload`, `GET /rspamd/rules`, `POST /rspamd/rules/preview`, `PUT /rspamd/rules`, `GET/PUT /rspamd/classifiers`, `POST /rspamd/scan`, `POST /rspamd/scan-file`, `GET /rspamd/scans`, `GET /rspamd/scans/:id`, `POST /rspamd/scans/:id/replay`, `POST /rspamd/scans/:id/learn`, `POST /rspamd/scans/:id/fuzzy`, DKIM domain/selector endpoints, training corpus endpoints |
 | ClamAV | `GET /clamav/status`, `GET/PUT /clamav/config`, `GET /clamav/config/scopes`, `DELETE /clamav/config/files/:key`, `GET /clamav/config/rendered`, `POST /clamav/reload`, `POST /clamav/scan` |
+| Cyrus IMAP | `GET /cyrus/sessions`, `GET /cyrus/quota` (optional `user`), `GET /cyrus/users/:user` |
 | Dovecot | `GET/PUT /dovecot/config`, `PUT/DELETE /dovecot/config/files/:key`, `GET /dovecot/config/scopes`, `GET /dovecot/config/rendered`, `POST /dovecot/reload`, `GET /dovecot/sessions`, `POST /dovecot/sessions/kick` `{user}`, `GET /dovecot/quota`, `GET /dovecot/users/:user` |
 | Postfix | `GET/PUT /postfix/config`, `PUT/DELETE /postfix/config/files/:key`, `GET /postfix/config/scopes`, `GET /postfix/config/rendered`, `POST /postfix/reload`, `POST /postfix/flush`, `GET /postfix/queue`, `GET /postfix/queue/:queueId`, `POST /postfix/queue/actions` `{action: hold\|release\|requeue\|delete, queueIds}`, `POST /postfix/queue/:queueId/deliver` |
 | Redis | `GET/PUT/DELETE /redis/config`, `GET /redis/config/scopes`, `GET /redis/config/rendered`, `POST /redis/reload`, slowlog/clients/bgsave/bgrewriteaof/stats-reset ops |
@@ -391,3 +392,28 @@ Patterns vary slightly by area:
 | 429 | Rate limited or login locked |
 | 404 | Resource not found |
 | 500 | Server error |
+
+### Cyrus IMAP operations
+
+All paths below include the `/api` prefix and require an authenticated
+administrator, matching the Dovecot operational API. Each requires the
+`serviceId` query parameter for a registered agent-backed Cyrus service.
+
+- `GET /api/cyrus/sessions?serviceId=mailbox` returns process rows with
+  `pid`, `service`, `host`, `ip`, `user`, `mailbox` and `state`.
+- `GET /api/cyrus/quota?serviceId=mailbox` returns `{ available, reason, rows }`.
+  Add `user=<mailbox-user>` to query one root. Rows contain `root`, `user`,
+  `storageUsedKiB`, nullable `storageLimitKiB` and `storagePercent`,
+  `messages`, and `folders`.
+- `GET /api/cyrus/users/:user?serviceId=mailbox` returns
+  `{ user, exists, fields: { path }, quota }`. Unknown users return
+  `exists: false`, empty `fields` and `quota: null`. URL-encode the user.
+
+Responses use the standard `{ success, data }` envelope. Missing service IDs
+or operational failures return 400; unauthenticated and unauthorized callers
+receive 401 and 403. No Cyrus config, reload or disconnect endpoints exist.
+
+The shared `/api/metrics` endpoints accept `serviceType=cyrus` for live,
+history, stats and raw output. Agent metric pushes use `prometheus`, optional
+`proc` (empty when idle), and optional `version` fields. The first collector
+must succeed; an unreadable report records a failed collection observation.

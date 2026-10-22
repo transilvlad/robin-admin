@@ -34,7 +34,7 @@ the button or the card goes away.
 | No agent | Anything that runs on the service's host: Postfix queue, counters and reload; Dovecot sessions, quota and reload; managed config files for Rspamd, ClamAV, Dovecot and Postfix. Logs need a `<TYPE>_LOG_URL` or a mounted log file. |
 | Agent on the host / next to the container | Nothing on the agent's side. Features robin-admin performs itself still need robin-admin to reach the service: Robin queue and delivery test, Rspamd scan, training and classifiers, ClamAV scan and signature reload, Redis, PostgreSQL and MariaDB config and admin tools. |
 | Agent over ssh | Commands run, but files can't be placed: no managed config, config sync, Rspamd rules or DKIM keys. |
-| Agent only (robin-admin can't reach the service) | The robin-admin-side features above. Raw metrics stay available from the agent's stored snapshot for ClamAV, Dovecot, Postfix, Redis, PostgreSQL and MariaDB; Robin and Rspamd agents ship parsed metrics only. |
+| Agent only (robin-admin can't reach the service) | The robin-admin-side features above. Raw metrics stay available from the agent's stored snapshot for ClamAV, Dovecot, Cyrus IMAP, Postfix, Redis, PostgreSQL and MariaDB; Robin and Rspamd agents ship parsed metrics only. |
 
 ### Per service
 
@@ -87,6 +87,8 @@ allowlist:
 | `postfix.queue.hold` / `.release` / `.requeue` / `.delete` | `postsuper -h` / `-H` / `-r` / `-d <id>…` (≤500 IDs) |
 | `postfix.queue.deliver` / `.flush` | `postqueue -i <id>` / `postqueue -f` |
 | `postfix.reload` | `postfix check`, then `postfix reload` |
+| `cyrus.sessions` | `cyr_info proc` |
+| `cyrus.quota` / `.user` | `quota` (or `quota user/<user>`) / `mbpath -u -- <user>` |
 | `dovecot.reload` | `doveconf -n`, then `doveadm reload` |
 | `dovecot.who` / `.kick` | `doveadm who -1` / `doveadm kick <user>` |
 | `dovecot.quota` / `.user` | `doveadm -f tab quota get -u <user>` (or `-A`) / `doveadm user <user>` |
@@ -161,10 +163,10 @@ admin-only and audited.
 - **Config is operational-only, by design.** Structural config (TLS, virtual maps,
   `mail_location`, restriction chains, `myhostname`/`mynetworks`, master.cf,
   relay.py) stays **ansible/root-owned** and is never writable from robin-admin.
-  Each service manages a bounded knob set + (Dovecot/Postfix) managed include files.
+  Each configurable service manages a bounded knob set + (Dovecot/Postfix) managed include files.
 - **Writable file config needs an agent on the host.** Redis, PostgreSQL and MariaDB are the
   exception: their native protocols apply managed settings directly.
-- **Shared base + per-instance overrides.** Every service type has a `default` base
+- **Shared base + per-instance overrides.** Every managed-config service type has a `default` base
   config; each instance stores only the values it changes and inherits the rest.
   The effective config an instance runs with is the base deep-merged with its
   override delta. See [fleet.md](fleet.md#per-instance-config-overrides).
@@ -213,3 +215,19 @@ its controller, and other services use a co-located host file when available:
   `0600` or `0640` log remains unreadable by the container's unprivileged user.
 - **Rspamd logs need the controller password** (set in **Fleet → Services → Edit**); without it `/errors` 401s and the item hides.
 - Read-only, tail-style, capped at 1000 lines. No follow/stream, no full-text search.
+
+## Cyrus IMAP monitoring
+
+Cyrus IMAP 3.6+ is agent-only for metrics and operational lookups. Sessions need
+`cyr_info`, quota needs `quota`, and user lookup needs `mbpath`. The agent
+advertises each action only when its tool exists where commands run, including
+through an exec prefix. No kick/disconnect command exists. Configuration, config
+sync and reload are not supported, regardless of agent access.
+
+Enable `prometheus_enabled: yes` and run `promstatsd` from the `cyrus.conf`
+`DAEMON` section. The report at `/var/lib/cyrus/config/stats/report.txt` provides
+cumulative authentication, IMAP and LMTP counters and current usage gauges.
+History and dashboard activity handle counter resets. Availability, stale
+telemetry and `cyrus_auth_failures` alerts use the stored observations and history.
+An unlabeled authentication counter is treated as successful authentications;
+explicit failure results are counted separately. Missing metrics default to zero.

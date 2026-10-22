@@ -35,7 +35,7 @@ import { clearInstanceCache } from '../services/robin-api.js';
 // agent-mode service (e.g. postfix once its exporter is retired) as unhealthy.
 import {
   getLiveClamavMetrics,
-  getLiveDovecotMetrics,
+  getLiveDovecotMetrics, getLiveCyrusMetrics,
   getLivePostfixMetrics,
   getLiveRedisMetrics,
   getLivePostgresMetrics,
@@ -113,6 +113,7 @@ async function validateServiceUrls(
   urls: Array<string | null | undefined>,
   metricsUrl: string | null | undefined
 ): Promise<string | null> {
+  if (serviceType === 'cyrus' && (metricsUrl || urls.some(Boolean))) return 'Cyrus requires an agent, not direct endpoints';
   const cfg = await getConfig();
 
   for (const url of urls) {
@@ -358,6 +359,37 @@ router.get('/:serviceId/health', requireAuth, async (req: Request, res: Response
         });
       }
     }
+    if (service.serviceType === 'cyrus') {
+      const startedAt = Date.now();
+      try {
+        const metrics = await getLiveCyrusMetrics(service.serviceId);
+        return res.json({
+          success: true,
+          data: {
+            serviceId: service.serviceId,
+            serviceType: service.serviceType,
+            healthy: Boolean(metrics?.reachable),
+            status: metrics?.reachable ? 200 : 503,
+            latency: Date.now() - startedAt,
+            checkedAt: new Date().toISOString(),
+            ...(!metrics?.reachable ? { error: 'Cyrus agent metrics unavailable' } : {}),
+          },
+        });
+      } catch (cyrusError) {
+        return res.json({
+          success: true,
+          data: {
+            serviceId: service.serviceId,
+            serviceType: service.serviceType,
+            healthy: false,
+            status: 503,
+            latency: Date.now() - startedAt,
+            checkedAt: new Date().toISOString(),
+            error: (cyrusError as Error).message,
+          },
+        });
+      }
+    }
 
     if (service.serviceType === 'postfix') {
       const startedAt = Date.now();
@@ -539,6 +571,7 @@ router.post('/:serviceId/sync/request', requireAuth, requireAdmin, async (req: R
     if (!service) {
       return res.status(404).json({ success: false, error: 'Service not found' });
     }
+    if (service.serviceType === 'cyrus') return res.status(400).json({ success: false, error: 'Cyrus configuration is not managed' });
     const status = await requestFleetServiceSync(serviceId);
     await appendFleetServiceSyncLog({
       serviceId,

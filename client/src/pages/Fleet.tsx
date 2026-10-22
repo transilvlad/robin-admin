@@ -146,6 +146,7 @@ export function FleetPage() {
     robin: services.filter((service) => service.serviceType === 'robin').length,
     rspamd: services.filter((service) => service.serviceType === 'rspamd').length,
     clamav: services.filter((service) => service.serviceType === 'clamav').length,
+    cyrus: services.filter((service) => service.serviceType === 'cyrus').length,
     dovecot: services.filter((service) => service.serviceType === 'dovecot').length,
     postfix: services.filter((service) => service.serviceType === 'postfix').length,
     redis: services.filter((service) => service.serviceType === 'redis').length,
@@ -260,7 +261,7 @@ export function FleetPage() {
         <PageHeader
           icon={appIcons.fleetInstances}
           title="Fleet services"
-          description="Manage Robin, Rspamd, ClamAV, Dovecot, Postfix, Redis, PostgreSQL, and MariaDB services from one registry. Navigation and page selectors follow the enabled fleet services here."
+        description="Manage Robin, Rspamd, ClamAV, Dovecot, Cyrus IMAP, Postfix, Redis, PostgreSQL, and MariaDB services from one registry. Navigation and page selectors follow the enabled fleet services here."
           actions={(
           <>
             <Button variant="secondary" onClick={() => void checkAllHealth()}>
@@ -282,6 +283,7 @@ export function FleetPage() {
         <MetricCard icon={<Settings2 className="h-5 w-5" />} label="Robin services" value={String(summary.robin)} />
         <MetricCard icon={<ShieldAlert className="h-5 w-5" />} label="Rspamd services" value={String(summary.rspamd)} />
         <MetricCard icon={<Server className="h-5 w-5" />} label="ClamAV services" value={String(summary.clamav)} />
+        <MetricCard icon={<Inbox className="h-5 w-5" />} label="Cyrus IMAP services" value={String(summary.cyrus)} />
         <MetricCard icon={<Inbox className="h-5 w-5" />} label="Dovecot services" value={String(summary.dovecot)} />
         <MetricCard icon={<Mail className="h-5 w-5" />} label="Postfix services" value={String(summary.postfix)} />
         <MetricCard icon={<Zap className="h-5 w-5" />} label="Redis services" value={String(summary.redis)} />
@@ -299,6 +301,7 @@ export function FleetPage() {
               ['rspamd', 'Rspamd'],
               ['clamav', 'ClamAV'],
               ['dovecot', 'Dovecot'],
+              ['cyrus', 'Cyrus IMAP'],
               ['postfix', 'Postfix'],
               ['redis', 'Redis'],
               ['postgres', 'PostgreSQL'],
@@ -469,6 +472,7 @@ export function FleetPage() {
                       <option value="rspamd">Rspamd</option>
                       <option value="clamav">ClamAV</option>
                       <option value="dovecot">Dovecot</option>
+                      <option value="cyrus">Cyrus IMAP</option>
                       <option value="postfix">Postfix</option>
                       <option value="redis">Redis</option>
                       <option value="postgres">PostgreSQL</option>
@@ -492,7 +496,7 @@ export function FleetPage() {
                     onChange={(event) => setFormData((current) => ({ ...current, serviceId: event.target.value }))}
                     className="input"
                     pattern="[a-zA-Z0-9_-]+"
-                    placeholder={formData.serviceType === 'rspamd' ? 'rspamd-eu-1' : formData.serviceType === 'clamav' ? 'clamav-primary' : formData.serviceType === 'dovecot' ? 'dovecot-primary' : formData.serviceType === 'postfix' ? 'postfix-primary' : formData.serviceType === 'redis' ? 'redis-primary' : formData.serviceType === 'postgres' ? 'postgres-primary' : formData.serviceType === 'mariadb' ? 'mariadb-primary' : 'robin-primary'}
+                    placeholder={formData.serviceType === 'rspamd' ? 'rspamd-eu-1' : formData.serviceType === 'clamav' ? 'clamav-primary' : formData.serviceType === 'cyrus' ? 'cyrus-primary' : formData.serviceType === 'dovecot' ? 'dovecot-primary' : formData.serviceType === 'postfix' ? 'postfix-primary' : formData.serviceType === 'redis' ? 'redis-primary' : formData.serviceType === 'postgres' ? 'postgres-primary' : formData.serviceType === 'mariadb' ? 'mariadb-primary' : 'robin-primary'}
                     required
                   />
                 </label>
@@ -506,7 +510,7 @@ export function FleetPage() {
                     value={formData.name}
                     onChange={(event) => setFormData((current) => ({ ...current, name: event.target.value }))}
                     className="input"
-                    placeholder={formData.serviceType === 'rspamd' ? 'Primary Rspamd' : formData.serviceType === 'clamav' ? 'Primary ClamAV' : formData.serviceType === 'dovecot' ? 'Primary Dovecot' : formData.serviceType === 'postfix' ? 'Primary Postfix' : formData.serviceType === 'redis' ? 'Primary Redis' : formData.serviceType === 'postgres' ? 'Primary PostgreSQL' : formData.serviceType === 'mariadb' ? 'Primary MariaDB' : 'Primary Robin'}
+                    placeholder={formData.serviceType === 'rspamd' ? 'Primary Rspamd' : formData.serviceType === 'clamav' ? 'Primary ClamAV' : formData.serviceType === 'cyrus' ? 'Primary Cyrus IMAP' : formData.serviceType === 'dovecot' ? 'Primary Dovecot' : formData.serviceType === 'postfix' ? 'Primary Postfix' : formData.serviceType === 'redis' ? 'Primary Redis' : formData.serviceType === 'postgres' ? 'Primary PostgreSQL' : formData.serviceType === 'mariadb' ? 'Primary MariaDB' : 'Primary Robin'}
                     required
                   />
                 </label>
@@ -626,6 +630,8 @@ export function FleetPage() {
                     ? 'Robin health is derived from API URL + /health, so only API and metrics endpoints are required here.'
                     : formData.serviceType === 'clamav'
                       ? 'ClamAV health uses the generic endpoint fields; manage ClamD and FreshClam config overrides on the ClamAV Config page.'
+                      : formData.serviceType === 'cyrus'
+                        ? 'Cyrus IMAP requires a metrics agent with promstatsd reports and cyr_info, quota and mbpath. Assign the service in Fleet → Agents. Configuration is not managed.'
                       : formData.serviceType === 'dovecot'
                         ? 'Dovecot metrics come from a robin-agent on its host (doveadm, which also gives sessions, quota and config), or from Dovecot’s OpenMetrics exporter URL. Fleet → Docs shows what each setup supports.'
                         : formData.serviceType === 'postfix'
@@ -700,6 +706,9 @@ function getVisibleEndpoints(service: FleetService): Array<{ label: string; valu
     ];
   }
 
+  if (service.serviceType === 'cyrus') {
+    return [{ label: 'Metrics', value: 'promstatsd report (agent required)' }, { label: 'Operations', value: 'Sessions, quota and mailbox lookup' }];
+  }
   if (service.serviceType === 'dovecot') {
     return [
       { label: 'Metrics', value: service.metricsUrl ? `OpenMetrics ${service.metricsUrl}` : 'doveadm stats dump (co-located)' },

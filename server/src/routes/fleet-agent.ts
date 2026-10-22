@@ -217,7 +217,7 @@ function requireFleetAgentAuth(requiredAxis: FleetAgentAxis) {
       const ownsMetrics = service.collectionMode === 'agent' && service.agentId === agentId;
       const ownsAxis: Record<FleetAgentAxis, boolean> = {
         metrics: ownsMetrics,
-        config: ownsMetrics || service.configAgentId === agentId,
+        config: service.serviceType !== 'cyrus' && (ownsMetrics || service.configAgentId === agentId),
         logs: ownsMetrics || service.logAgentId === agentId,
       };
       const valid = Boolean(agentId) && ownsAxis[requiredAxis] && await fleetAgentCredentialMatches(agentId, token);
@@ -661,6 +661,7 @@ router.post('/services/:serviceId/metrics', requireFleetAgentMetricsAuth, async 
       { id: service.id, serviceId: service.serviceId, serviceType: service.serviceType },
       {
         statsDump: typeof body.statsDump === 'string' ? body.statsDump : undefined,
+        proc: typeof body.proc === 'string' ? body.proc : undefined,
         who: typeof body.who === 'string' ? body.who : undefined,
         postqueue: typeof body.postqueue === 'string' ? body.postqueue : undefined,
         info: typeof body.info === 'string' ? body.info : undefined,

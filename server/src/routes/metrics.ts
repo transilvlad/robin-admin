@@ -9,13 +9,13 @@ import { requireViewer } from '../middleware/rbac.js';
 import {
   getRawServiceMetrics,
   getClamavMetricsHistory,
-  getDovecotMetricsHistory,
+  getDovecotMetricsHistory, getCyrusMetricsHistory,
   getPostfixMetricsHistory,
   getRedisMetricsHistory,
   getPostgresMetricsHistory,
   getMariadbMetricsHistory,
   getLiveClamavMetrics,
-  getLiveDovecotMetrics,
+  getLiveDovecotMetrics, getLiveCyrusMetrics,
   getLivePostfixMetrics,
   getLiveRedisMetrics,
   getLivePostgresMetrics,
@@ -136,6 +136,22 @@ router.get('/live', requireViewer, async (req: Request, res: Response) => {
           success: true,
           data: null,
           message: 'Dovecot metrics endpoint unavailable',
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: metrics,
+      });
+    }
+    if (serviceType === 'cyrus') {
+      const metrics = await getLiveCyrusMetrics(serviceId ?? undefined);
+
+      if (!metrics) {
+        return res.json({
+          success: true,
+          data: null,
+          message: 'Cyrus metrics endpoint unavailable',
         });
       }
 
@@ -301,6 +317,13 @@ router.get('/history', requireViewer, async (req: Request, res: Response) => {
 
     if (serviceType === 'dovecot') {
       const history = await getDovecotMetricsHistory(validHours, 500, serviceId);
+      return res.json({
+        success: true,
+        data: history,
+      });
+    }
+    if (serviceType === 'cyrus') {
+      const history = await getCyrusMetricsHistory(validHours, 500, serviceId);
       return res.json({
         success: true,
         data: history,
@@ -527,6 +550,50 @@ router.get('/stats', requireViewer, async (req: Request, res: Response) => {
           serviceType,
           serviceId: live?.serviceId ?? serviceId,
           live: live ? {
+            reachable: live.reachable,
+            authSuccess: live.authSuccess,
+            authFailure: live.authFailure,
+            loginCount: live.loginCount,
+            imapCommands: live.imapCommands,
+            mailDeliveries: live.mailDeliveries,
+            sessionCount: live.sessionCount,
+            userCount: live.userCount,
+          } : null,
+          totals24h,
+          historyCount: history.length,
+        },
+      });
+    }
+    if (serviceType === 'cyrus') {
+      const [live, history] = await Promise.all([
+        getLiveCyrusMetrics(serviceId ?? undefined),
+        getCyrusMetricsHistory(24, STATS_HISTORY_POINTS, serviceId),
+      ]);
+
+      // Step-summed so a Cyrus restart (counter reset) doesn't zero the window.
+      const totals24h = {
+        logins: sumDelta(history, (row) => row.loginCount),
+        authSuccess: sumDelta(history, (row) => row.authSuccess),
+        authFailure: sumDelta(history, (row) => row.authFailure),
+        imapCommands: sumDelta(history, (row) => row.imapCommands),
+        mailDeliveries: sumDelta(history, (row) => row.mailDeliveries),
+        peakSessions: history.reduce((max, row) => Math.max(max, row.sessionCount), 0),
+        unreachableSamples: history.filter((row) => !row.reachable).length,
+      };
+
+      return res.json({
+        success: true,
+        data: {
+          serviceType,
+          serviceId: live?.serviceId ?? serviceId,
+          live: live ? {
+            imapConnections: live.imapConnections,
+            activeConnections: live.activeConnections,
+            lmtpConnections: live.lmtpConnections,
+            lmtpRecipients: live.lmtpRecipients,
+            lmtpBytes: live.lmtpBytes,
+            mailboxCount: live.mailboxCount,
+            quotaCommitment: live.quotaCommitment,
             reachable: live.reachable,
             authSuccess: live.authSuccess,
             authFailure: live.authFailure,

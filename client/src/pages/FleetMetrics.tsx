@@ -16,9 +16,9 @@ import type {
   ClamavFleetDashboardService,
   ClamavFleetTotals,
   ClamavMetricsSnapshot,
-  DovecotFleetDashboardService,
-  DovecotFleetTotals,
-  DovecotMetricsSnapshot,
+  DovecotFleetDashboardService, CyrusFleetDashboardService,
+  DovecotFleetTotals, CyrusFleetTotals,
+  DovecotMetricsSnapshot, CyrusMetricsSnapshot,
   FleetDashboard,
   FleetDashboardService,
   MetricsSnapshot,
@@ -86,13 +86,13 @@ export function FleetMetricsPage() {
     setSelectedRobinService,
     setSelectedRspamdService,
     setSelectedClamavService,
-    setSelectedDovecotService,
+    setSelectedDovecotService, setSelectedCyrusService,
     setSelectedPostfixService,
     setSelectedRedisService,
     setSelectedPostgresService,
     setSelectedMariadbService,
     clamavServices,
-    dovecotServices,
+    dovecotServices, cyrusServices,
     postfixServices,
     redisServices,
     postgresServices,
@@ -101,11 +101,12 @@ export function FleetMetricsPage() {
     rspamdServices,
   } = useServices();
   const [fleet, setFleet] = useState<FleetDashboard | null>(null);
-  const [historyByType, setHistoryByType] = useState<Record<'robin' | 'rspamd' | 'clamav' | 'dovecot' | 'postfix' | 'redis' | 'postgres' | 'mariadb', TrendPoint[]>>({
+  const [historyByType, setHistoryByType] = useState<Record<'robin' | 'rspamd' | 'clamav' | 'dovecot' | 'cyrus' | 'postfix' | 'redis' | 'postgres' | 'mariadb', TrendPoint[]>>({
     robin: [],
     rspamd: [],
     clamav: [],
     dovecot: [],
+    cyrus: [],
     postfix: [],
     redis: [],
     postgres: [],
@@ -154,25 +155,32 @@ export function FleetMetricsPage() {
 
   useEffect(() => {
     if (!fleet) {
-      setHistoryByType({ robin: [], rspamd: [], clamav: [], dovecot: [], postfix: [], redis: [], postgres: [], mariadb: [] });
+      setHistoryByType({
+        robin: [], rspamd: [], clamav: [], dovecot: [],
+        cyrus: [], postfix: [], redis: [], postgres: [], mariadb: []
+      });
       return;
     }
 
     const loadHistory = async () => {
       try {
-        const [robin, rspamd, clamav, dovecot, postfix, redis, postgres, mariadb] = await Promise.all([
+        const [robin, rspamd, clamav, dovecot, cyrus, postfix, redis, postgres, mariadb] = await Promise.all([
           loadRobinTrend(fleet.byType.robin, window),
           loadRspamdTrend(fleet.byType.rspamd, window),
           loadClamavTrend(fleet.byType.clamav, window),
           loadDovecotTrend(fleet.byType.dovecot, window),
+          loadCyrusTrend(fleet.byType.cyrus, window),
           loadPostfixTrend(fleet.byType.postfix, window),
           loadRedisTrend(fleet.byType.redis, window),
           loadPostgresTrend(fleet.byType.postgres, window),
           loadMariadbTrend(fleet.byType.mariadb, window),
         ]);
-        setHistoryByType({ robin, rspamd, clamav, dovecot, postfix, redis, postgres, mariadb });
+        setHistoryByType({ robin, rspamd, clamav, dovecot, cyrus, postfix, redis, postgres, mariadb });
       } catch {
-        setHistoryByType({ robin: [], rspamd: [], clamav: [], dovecot: [], postfix: [], redis: [], postgres: [], mariadb: [] });
+        setHistoryByType({
+          robin: [], rspamd: [], clamav: [], dovecot: [],
+          cyrus: [], postfix: [], redis: [], postgres: [], mariadb: []
+        });
       }
     };
 
@@ -194,6 +202,10 @@ export function FleetMetricsPage() {
   const filteredDovecot = useMemo(
     () => filterServices(fleet?.byType.dovecot ?? [], search, statusFilter).sort(compareDovecotServices),
     [fleet?.byType.dovecot, search, statusFilter],
+  );
+  const filteredCyrus = useMemo(
+    () => filterServices(fleet?.byType.cyrus ?? [], search, statusFilter).sort(compareCyrusServices),
+    [fleet?.byType.cyrus, search, statusFilter],
   );
   const filteredPostfix = useMemo(
     () => filterServices(fleet?.byType.postfix ?? [], search, statusFilter).sort(comparePostfixServices),
@@ -227,6 +239,10 @@ export function FleetMetricsPage() {
   const dovecotChartLabels = useMemo(
     () => formatChartLabels(historyByType.dovecot.map((point) => point.timestamp), window),
     [historyByType.dovecot, window],
+  );
+  const cyrusChartLabels = useMemo(
+    () => formatChartLabels(historyByType.cyrus.map((point) => point.timestamp), window),
+    [historyByType.cyrus, window],
   );
   const postfixChartLabels = useMemo(
     () => formatChartLabels(historyByType.postfix.map((point) => point.timestamp), window),
@@ -268,6 +284,11 @@ export function FleetMetricsPage() {
     { label: 'IMAP commands', data: historyByType.dovecot.map((point) => point.secondary), color: '#f97316', fill: false },
     { label: 'Logins', data: historyByType.dovecot.map((point) => point.tertiary), color: '#22c55e', fill: false },
   ], [historyByType.dovecot]);
+  const cyrusSeries = useMemo(() => [
+    { label: 'Sessions', data: historyByType.cyrus.map((point) => point.primary), color: '#3b82f6', fill: true },
+    { label: 'IMAP commands', data: historyByType.cyrus.map((point) => point.secondary), color: '#f97316', fill: false },
+    { label: 'Logins', data: historyByType.cyrus.map((point) => point.tertiary), color: '#22c55e', fill: false },
+  ], [historyByType.cyrus]);
 
   const postfixSeries = useMemo(() => [
     { label: 'Queue total', data: historyByType.postfix.map((point) => point.primary), color: '#3b82f6', fill: true },
@@ -296,16 +317,18 @@ export function FleetMetricsPage() {
   const hasRspamdServices = (fleet?.byType.rspamd.length ?? 0) > 0;
   const hasClamavServices = (fleet?.byType.clamav.length ?? 0) > 0;
   const hasDovecotServices = (fleet?.byType.dovecot.length ?? 0) > 0;
+  const hasCyrusServices = (fleet?.byType.cyrus.length ?? 0) > 0;
   const hasPostfixServices = (fleet?.byType.postfix.length ?? 0) > 0;
   const hasRedisServices = (fleet?.byType.redis.length ?? 0) > 0;
   const hasPostgresServices = (fleet?.byType.postgres.length ?? 0) > 0;
   const hasMariadbServices = (fleet?.byType.mariadb.length ?? 0) > 0;
-  const hasFleetServices = hasRobinServices || hasRspamdServices || hasClamavServices || hasDovecotServices || hasPostfixServices || hasRedisServices || hasPostgresServices || hasMariadbServices;
+  const hasFleetServices = hasRobinServices || hasRspamdServices || hasClamavServices || hasDovecotServices || hasCyrusServices || hasPostfixServices || hasRedisServices || hasPostgresServices || hasMariadbServices;
 
   const robinMeta = getServiceTypeMeta('robin');
   const rspamdMeta = getServiceTypeMeta('rspamd');
   const clamavMeta = getServiceTypeMeta('clamav');
   const dovecotMeta = getServiceTypeMeta('dovecot');
+  const cyrusMeta = getServiceTypeMeta('cyrus');
   const postfixMeta = getServiceTypeMeta('postfix');
   const redisMeta = getServiceTypeMeta('redis');
   const postgresMeta = getServiceTypeMeta('postgres');
@@ -313,6 +336,7 @@ export function FleetMetricsPage() {
   const RspamdTypeIcon = rspamdMeta.icon;
   const ClamavTypeIcon = clamavMeta.icon;
   const DovecotTypeIcon = dovecotMeta.icon;
+  const CyrusTypeIcon = cyrusMeta.icon;
   const PostfixTypeIcon = postfixMeta.icon;
   const RedisTypeIcon = redisMeta.icon;
   const PostgresTypeIcon = postgresMeta.icon;
@@ -344,6 +368,14 @@ export function FleetMetricsPage() {
         setSelectedDovecotService(match);
       }
       navigate('/dovecot/metrics');
+      return;
+    }
+    if (service.serviceType === 'cyrus') {
+      const match = cyrusServices.find((candidate) => candidate.serviceId === service.serviceId);
+      if (match) {
+        setSelectedCyrusService(match);
+      }
+      navigate('/cyrus/metrics');
       return;
     }
 
@@ -388,7 +420,7 @@ export function FleetMetricsPage() {
       setSelectedRobinService(match);
     }
     navigate('/robin/metrics');
-  }, [clamavServices, dovecotServices, mariadbServices, postfixServices, postgresServices, redisServices, navigate, robinServices, rspamdServices, setSelectedClamavService, setSelectedDovecotService, setSelectedMariadbService, setSelectedPostfixService, setSelectedPostgresService, setSelectedRedisService, setSelectedRobinService, setSelectedRspamdService]);
+  }, [clamavServices, dovecotServices, cyrusServices, mariadbServices, postfixServices, postgresServices, redisServices, navigate, robinServices, rspamdServices, setSelectedClamavService, setSelectedDovecotService, setSelectedCyrusService, setSelectedMariadbService, setSelectedPostfixService, setSelectedPostgresService, setSelectedRedisService, setSelectedRobinService, setSelectedRspamdService]);
 
   const robinColumns: Column<RobinFleetDashboardService>[] = [
     {
@@ -520,6 +552,47 @@ export function FleetMetricsPage() {
     {
       key: 'name',
       header: 'Dovecot service',
+      render: (row) => (
+        <div>
+          <div className="font-medium">{row.name}</div>
+          <div className="text-xs text-gray-500 dark:text-gray-400">{row.serviceId}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (row) => <StatusBadge healthy={row.healthy} />,
+    },
+    {
+      key: 'sessions',
+      header: 'Sessions',
+      className: 'text-right',
+      render: (row) => String(row.metrics?.sessionCount ?? 0),
+    },
+    {
+      key: 'logins24h',
+      header: 'Logins (24h)',
+      className: 'text-right',
+      render: (row) => (row.metrics?.logins24h ?? 0).toLocaleString(),
+    },
+    {
+      key: 'imap24h',
+      header: 'IMAP cmds (24h)',
+      className: 'text-right',
+      render: (row) => (row.metrics?.imapCommands24h ?? 0).toLocaleString(),
+    },
+    {
+      key: 'auth24h',
+      header: 'Auth ok / fail (24h)',
+      className: 'text-right',
+      render: (row) => `${(row.metrics?.authSuccess24h ?? 0).toLocaleString()} / ${(row.metrics?.authFailure24h ?? 0).toLocaleString()}`,
+    },
+  ];
+  const cyrusColumns: Column<CyrusFleetDashboardService>[] = [
+    {
+      key: 'name',
+      header: 'Cyrus service',
       render: (row) => (
         <div>
           <div className="font-medium">{row.name}</div>
@@ -732,7 +805,7 @@ export function FleetMetricsPage() {
       <PageHeader
         icon={appIcons.fleetMetrics}
         title="Metrics"
-        description="Review Robin, Rspamd, ClamAV, Dovecot, Postfix, Redis, PostgreSQL, and MariaDB together in one compact fleet-wide workspace."
+        description="Review Robin, Rspamd, ClamAV, Dovecot, Cyrus IMAP, Postfix, Redis, PostgreSQL, and MariaDB together in one compact fleet-wide workspace."
         actions={(
           <>
             <div className="flex rounded-lg border border-gray-200 p-1 dark:border-robin-gray-700">
@@ -781,6 +854,9 @@ export function FleetMetricsPage() {
         )}
         {hasDovecotServices && (
           <CompactSummaryCard icon={<DovecotTypeIcon className="h-4 w-4" />} badgeClass={dovecotMeta.badgeClass} label="Dovecot" value={String(fleet?.overview.byType.dovecot.totalServices ?? 0)} />
+        )}
+        {hasCyrusServices && (
+          <CompactSummaryCard icon={<CyrusTypeIcon className="h-4 w-4" />} badgeClass={cyrusMeta.badgeClass} label="Cyrus" value={String(fleet?.overview.byType.cyrus.totalServices ?? 0)} />
         )}
         {hasPostfixServices && (
           <CompactSummaryCard icon={<PostfixTypeIcon className="h-4 w-4" />} badgeClass={postfixMeta.badgeClass} label="Postfix" value={String(fleet?.overview.byType.postfix.totalServices ?? 0)} />
@@ -960,6 +1036,39 @@ export function FleetMetricsPage() {
           />
         )}
       />
+      )}
+      {hasCyrusServices && (
+        <ServiceSection
+          icon={<CyrusTypeIcon className="h-4 w-4" />}
+          badgeClass={cyrusMeta.badgeClass}
+          title="Cyrus"
+          subtitle="Authentication volume, session load, and IMAP activity across managed Cyrus services."
+          totals={(
+            <>
+              <MiniMetricCard label="Logins (24h)" value={String((fleet?.overview.byType.cyrus.totals as CyrusFleetTotals | undefined)?.logins24h ?? 0)} />
+              <MiniMetricCard label="Sessions" value={String((fleet?.overview.byType.cyrus.totals as CyrusFleetTotals | undefined)?.sessions ?? 0)} />
+              <MiniMetricCard label="IMAP commands (24h)" value={String((fleet?.overview.byType.cyrus.totals as CyrusFleetTotals | undefined)?.imapCommands24h ?? 0)} />
+              <MiniMetricCard label="Mail deliveries (24h)" value={String((fleet?.overview.byType.cyrus.totals as CyrusFleetTotals | undefined)?.mailDeliveries24h ?? 0)} />
+            </>
+          )}
+          chartTitle="Cyrus activity trend"
+          chartSubtitle="Aggregated session, IMAP command, and login samples across enabled Cyrus services."
+          chartLabels={cyrusChartLabels}
+          chartSeries={cyrusSeries}
+          chartEmptyMessage="No Cyrus history is available for this window yet."
+          tableTitle="Cyrus services"
+          tableDescription="Click a row to continue in the Cyrus metrics workspace."
+          wideTable
+          table={(
+            <Table
+              columns={cyrusColumns}
+              data={filteredCyrus}
+              keyField="serviceId"
+              emptyMessage="No Cyrus services match the current filters"
+              onRowClick={(row) => handleOpenService(row)}
+            />
+          )}
+        />
       )}
 
       {hasPostfixServices && (
@@ -1276,6 +1385,17 @@ function compareDovecotServices(left: DovecotFleetDashboardService, right: Dovec
   }
   return left.name.localeCompare(right.name);
 }
+function compareCyrusServices(left: CyrusFleetDashboardService, right: CyrusFleetDashboardService) {
+  const leftActivity = (left.metrics?.logins24h ?? 0) + (left.metrics?.imapCommands24h ?? 0);
+  const rightActivity = (right.metrics?.logins24h ?? 0) + (right.metrics?.imapCommands24h ?? 0);
+  if (left.healthy !== right.healthy) {
+    return Number(right.healthy) - Number(left.healthy);
+  }
+  if (leftActivity !== rightActivity) {
+    return rightActivity - leftActivity;
+  }
+  return left.name.localeCompare(right.name);
+}
 
 function comparePostfixServices(left: PostfixFleetDashboardService, right: PostfixFleetDashboardService) {
   const leftActivity = (left.metrics?.queueTotal ?? 0) + (left.metrics?.queueDeferred ?? 0);
@@ -1424,6 +1544,27 @@ async function loadDovecotTrend(services: DovecotFleetDashboardService[], window
   );
 
   return aggregateDovecotHistory(histories, window);
+}
+async function loadCyrusTrend(services: CyrusFleetDashboardService[], window: WindowType) {
+  if (services.length === 0) {
+    return [];
+  }
+
+  const histories = await Promise.all(
+    services.map(async (service) => {
+      try {
+        const response = await metricsApi.getHistory<CyrusMetricsSnapshot[]>(
+          WINDOW_HOURS[window],
+          { serviceType: 'cyrus', serviceId: service.serviceId },
+        );
+        return response.data ?? [];
+      } catch {
+        return [];
+      }
+    }),
+  );
+
+  return aggregateCyrusHistory(histories, window);
 }
 
 async function loadPostfixTrend(services: PostfixFleetDashboardService[], window: WindowType) {
@@ -1608,6 +1749,28 @@ function aggregateClamavHistory(histories: ClamavMetricsSnapshot[][], window: Wi
 }
 
 function aggregateDovecotHistory(histories: DovecotMetricsSnapshot[][], window: WindowType) {
+  const bucketMinutes = window === '7d' ? 60 : 15;
+  const buckets = new Map<string, TrendPoint>();
+
+  for (const history of histories) {
+    for (let index = 1; index < history.length; index += 1) {
+      const previous = history[index - 1];
+      const current = history[index];
+      const bucket = bucketTimestamp(current.timestamp, bucketMinutes);
+      const entry = buckets.get(bucket) ?? { timestamp: bucket, primary: 0, secondary: 0, tertiary: 0 };
+      entry.primary += current.sessionCount;
+      entry.secondary += Math.max(0, current.imapCommands - previous.imapCommands);
+      entry.tertiary += Math.max(0, current.loginCount - previous.loginCount);
+      buckets.set(bucket, entry);
+    }
+  }
+
+  return downsampleData(
+    [...buckets.values()].sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime()),
+    140,
+  );
+}
+function aggregateCyrusHistory(histories: CyrusMetricsSnapshot[][], window: WindowType) {
   const bucketMinutes = window === '7d' ? 60 : 15;
   const buckets = new Map<string, TrendPoint>();
 

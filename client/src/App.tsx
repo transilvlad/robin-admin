@@ -60,6 +60,7 @@ const ClamavConfigPage = lazy(() => import('./pages/ClamavConfig').then((m) => (
 const ClamavMetricsPage = lazy(() => import('./pages/ClamavMetrics').then((m) => ({ default: m.ClamavMetricsPage })));
 const ClamavScanPage = lazy(() => import('./pages/ClamavScan').then((m) => ({ default: m.ClamavScanPage })));
 const DovecotConfigPage = lazy(() => import('./pages/DovecotConfig').then((m) => ({ default: m.DovecotConfigPage })));
+const CyrusMetricsPage = lazy(() => import('./pages/CyrusMetrics').then((m) => ({ default: m.CyrusMetricsPage })));
 const DovecotMetricsPage = lazy(() => import('./pages/DovecotMetrics').then((m) => ({ default: m.DovecotMetricsPage })));
 const PostfixConfigPage = lazy(() => import('./pages/PostfixConfig').then((m) => ({ default: m.PostfixConfigPage })));
 const PostfixMetricsPage = lazy(() => import('./pages/PostfixMetrics').then((m) => ({ default: m.PostfixMetricsPage })));
@@ -341,6 +342,8 @@ export function App() {
                   <Route path="clamav/metrics" element={<ServiceRoute type="clamav" capability="metrics"><Suspended><ClamavMetricsPage /></Suspended></ServiceRoute>} />
                   <Route path="clamav/scan" element={<ServiceRoute type="clamav" capability="scan" requireAdmin><Suspended><ClamavScanPage /></Suspended></ServiceRoute>} />
                   <Route path="dovecot/config" element={<ServiceRoute type="dovecot" capability="config" requireAdmin><Suspended><DovecotConfigPage /></Suspended></ServiceRoute>} />
+                      <Route path="cyrus/metrics" element={<ServiceRoute type="cyrus" capability="metrics"><Suspended><CyrusMetricsPage /></Suspended></ServiceRoute>} />
+                      <Route path="cyrus/logs" element={<ServiceRoute type="cyrus" capability="logs" requireAdmin><Suspended><ServiceLogsPage serviceType="cyrus" /></Suspended></ServiceRoute>} />
                   <Route path="dovecot/metrics" element={<ServiceRoute type="dovecot" capability="metrics"><Suspended><DovecotMetricsPage /></Suspended></ServiceRoute>} />
                   <Route path="postfix/config" element={<ServiceRoute type="postfix" capability="config" requireAdmin><Suspended><PostfixConfigPage /></Suspended></ServiceRoute>} />
                   <Route path="postfix/queue" element={<ServiceRoute type="postfix" capability="postfixQueue" requireAdmin><Suspended><PostfixQueuePage /></Suspended></ServiceRoute>} />

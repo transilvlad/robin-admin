@@ -45,6 +45,45 @@ export function DovecotConfigForm({ config, onChange, baseConfig, disabled }: Do
         </div>
       </ConfigSection>
 
+      <ConfigSection
+        title="Mail proxy authentication"
+        description="Let an IMAP/POP3 proxy (nginx mail auth_http) authenticate users and resolve aliases through Robin's API."
+        defaultExpanded={config.proxyAuth?.enabled ?? false}
+      >
+        <ToggleField
+          label="Proxy authentication enabled"
+          value={config.proxyAuth?.enabled ?? false}
+          onChange={(v) => update('proxyAuth', { ...config.proxyAuth, enabled: v })}
+          disabled={disabled}
+          isOverridden={isOverridden('proxyAuth')}
+        />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <TextField
+            label="IMAP backend"
+            value={config.proxyAuth?.imap ?? ''}
+            onChange={(v) => update('proxyAuth', { ...config.proxyAuth, imap: v })}
+            help="Backend host:port; empty disables IMAP proxy authentication"
+            placeholder="mailbox-backend:143"
+            disabled={disabled}
+          />
+          <TextField
+            label="POP3 backend"
+            value={config.proxyAuth?.pop3 ?? ''}
+            onChange={(v) => update('proxyAuth', { ...config.proxyAuth, pop3: v })}
+            help="Backend host:port; empty disables POP3 proxy authentication"
+            placeholder="mailbox-backend:110"
+            disabled={disabled}
+          />
+          <NumberField
+            label="Failure wait (seconds)"
+            value={config.proxyAuth?.failureWait ?? 3}
+            onChange={(v) => update('proxyAuth', { ...config.proxyAuth, failureWait: v })}
+            min={0}
+            disabled={disabled}
+          />
+        </div>
+      </ConfigSection>
+
       <ConfigSection title="Socket authentication" description="Dovecot UNIX socket backend" defaultExpanded={config.authSocket?.enabled ?? false}>
         <ToggleField
           label="Socket auth enabled"
