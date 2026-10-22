@@ -20,7 +20,7 @@ missing or left at a known default.
 | `SESSION_SECRET` | development placeholder | Signs session cookies. Use a long random value. |
 | `ROBIN_ADMIN_ENCRYPTION_KEY` | none | Encrypts stored secrets (webhook URLs, API tokens, service credentials). At least 32 characters. Keep it with your backups: stored secrets cannot be read without it. |
 | `DB_PASSWORD` | `robin` | PostgreSQL password. The default is refused in production. |
-| `ROBIN_ADMIN_PUBLIC_URL` | `https://localhost:3443` | The browser-facing URL, including any base path (for example `https://admin.example.com/admin`); not a localhost address. Links in emails, feeds and alerts are built from it, never from request headers. |
+| `ROBIN_ADMIN_PUBLIC_URL` | `https://localhost:3443` | The browser-facing URL, including any base path (for example `https://admin.example.com/admin`). Must be set explicitly in production; a localhost address is accepted when Robin Admin is only reached locally. Links in emails, feeds and alerts are built from it, never from request headers. |
 | `COOKIE_SECURE` | on in production | Must stay on. |
 | `MODULE_PROXY_SECRETS_JSON` | `{}` | JSON object of per-module proxy secrets, for example `{"robin-tools":"..."}`. Required when `MODULES_BOOTSTRAP_JSON` lists modules with a backend. |
 | `FLEET_AGENTS_BOOTSTRAP_JSON`, `SUITE_AGENT_CREDENTIAL` | none | When set, agent credentials must not be the demo or placeholder values. |

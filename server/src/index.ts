@@ -187,7 +187,6 @@ function assertProductionSecrets() {
       ? 'ROBIN_ADMIN_ENCRYPTION_KEY'
       : null,
     !process.env.ROBIN_ADMIN_PUBLIC_URL?.trim()
-      || /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::|\/|$)/.test(config.publicBaseUrl)
       ? 'ROBIN_ADMIN_PUBLIC_URL'
       : null,
     usesKnownDemoAgentCredential() || usesPlaceholderAgentCredential() ? 'FLEET_AGENTS_BOOTSTRAP_JSON/SUITE_AGENT_CREDENTIAL' : null,
