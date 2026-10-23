@@ -31,7 +31,7 @@ permissions:
   pull-requests: read
 
 env:
-  NODE_VERSION: '26.10.0'
+  NODE_VERSION: '26.12.1'
   REGISTRY: ghcr.io
   CLIENT_IMAGE: ghcr.io/${{ github.repository_owner }}/robin-admin-client
   SERVER_IMAGE: ghcr.io/${{ github.repository_owner }}/robin-admin-server

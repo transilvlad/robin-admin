@@ -1,4 +1,4 @@
-FROM node:26.11.1-alpine AS runtime
+FROM node:26.12.1-alpine AS runtime
 # Patch Alpine OS packages so the release Trivy gate passes. npm is not used at
 # runtime; removing it drops its bundled dependencies from the image.
 RUN apk upgrade --no-cache && apk add --no-cache docker-cli \

@@ -69,7 +69,7 @@ unauthorized administrative actions are hidden.
 
 ### Prerequisites
 
-- Node.js 22.22.2+, 24.15+ or 26+
+- Node.js 22.23.4+, 24.22.1+ or 26.12.1+ (supported release lines)
 - PostgreSQL (a dedicated Robin Admin database is supported)
 - Robin MTA is optional; MTA-specific controls remain unavailable until it is configured
 

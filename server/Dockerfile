@@ -1,4 +1,4 @@
-FROM node:26.11.1-bookworm-slim AS builder
+FROM node:26.12.1-bookworm-slim AS builder
 
 WORKDIR /app
 ENV npm_config_update_notifier=false
@@ -12,13 +12,13 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM node:26.11.1-bookworm-slim AS production-dependencies
+FROM node:26.12.1-bookworm-slim AS production-dependencies
 
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-FROM node:26.11.1-bookworm-slim AS runtime
+FROM node:26.12.1-bookworm-slim AS runtime
 
 # Patch Debian OS packages (gnutls, libcap2, gpgv, ...) so the release Trivy
 # gate passes; Node itself is installed from nodejs.org, not apt, so it is

@@ -11,7 +11,7 @@ non-regular files, and any group/world-readable, writable, or executable mode.
 
 ## Install with systemd
 
-1. Install Node.js 26.10.0 or newer and the Docker CLI.
+1. Install a patched Node.js release (22.23.4+, 24.22.1+ or 26.12.1+) and the Docker CLI.
 2. Copy this repository (or `installer/`) to `/opt/robin-admin`.
 3. Create a locked service account and state/config directories:
 

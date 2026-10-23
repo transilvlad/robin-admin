@@ -2,7 +2,7 @@
 
 Run `node scripts/reliability-soak.mjs` from `server` after building the backend
 and `docker build -t robin-agent:reliability agent` from the repository root.
-Linux, Node 22.22.2+, 24.15+ or 26+, PostgreSQL, Docker and OpenSSL are required. Database
+Linux, Node 22.23.4+, 24.22.1+ or 26.12.1+, PostgreSQL, Docker and OpenSSL are required. Database
 credentials use `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`; the host must be
 loopback. The harness creates and drops only its new `robin_test_reliability_*`
 database, uses isolated listeners and removes its own agent container. It does
