@@ -16,7 +16,7 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM nginx:1.31.6-alpine AS runtime
+FROM nginx:1.31.8-alpine@sha256:1ef7ca94d7879df82421428ce13bd1eaa412404953859cf7a5b6512c25e67a60 AS runtime
 
 # Patch Alpine OS packages (openssl et al.) so the release Trivy gate passes.
 RUN apk upgrade --no-cache && apk add --no-cache 'pcre2>=10.49-r0'

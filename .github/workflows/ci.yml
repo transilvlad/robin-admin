@@ -94,15 +94,15 @@ jobs:
       - name: Run linters
         run: npm run lint
       - name: Audit root dependencies
-        run: npm audit --omit=dev --audit-level=moderate
+        run: npm audit --audit-level=moderate
 
       - name: Audit client dependencies
         working-directory: client
-        run: npm audit --omit=dev --audit-level=moderate
+        run: npm audit --audit-level=moderate
 
       - name: Audit server dependencies
         working-directory: server
-        run: npm audit --omit=dev --audit-level=moderate
+        run: npm audit --audit-level=moderate
       - name: Verify package versions
         env:
           REF: ${{ github.ref }}
