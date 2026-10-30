@@ -222,6 +222,19 @@ export const CAPABILITY_RULES: readonly CapabilityRule[] = [
     check: (f) => agentRuns(f.metricsMode === 'agent' ? f.metricsAgent : null, f.serviceType === 'cyrus' ? 'cyrus.sessions' : 'dovecot.who', 'Needs a mailbox server in agent mode (OpenMetrics has no session list)'),
   },
   {
+    id: 'acl',
+    label: 'Shared mailbox ACL',
+    surface: 'Dovecot → Metrics → Sharing',
+    types: ['dovecot'],
+    check: (f) => {
+      for (const action of ['dovecot.acl.get', 'dovecot.acl.set', 'dovecot.acl.delete']) {
+        const reason = agentRuns(f.metricsMode === 'agent' ? f.metricsAgent : null, action, 'Needs Dovecot in agent mode with the ACL plugin');
+        if (reason) return reason;
+      }
+      return null;
+    },
+  },
+  {
     id: 'kick',
     label: 'Disconnect a user',
     surface: 'Dovecot → Metrics → Sessions',
@@ -311,7 +324,7 @@ export interface SetupChoice {
 export const AGENT_ACTIONS_BY_TYPE: Partial<Record<FleetServiceType, readonly string[]>> = {
   postfix: ['postfix.queue.list', 'postfix.queue.show', 'postfix.queue.hold', 'postfix.queue.release', 'postfix.queue.requeue', 'postfix.queue.delete', 'postfix.queue.deliver', 'postfix.queue.flush', 'postfix.reload'],
   cyrus: ['cyrus.sessions', 'cyrus.quota', 'cyrus.user'],
-  dovecot: ['dovecot.reload', 'dovecot.who', 'dovecot.kick', 'dovecot.quota', 'dovecot.user'],
+  dovecot: ['dovecot.reload', 'dovecot.who', 'dovecot.kick', 'dovecot.quota', 'dovecot.user', 'dovecot.acl.get', 'dovecot.acl.set', 'dovecot.acl.delete'],
   rspamd: ['rspamd.reload'],
 };
 

@@ -16,6 +16,7 @@ import {
 } from './managed-config-file.js';
 import { DOVECOT_MANAGED_FILES, DOVECOT_MANAGED_FILES_BY_KEY } from './dovecot-config-files.js';
 import { logger } from '../logger.js';
+import { normalizeMailAddress } from '../db/queries/mail-policy.js';
 
 // The conf.d include the robin-agent writes and Dovecot loads via its default
 // `!include conf.d/*.conf`.
@@ -536,5 +537,115 @@ export async function getDovecotQuota(serviceId: string, user?: string): Promise
       return { available: false, reason: "The userdb can't list users, so quota is available per user only.", rows: [] };
     }
     throw error;
+  }
+}
+
+export const DOVECOT_ACL_RIGHTS = [
+  'lookup', 'read', 'write', 'write-seen', 'write-deleted',
+  'insert', 'post', 'expunge', 'create', 'delete',
+] as const;
+
+export interface DovecotAclEntry {
+  identifier: string;
+  global: boolean;
+  rights: string[];
+}
+
+export interface DovecotAclState {
+  owner: string;
+  mailbox: string;
+  entries: DovecotAclEntry[];
+}
+
+export class DovecotAclError extends Error {
+  constructor(message: string, public readonly status: number, public readonly outcomeUnknown = false) {
+    super(message);
+  }
+}
+
+function aclTarget(input: Record<string, unknown>, change: boolean) {
+  try {
+    const owner = normalizeMailAddress(input.owner);
+    const supportedAddress = (address: string) => address.length <= 256 && /^[a-z0-9][a-z0-9._+=-]{0,63}@/.test(address);
+    if (!supportedAddress(owner)) throw new Error('Owner address contains characters unsupported by the command agent');
+    const mailbox = typeof input.mailbox === 'string' ? input.mailbox : '';
+    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(mailbox)
+      || mailbox.split('/').some((part) => !part || part === '.' || part === '..')) {
+      throw new Error('mailbox must be a plain mailbox name without patterns or traversal');
+    }
+    const member = change ? normalizeMailAddress(input.member) : undefined;
+    if (member && !supportedAddress(member)) throw new Error('Member address contains characters unsupported by the command agent');
+    if (member === owner) throw new Error('member must differ from the owner');
+    return { owner, mailbox, member };
+  } catch (error) {
+    throw new DovecotAclError(error instanceof Error ? error.message : 'Invalid ACL target', 400);
+  }
+}
+
+export function parseDovecotAcl(raw: string): DovecotAclEntry[] {
+  const lines = raw.replace(/\r/g, '').replace(/\n$/, '').split('\n');
+  if (lines[0]?.toLowerCase() !== 'id\tglobal\trights') {
+    throw new Error('Unrecognized Dovecot ACL readback header');
+  }
+  const seen = new Set<string>();
+  return lines.slice(1).map((line) => {
+    const columns = line.split('\t');
+    if (columns.length !== 3 || !columns[0] || !['', '0', '1'].includes(columns[1]!)) {
+      throw new Error('Malformed Dovecot ACL readback row');
+    }
+    const [identifier, globalValue, rightsValue] = columns as [string, string, string];
+    const rights = rightsValue ? rightsValue.split(' ') : [];
+    if (rights.some((right) => !/^[a-z][a-z-]*$/.test(right)) || new Set(rights).size !== rights.length) {
+      throw new Error('Malformed Dovecot ACL rights');
+    }
+    const key = `${identifier}:${globalValue === '1'}`;
+    if (seen.has(key)) throw new Error('Duplicate Dovecot ACL readback entry');
+    seen.add(key);
+    return { identifier, global: globalValue === '1', rights };
+  });
+}
+
+export async function manageDovecotAcl(
+  serviceId: string,
+  operation: 'get' | 'set' | 'delete',
+  input: Record<string, unknown>,
+): Promise<DovecotAclState> {
+  const target = aclTarget(input, operation !== 'get');
+  let rights: string[] = [];
+  if (operation === 'set') {
+    if (!Array.isArray(input.rights) || input.rights.length === 0 || input.rights.length > DOVECOT_ACL_RIGHTS.length
+      || input.rights.some((right: unknown) => typeof right !== 'string' || !(DOVECOT_ACL_RIGHTS as readonly string[]).includes(right))
+      || new Set(input.rights).size !== input.rights.length) {
+      throw new DovecotAclError('rights must be distinct supported ACL rights; admin is not permitted', 400);
+    }
+    rights = input.rights as string[];
+  }
+  const service = await getResolvedService(serviceId);
+  if (!service.enabled) throw new DovecotAclError('Dovecot service is disabled', 503);
+  const agentId = commandAgentFor(service, 'metrics');
+  if (!agentId) throw new DovecotAclError('Sharing requires an assigned Dovecot metrics agent with ACL support', 503);
+  try {
+    const raw = await runAgentCommand(agentId, service, `dovecot.acl.${operation}`, {
+      user: target.owner, mailbox: target.mailbox,
+      ...(target.member ? { member: target.member } : {}),
+      ...(operation === 'set' ? { rights } : {}),
+    });
+    const entries = parseDovecotAcl(raw);
+    const matching = entries.filter((entry) => entry.identifier === `user=${target.member}`);
+    if (operation === 'set' && (matching.length !== 1 || matching[0]!.global
+      || matching[0]!.rights.length !== rights.length || rights.some((right) => !matching[0]!.rights.includes(right)))) {
+      throw new Error('Backend readback did not confirm the requested named-user rights');
+    }
+    if (operation === 'delete' && matching.length !== 0) {
+      throw new Error('Backend readback still contains the named-user ACL entry');
+    }
+    return { owner: target.owner, mailbox: target.mailbox, entries };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Dovecot ACL operation failed';
+    throw new DovecotAclError(
+      operation === 'get' ? message : `ACL change is unconfirmed; it may already have taken effect. Read back before retrying. ${message}`,
+      502,
+      operation !== 'get',
+    );
   }
 }

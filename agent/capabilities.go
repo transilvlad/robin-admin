@@ -107,12 +107,34 @@ type actionProbe struct {
 	argv []string
 	// unavailable is output meaning the action can't work in this setup.
 	unavailable string
+	refusals    []string
+}
+
+var dovecotAclProbe = actionProbe{
+	argv:        []string{"doveadm", "acl", "get", "-u", "robin-agent-probe", "INBOX"},
+	unavailable: "Unknown command 'acl'",
+	refusals:    []string{"ACL not enabled", "acl plugin is not loaded"},
 }
 
 var actionProbes = map[string]actionProbe{
 	// doveadm has no quota command unless the quota plugin is loaded; a lookup
 	// for a user that doesn't exist tells the two apart without touching data.
-	"dovecot.quota": {argv: []string{"doveadm", "quota", "get", "-u", "robin-agent-probe"}, unavailable: "Unknown command 'quota'"},
+	"dovecot.quota":      {argv: []string{"doveadm", "quota", "get", "-u", "robin-agent-probe"}, unavailable: "Unknown command 'quota'"},
+	"dovecot.acl.get":    dovecotAclProbe,
+	"dovecot.acl.set":    dovecotAclProbe,
+	"dovecot.acl.delete": dovecotAclProbe,
+}
+
+func (probe actionProbe) accepts(output string) bool {
+	if strings.Contains(output, probe.unavailable) {
+		return false
+	}
+	for _, refusal := range probe.refusals {
+		if strings.Contains(output, refusal) {
+			return false
+		}
+	}
+	return true
 }
 
 func probeAction(parent context.Context, c config, serviceID string, probe actionProbe) bool {
@@ -127,7 +149,7 @@ func probeAction(parent context.Context, c config, serviceID string, probe actio
 	if err != nil && !errors.As(err, &exitErr) {
 		return false
 	}
-	return !strings.Contains(string(out), probe.unavailable)
+	return probe.accepts(string(out))
 }
 
 // serviceActions lists the actions whose every tool is present for svc.
@@ -140,7 +162,7 @@ func serviceActions(c config, svc ownedService, has func(serviceID, tool string)
 		if spec.serviceType != svc.ServiceType {
 			continue
 		}
-		argvs, err := spec.build(map[string]any{"queueIds": []any{"AAAAA"}, "queueId": "AAAAA", "user": "probe"})
+		argvs, err := spec.build(map[string]any{"queueIds": []any{"AAAAA"}, "queueId": "AAAAA", "user": "probe@example.test", "mailbox": "INBOX", "member": "member@example.test", "rights": []any{"lookup", "read"}})
 		if err != nil || len(argvs) == 0 {
 			continue
 		}

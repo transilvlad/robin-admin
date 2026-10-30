@@ -80,7 +80,7 @@ describe('DovecotMetricsPage', () => {
   });
 
   it('renders live activity and hides agent tools and session counts without an agent', async () => {
-    denyCapabilities('sessions', 'kick', 'quota');
+    denyCapabilities('sessions', 'kick', 'quota', 'acl');
     render(<MemoryRouter><DovecotMetricsPage /></MemoryRouter>);
 
     expect(await screen.findByText('Dovecot metrics')).toBeInTheDocument();
@@ -89,6 +89,7 @@ describe('DovecotMetricsPage', () => {
     expect(screen.queryByText('7373')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Raw/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Sessions/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sharing/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Users$/ })).not.toBeInTheDocument();
   });
 

@@ -355,6 +355,13 @@ router.delete('/:id', requireEditor, async (req: Request, res: Response) => {
     });
   } catch (error) {
     logger.error('Failed to delete user', { error: (error as Error).message });
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23503') {
+      res.status(409).json({
+        success: false,
+        error: 'This mailbox is still referenced by policy or related data. Remove catch-all destinations and other references before deleting it.',
+      });
+      return;
+    }
     res.status(500).json({
       success: false,
       error: 'Failed to delete user',

@@ -15,6 +15,8 @@ import {
   saveDovecotManagedConfig,
   saveDovecotManagedFile,
   withDetectedDovecotVersion,
+  DovecotAclError,
+  manageDovecotAcl,
 } from '../services/dovecot.js';
 import { routeParam } from './params.js';
 
@@ -22,6 +24,42 @@ const router = Router();
 
 router.use(requireAuth);
 router.use(requireAdmin);
+
+for (const [method, operation] of [['get', 'get'], ['put', 'set'], ['delete', 'delete']] as const) {
+  router[method]('/acl', async (req: Request, res: Response) => {
+    const serviceId = getServiceId(req);
+    if (!serviceId) return res.status(400).json({ success: false, error: 'serviceId is required' });
+    const auditTarget = Object.fromEntries(['owner', 'mailbox', 'member'].flatMap((key) => {
+      const value: unknown = req.body?.[key];
+      return typeof value === 'string' && /^[a-zA-Z0-9._@+=/-]{1,256}$/.test(value.trim())
+        ? [[key, key === 'mailbox' ? value.trim() : value.trim().toLowerCase()]]
+        : [];
+    }));
+    try {
+      const state = await manageDovecotAcl(serviceId, operation, operation === 'get' ? req.query : req.body ?? {});
+      if (operation !== 'get') {
+        await logAudit(req, AuditActions.CONFIG_UPDATE, {
+          entityType: 'dovecot_acl', entityId: serviceId,
+          newValues: { action: operation, ...auditTarget, owner: state.owner, mailbox: state.mailbox, applied: true },
+        });
+      }
+      res.json({ success: true, data: { ...state, ...(operation !== 'get' ? { applied: true } : {}) } });
+    } catch (error) {
+      const status = error instanceof DovecotAclError ? error.status : 502;
+      const outcomeUnknown = error instanceof DovecotAclError ? error.outcomeUnknown : operation !== 'get';
+      if (operation !== 'get') {
+        await logAudit(req, AuditActions.CONFIG_UPDATE, {
+          entityType: 'dovecot_acl', entityId: serviceId,
+          newValues: { action: operation, ...auditTarget, applied: false, outcomeUnknown, status },
+        });
+      }
+      res.status(status).json({
+        success: false, applied: false, outcomeUnknown,
+        error: error instanceof Error ? error.message : 'Dovecot ACL operation failed',
+      });
+    }
+  });
+}
 
 function getServiceId(req: Request): string | undefined {
   return typeof req.query.serviceId === 'string' && req.query.serviceId.trim() !== ''

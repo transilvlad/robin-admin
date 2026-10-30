@@ -239,6 +239,15 @@ export function UsersPage() {
             onChange={(e) => setFormPassword(e.target.value)}
             required={!editingUser}
           />
+          {editingUser && (
+            <p className="text-sm text-amber-700 dark:text-amber-300">
+              Password changes do not disconnect existing mail sessions. Cached authentication may require backend
+              invalidation or expiry; disconnect sessions explicitly when revoking access.
+            </p>
+          )}
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Creating or renaming an account does not grant send-as permission. Review its explicit grants under Domains &amp; send-as.
+          </p>
 
           <div className="grid grid-cols-2 gap-4">
             {optionalColumns?.includes('uid') && <Input

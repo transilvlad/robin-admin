@@ -68,6 +68,17 @@ Passwords are stored in Dovecot-compatible format:
 
 The salt is randomly generated for each password.
 
+Changing the mailbox password is not session revocation. Backend authentication
+caches must expire or be explicitly invalidated, and existing IMAP/POP sessions
+must be disconnected separately. The production Dovecot configuration disables
+its auth cache for next-login revocation; active sessions still require a kick or
+reconnect. Admin-console password recovery and sessions are separate from mailbox
+authentication. This editor does not provision mailbox self-service login,
+MFA, OAuth tokens or protocol app passwords.
+
+A mailbox referenced as a domain catch-all cannot be deleted until that reference
+is removed. Admin reports this as HTTP 409 instead of implying deletion succeeded.
+
 ### Maildir structure
 
 Default paths follow this pattern:
@@ -143,6 +154,34 @@ Neither an alias nor access to a shared network grants permission to send.
 Delegated send-as does **not** create an IMAP ACL or permit reading another
 mailbox. Shared mailbox access must be provisioned and read back through the
 actual mailbox backend.
+
+### Dovecot shared-mailbox ACLs
+
+The **Dovecot metrics -> Sharing** tab is available only when an assigned
+metrics agent advertises all three `dovecot.acl.get/set/delete` actions. Older
+agents and direct-only/Cyrus services do not acquire this feature automatically.
+Enable the actual Dovecot ACL plugin, shared namespace and sharing map in the
+backend first; this UI does not create mailboxes or namespace configuration.
+
+An admin can inspect an exact owner's mailbox, replace a named member's rights,
+or remove that named entry. Mailbox patterns, shell syntax and `admin` rights
+are rejected. Set/delete execute through the fixed command allowlist and then
+`doveadm -f tab acl get`; only matching backend readback is confirmed as applied.
+The read-only preset is `lookup read`; read-and-seen adds `write-seen`.
+No SQL mailbox-grant table or implicit send-as permission is created.
+
+Readback is the stored ACL, not a proof of effective access through other groups,
+global policies or existing client sessions. Removing a named entry does not
+revoke those other paths. Reconnect or explicitly disconnect sessions to
+re-evaluate access. A command timeout or readback mismatch returns an unconfirmed
+outcome: the mutation may already have taken effect. Read again before retrying;
+there is no automatic rollback.
+
+Admin-only API: `GET /api/dovecot/acl?serviceId=...&owner=...&mailbox=INBOX`;
+`PUT`/`DELETE /api/dovecot/acl` accept `{serviceId,owner,mailbox,member}` with
+`rights` (an array) for PUT. Confirmed writes include `data.applied:true`.
+Unconfirmed writes return non-2xx, `applied:false,outcomeUnknown:true`, and are
+audited as failed/unconfirmed rather than successful configuration changes.
 
 These are saved database policies, not proof of enforcement. The consuming
 Robin instance must enable `senderAuthorization` with the suite query and check

@@ -41,4 +41,13 @@ describe('schema-aware mailbox forms', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create user' }));
     await waitFor(() => expect(create).toHaveBeenCalledWith('person@example.test', 'testPassword123', 0, 0));
   });
+
+  it('distinguishes changing a mailbox password from terminating sessions or granting send-as', async () => {
+    list.mockResolvedValue({ data: [{ id: 1, email: 'person@example.test' }], pagination: { total: 1, totalPages: 1 } });
+    render(<MemoryRouter><UsersPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByTitle('Edit'));
+    expect(screen.getByText(/Password changes do not disconnect/)).toBeInTheDocument();
+    expect(screen.getByText(/Cached authentication may require backend/)).toBeInTheDocument();
+    expect(screen.getByText(/Creating or renaming an account does not grant send-as/)).toBeInTheDocument();
+  });
 });

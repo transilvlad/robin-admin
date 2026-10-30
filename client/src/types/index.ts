@@ -2712,6 +2712,13 @@ export interface DovecotSession {
   destIp: string;
 }
 
+export interface DovecotAclState {
+  owner: string;
+  mailbox: string;
+  entries: Array<{ identifier: string; global: boolean; rights: string[] }>;
+  applied?: boolean;
+}
+
 export interface DovecotQuotaResult {
   available: boolean;
   reason: string | null;

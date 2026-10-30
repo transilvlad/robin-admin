@@ -119,7 +119,10 @@ func postsuper(flag string) func(map[string]any) ([][]string, error) {
 }
 
 var commandSpecs = map[string]commandSpec{
-	"cyrus.sessions": {"cyrus", fixed("cyr_info", "proc")},
+	"dovecot.acl.get":    {"dovecot", aclGet},
+	"dovecot.acl.set":    {"dovecot", aclChange("set")},
+	"dovecot.acl.delete": {"dovecot", aclChange("delete")},
+	"cyrus.sessions":     {"cyrus", fixed("cyr_info", "proc")},
 	"cyrus.quota": {"cyrus", func(args map[string]any) ([][]string, error) {
 		if args["user"] == nil || args["user"] == "" {
 			return [][]string{{"quota"}}, nil

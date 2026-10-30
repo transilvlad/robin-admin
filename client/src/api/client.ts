@@ -50,6 +50,7 @@ import type {
   DovecotMetricsSnapshot,
   DovecotQuotaResult,
   DovecotSession,
+  DovecotAclState,
   DovecotUserLookup,
   DovecotMetricsStats,
   PostfixConfigState,
@@ -1322,6 +1323,19 @@ export const clamavApi = {
 };
 
 export const dovecotApi = {
+  getAcl: (serviceId: string, owner: string, mailbox: string) =>
+    request<ApiResponse<DovecotAclState>>(`/dovecot/acl?${new URLSearchParams({ serviceId, owner, mailbox })}`),
+
+  setAcl: (serviceId: string, owner: string, mailbox: string, member: string, rights: string[]) =>
+    request<ApiResponse<DovecotAclState>>('/dovecot/acl', {
+      method: 'PUT', body: JSON.stringify({ serviceId, owner, mailbox, member, rights }),
+    }),
+
+  deleteAcl: (serviceId: string, owner: string, mailbox: string, member: string) =>
+    request<ApiResponse<DovecotAclState>>('/dovecot/acl', {
+      method: 'DELETE', body: JSON.stringify({ serviceId, owner, mailbox, member }),
+    }),
+
   getConfig: (serviceId: string) =>
     request<ApiResponse<DovecotConfigState>>(`/dovecot/config?serviceId=${encodeURIComponent(serviceId)}`),
 

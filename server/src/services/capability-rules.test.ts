@@ -71,6 +71,15 @@ describe('capability rules', () => {
     expect(caps.quota).toEqual({ available: false, reason: 'Needs the Dovecot quota plugin (mail_plugins = quota)' });
   });
 
+  it('offers sharing only when the Dovecot agent reports every ACL action', () => {
+    const facts = setupFacts('dovecot', { agent: 'container', reachable: false });
+    facts.metricsAgent = { ...facts.metricsAgent!, actions: new Set(['dovecot.acl.get', 'dovecot.acl.set']) };
+    expect(evaluateCapabilities(facts).acl.available).toBe(false);
+    facts.metricsAgent.actions = new Set(['dovecot.acl.get', 'dovecot.acl.set', 'dovecot.acl.delete']);
+    expect(evaluateCapabilities(facts).acl.available).toBe(true);
+    expect(evaluateCapabilities(setupFacts('dovecot', { agent: 'none', reachable: true })).acl.available).toBe(false);
+  });
+
   it('serves raw output from agent snapshots only where they keep it', () => {
     expect(evaluateCapabilities(setupFacts('clamav', { agent: 'local', reachable: false })).raw.available).toBe(true);
     expect(evaluateCapabilities(setupFacts('rspamd', { agent: 'local', reachable: false })).raw.available).toBe(false);

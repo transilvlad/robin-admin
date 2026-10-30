@@ -3,6 +3,7 @@ import { Activity, BarChart3, FileText, Inbox, MonitorSmartphone, PieChart, Refr
 import { dovecotApi } from '../api/client';
 import { LineChart, downsampleData, formatChartLabels } from '../components/charts';
 import { DovecotQuotaPanel, DovecotSessionsPanel } from '../components/fleet/DovecotPanels';
+import { DovecotSharingPanel } from '../components/fleet/DovecotSharingPanel';
 import { PageServiceSelector } from '../components/fleet/PageServiceSelector';
 import { Button } from '../components/ui/Button';
 import { MetricCard } from '../components/ui/MetricCard';
@@ -16,18 +17,19 @@ import { useServiceCapabilities } from '../context/FeaturesContext';
 import { useCapableTabs } from '../hooks/useCapableTabs';
 import type { DovecotMetricsSnapshot, DovecotMetricsStats } from '../types';
 
-type TabType = 'overview' | 'sessions' | 'quota' | 'raw';
+type TabType = 'overview' | 'sessions' | 'quota' | 'sharing' | 'raw';
 type WindowType = '1h' | '6h' | '24h' | '7d';
 
 const TABS: readonly MetricTab<TabType>[] = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
   { id: 'sessions', label: 'Sessions', icon: MonitorSmartphone },
   { id: 'quota', label: 'Quota', icon: PieChart },
+  { id: 'sharing', label: 'Sharing', icon: Users },
   { id: 'raw', label: 'Raw', icon: FileText },
 ];
 
 // Sessions and quota run doveadm through the service's robin-agent.
-const TAB_NEEDS: Partial<Record<TabType, string>> = { sessions: 'sessions', quota: 'quota', raw: 'raw' };
+const TAB_NEEDS: Partial<Record<TabType, string>> = { sessions: 'sessions', quota: 'quota', sharing: 'acl', raw: 'raw' };
 
 const WINDOW_HOURS: Record<WindowType, number> = {
   '1h': 1,
@@ -68,7 +70,7 @@ export function DovecotMetricsPage() {
 
     try {
       setError('');
-      if (tab === 'sessions' || tab === 'quota') {
+      if (tab === 'sessions' || tab === 'quota' || tab === 'sharing') {
         return;
       } else if (tab === 'raw') {
         setRawText(await dovecotApi.getMetricsRaw(serviceId));
@@ -178,6 +180,8 @@ export function DovecotMetricsPage() {
         <DovecotSessionsPanel serviceId={serviceId} canKick={can('kick')} />
       ) : tab === 'quota' ? (
         <DovecotQuotaPanel serviceId={serviceId} />
+      ) : tab === 'sharing' ? (
+        <DovecotSharingPanel key={serviceId} serviceId={serviceId} />
       ) : tab === 'raw' ? (
         <div className="card p-4">
           <h2 className="text-lg font-semibold">Raw stats output</h2>
