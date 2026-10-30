@@ -40,7 +40,10 @@ for (const [method, operation] of [['get', 'get'], ['put', 'set'], ['delete', 'd
       if (operation !== 'get') {
         await logAudit(req, AuditActions.CONFIG_UPDATE, {
           entityType: 'dovecot_acl', entityId: serviceId,
-          newValues: { action: operation, ...auditTarget, owner: state.owner, mailbox: state.mailbox, applied: true },
+          newValues: {
+            action: operation, ...auditTarget, owner: state.owner, mailbox: state.mailbox,
+            rights: operation === 'set' ? req.body.rights : [], applied: true,
+          },
         });
       }
       res.json({ success: true, data: { ...state, ...(operation !== 'get' ? { applied: true } : {}) } });

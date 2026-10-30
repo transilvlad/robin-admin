@@ -62,7 +62,11 @@ describe('Dovecot ACL access and audit', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ success: true, data: { ...state, applied: true } });
     expect(logAudit).toHaveBeenCalledWith(expect.anything(), 'config.update', expect.objectContaining({
-      entityType: 'dovecot_acl', entityId: 'dc1', newValues: expect.objectContaining({ action: 'set', applied: true }),
+      entityType: 'dovecot_acl', entityId: 'dc1',
+      newValues: expect.objectContaining({
+        action: 'set', owner: state.owner, mailbox: 'INBOX', member: 'member@example.test',
+        rights: ['lookup', 'read'], applied: true,
+      }),
     }));
   });
 
