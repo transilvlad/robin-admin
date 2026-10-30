@@ -19,6 +19,7 @@ export function MailboxTabs() {
     { to: '/users', label: 'Users', icon: appIcons.users },
     { to: '/aliases', label: 'Aliases', icon: appIcons.aliases },
     { to: '/auto-aliases', label: 'Auto aliases', icon: appIcons.autoAliases },
+    { to: '/mail-policy', label: 'Domains & send-as', icon: appIcons.users },
   ];
 
   return (

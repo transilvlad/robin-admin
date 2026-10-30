@@ -191,6 +191,9 @@ export function requiredScopeForRequest(req: Request): string {
   if (base.startsWith('/api/api-keys')) {
     return 'admin:*';
   }
+  if (base.startsWith('/api/mail-policy')) {
+    return write ? 'admin:*' : 'users:read';
+  }
   if (base.startsWith('/api/users')) {
     return write ? 'users:write' : 'users:read';
   }

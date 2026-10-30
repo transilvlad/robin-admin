@@ -91,7 +91,7 @@ Common scopes:
 
 | Scope | Use |
 |-------|-----|
-| `users:read`, `users:write` | Mail user API |
+| `users:read`, `users:write` | Mail user API; `users:read` also reads domain/sender policy |
 | `aliases:read`, `aliases:write` | Alias API |
 | `queue:read`, `queue:write` | Queue API |
 | `mail:send` | Send email API |
@@ -101,7 +101,7 @@ Common scopes:
 | `reports:read`, `reports:ingest` | Raw report reads and ingestion |
 | `telemetry:read`, `telemetry:write`, `telemetry:manage` | Telemetry reads, metric ingestion and dashboard changes ([Telemetry](telemetry.md)) |
 | `audit:read` | Audit log reads |
-| `admin:*` | Admin-only settings, admins, config, and API-key management |
+| `admin:*` | Admin-only settings, admins, config, domain/sender policy writes, and API-key management |
 
 ## Response shape
 

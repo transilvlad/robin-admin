@@ -89,6 +89,7 @@ import statusPageRoutes from './routes/status-page.js';
 import telemetryRoutes from './routes/telemetry.js';
 import telemetrySettingsRoutes from './routes/telemetry-settings.js';
 import emailRoutes from './routes/email.js';
+import mailPolicyRoutes from './routes/mail-policy.js';
 
 // Services
 import { startMetricsPoller, stopMetricsPoller } from './services/metrics-poller.js';
@@ -388,6 +389,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/setup', setupRoutes);
 app.use('/api/admins', adminsRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/mail-policy', mailPolicyRoutes);
 app.use('/api/aliases', aliasesRoutes);
 app.use('/api/queue', queueRoutes);
 app.use('/api/audit', auditRoutes);

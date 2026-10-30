@@ -1043,6 +1043,18 @@ export const usersApi = {
     request<ApiResponse>(`/users/${id}`, { method: 'DELETE' }),
 };
 
+export const mailPolicyApi = {
+  status: () => request<ApiResponse<{ available: boolean }>>('/mail-policy/status'),
+  domains: (page = 1) => request<PaginatedResponse<import('../types/mail-policy').MailDomain>>(`/mail-policy/domains?page=${page}`),
+  saveDomain: (data: import('../types/mail-policy').MailDomain) =>
+    request<ApiResponse<import('../types/mail-policy').MailDomain>>('/mail-policy/domains', { method: 'PUT', body: JSON.stringify(data) }),
+  grants: (page = 1) => request<PaginatedResponse<import('../types/mail-policy').SenderGrant>>(`/mail-policy/grants?page=${page}`),
+  saveGrant: (data: import('../types/mail-policy').SenderGrant) =>
+    request<ApiResponse<import('../types/mail-policy').SenderGrant>>('/mail-policy/grants', { method: 'PUT', body: JSON.stringify(data) }),
+  revokeGrant: (data: import('../types/mail-policy').SenderGrant) =>
+    request<ApiResponse>('/mail-policy/grants', { method: 'DELETE', body: JSON.stringify({ account: data.account, address: data.address }) }),
+};
+
 // Aliases API
 export const aliasesApi = {
   list: (page = 1, limit = 50, search?: string) => {

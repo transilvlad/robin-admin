@@ -29,6 +29,7 @@ const TelemetryIssuesPage = lazy(() => import('./pages/TelemetryIssues').then((m
 const StatusPagePublic = lazy(() => import('./pages/StatusPagePublic').then((m) => ({ default: m.StatusPagePublic })));
 const EmailDeliveryPage = lazy(() => import('./pages/EmailDelivery').then((m) => ({ default: m.EmailDeliveryPage })));
 const UsersPage = lazy(() => import('./pages/Users').then((m) => ({ default: m.UsersPage })));
+const MailPolicyPage = lazy(() => import('./pages/MailPolicy').then((m) => ({ default: m.MailPolicyPage })));
 const AliasesPage = lazy(() => import('./pages/Aliases').then((m) => ({ default: m.AliasesPage })));
 const AutoAliasesPage = lazy(() => import('./pages/AutoAliases').then((m) => ({ default: m.AutoAliasesPage })));
 const QueuePage = lazy(() => import('./pages/Queue').then((m) => ({ default: m.QueuePage })));
@@ -304,6 +305,7 @@ export function App() {
                 >
                   <Route index element={<Suspended><DashboardPage /></Suspended>} />
                   <Route path="users" element={<MailboxRoute section="users"><Suspended><UsersPage /></Suspended></MailboxRoute>} />
+                  <Route path="mail-policy" element={<MailboxRoute section="users"><Suspended><MailPolicyPage /></Suspended></MailboxRoute>} />
                   <Route path="aliases" element={<MailboxRoute section="aliases"><Suspended><AliasesPage /></Suspended></MailboxRoute>} />
                   <Route path="auto-aliases" element={<MailboxRoute section="autoAliases"><Suspended><AutoAliasesPage /></Suspended></MailboxRoute>} />
                   <Route path="robin/queue" element={<ServiceRoute type="robin" capability="queue"><Suspended><QueuePage /></Suspended></ServiceRoute>} />
