@@ -16,7 +16,8 @@ describe('Mailbox backend readiness', () => {
     const Editor = editor;
     render(<MemoryRouter><MailboxBackendGate section={section}><Editor /></MailboxBackendGate></MemoryRouter>);
     expect(screen.getByRole('heading', { name: 'Backend not configured' })).toBeInTheDocument();
-    expect(screen.getAllByRole('link')).toHaveLength(3);
+    expect(screen.getAllByRole('link')).toHaveLength(4);
+    expect(screen.getByRole('link', { name: 'Domains & send-as' })).toBeInTheDocument();
     expect(editor).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
     expect(refresh).toHaveBeenCalledOnce();
