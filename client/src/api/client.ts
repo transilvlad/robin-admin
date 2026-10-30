@@ -1220,11 +1220,14 @@ export const robinConfigApi = {
   getServerIds: () =>
     request<ApiResponse<string[]>>('/robin-config/server-ids'),
 
+  runtimeStatus: (serviceId: string) =>
+    request<ApiResponse<Record<string, unknown>>>(`/robin-config/runtime-status?serviceId=${encodeURIComponent(serviceId)}`),
+
   // Force Robin to re-pull config from the DB and hot-reload (Robin self-syncs).
-  reload: (serverId?: string) =>
-    request<ApiResponse<{ status?: string; message?: string }>>(
+  reload: (serviceId?: string) =>
+    request<ApiResponse<{ status?: string; message?: string; applied: boolean; restartRequired?: boolean }>>(
       '/robin-config/reload',
-      { method: 'POST', body: JSON.stringify({ serverId }) }
+      { method: 'POST', body: JSON.stringify({ serviceId }) }
     ),
 
   getFiles: () =>

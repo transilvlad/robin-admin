@@ -11,6 +11,8 @@ const {
   setClamavLink,
   getClamavConfig,
   useServicesMock,
+  reload,
+  runtimeStatus,
 } = vi.hoisted(() => ({
   getFiles: vi.fn(),
   getServerIds: vi.fn(),
@@ -19,6 +21,8 @@ const {
   setClamavLink: vi.fn(),
   getClamavConfig: vi.fn(),
   useServicesMock: vi.fn(),
+  reload: vi.fn(),
+  runtimeStatus: vi.fn(),
 }));
 
 vi.mock('../api/client', () => ({
@@ -28,6 +32,8 @@ vi.mock('../api/client', () => ({
     getFile,
     getClamavLink,
     setClamavLink,
+    reload,
+    runtimeStatus,
   },
   clamavApi: {
     getConfig: getClamavConfig,
@@ -65,7 +71,41 @@ describe('RobinConfigPage', () => {
     getClamavConfig.mockResolvedValue({ data: null });
     useServicesMock.mockReturnValue({
       clamavServices: [],
+      robinServices: [{ serviceId: 'fleet-west', name: 'West Robin' }],
     });
+  });
+
+  it('does not mistake an old successful HTTP response for an applied configuration', async () => {
+    reload.mockResolvedValueOnce({ data: { status: 'success' } });
+    render(<MemoryRouter><RobinConfigPage /></MemoryRouter>);
+    const sync = await screen.findByRole('button', { name: 'Sync now' });
+    await waitFor(() => expect(sync).not.toBeDisabled());
+    fireEvent.click(sync);
+    expect(await screen.findByText('Robin did not confirm configuration application.')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('unknown');
+  });
+
+  it('uses a separate fleet target and surfaces snapshot-only restart requirements', async () => {
+    reload.mockResolvedValueOnce({ data: { applied: true, restartRequired: true, scope: 'configuration-snapshot' } });
+    render(<MemoryRouter><RobinConfigPage /></MemoryRouter>);
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Reload target' }), { target: { value: 'fleet-west' } });
+    const sync = screen.getByRole('button', { name: 'Sync now' });
+    await waitFor(() => expect(sync).not.toBeDisabled());
+    fireEvent.click(sync);
+    await waitFor(() => expect(reload).toHaveBeenCalledWith('fleet-west'));
+    expect(await screen.findByText(/No restart was performed/)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('restart needed');
+  });
+
+  it('shows effective runtime fingerprints only after readback succeeds', async () => {
+    runtimeStatus.mockResolvedValueOnce({ data: { loaded: { 'server.json5': 'fixture-hash' }, manualReloadAvailable: true } });
+    render(<MemoryRouter><RobinConfigPage /></MemoryRouter>);
+    const check = await screen.findByRole('button', { name: 'Check runtime' });
+    await waitFor(() => expect(check).not.toBeDisabled());
+    fireEvent.click(check);
+    expect(await screen.findByText(/fixture-hash/)).toBeInTheDocument();
+    expect(runtimeStatus).toHaveBeenCalledWith('default');
+    expect(screen.getByRole('status')).toHaveTextContent('unknown');
   });
 
   it('prefers server.json5 on first load and uses typed forms for users, proxy, stalwart, and vault', async () => {

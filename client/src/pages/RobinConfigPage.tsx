@@ -110,7 +110,7 @@ const LABELS: Record<string, string> = {
 };
 
 export function RobinConfigPage() {
-  const { clamavServices } = useServices();
+  const { clamavServices, robinServices = [] } = useServices();
   const [files, setFiles] = useState<ConfigFileInfo[]>([]);
   const [serverIds, setServerIds] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -121,6 +121,10 @@ export function RobinConfigPage() {
   const [isLoadingConfig, setIsLoadingConfig] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [reloadServiceId, setReloadServiceId] = useState('default');
+  const [applyState, setApplyState] = useState<'unknown' | 'saved' | 'applied' | 'restart-needed'>('unknown');
+  const [runtimeStatus, setRuntimeStatus] = useState<Record<string, unknown> | null>(null);
+  const [isCheckingRuntime, setIsCheckingRuntime] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
@@ -133,6 +137,7 @@ export function RobinConfigPage() {
 
   // Fetch files list and server IDs
   const fetchFiles = useCallback(async () => {
+    setError('');
     try {
       const [filesRes, serverIdsRes] = await Promise.all([
         robinConfigApi.getFiles(),
@@ -150,7 +155,6 @@ export function RobinConfigPage() {
         const preferred = list.find((file) => file.fileName === 'server.json5')?.fileName ?? list[0].fileName;
         setSelectedFile((current) => current ?? preferred);
       }
-      setError('');
     } catch (err) {
       setError('Failed to load configuration files');
     } finally {
@@ -167,6 +171,7 @@ export function RobinConfigPage() {
     if (!selectedFile) return;
 
     setIsLoadingConfig(true);
+    setError('');
     try {
       const [response, clamavLinkResponse] = await Promise.all([
         robinConfigApi.getFile(selectedFile, selectedServerId),
@@ -195,7 +200,6 @@ export function RobinConfigPage() {
       }
       
       setHasChanges(false);
-      setError('');
     } catch (err) {
       setError('Failed to load configuration');
       setConfigData(null);
@@ -268,7 +272,9 @@ export function RobinConfigPage() {
         setLoadedClamavLink(clamavLink);
         setClamavLinkInherited(false);
       }
-      setSuccess('Configuration saved successfully');
+      setSuccess('Configuration saved in the database; runtime application is not yet confirmed.');
+      setApplyState('saved');
+      setRuntimeStatus(null);
       setHasChanges(false);
       await fetchConfig(); // Refresh to get updated data
       await fetchFiles(); // Refresh server IDs list
@@ -315,6 +321,8 @@ export function RobinConfigPage() {
         await robinConfigApi.setClamavLink(serverId, clamavLink);
       }
       setSuccess(`Override saved for server "${serverId}" with ${Object.keys(overrideConfig).length} field(s)`);
+      setApplyState('saved');
+      setRuntimeStatus(null);
       setShowSaveAsModal(false);
       setNewServerId('');
       setHasChanges(false);
@@ -432,22 +440,37 @@ export function RobinConfigPage() {
     }
   };
 
-  // Force Robin to re-pull config from the DB and hot-reload. Robin self-syncs,
-  // so this is the "sync" for Robin — the applied/skipped detail lands in Robin's
-  // own logs (Robin Logs page).
   const handleSync = async () => {
     setIsSyncing(true);
     setError('');
     setSuccess('');
+    setRuntimeStatus(null);
     try {
-      const target = selectedServerId === 'default' ? undefined : selectedServerId;
-      const res = await robinConfigApi.reload(target);
-      setSuccess(res.data?.message || 'Robin re-pulled config and reloaded. See Robin logs for applied/skipped detail.');
+      const res = await robinConfigApi.reload(reloadServiceId);
+      if (res.data?.applied !== true) throw new Error('Robin did not confirm configuration application.');
+      setApplyState(res.data.restartRequired ? 'restart-needed' : 'applied');
+      setSuccess(res.data.restartRequired
+        ? 'Robin confirmed the reload, but reports settings that require a restart. No restart was performed.'
+        : 'Robin confirmed the reload on the selected endpoint. This does not certify every saved setting as effective.');
     } catch (err) {
+      setApplyState('unknown');
       setError(err instanceof Error && err.message ? err.message : 'Failed to trigger Robin config reload');
     } finally {
       setIsSyncing(false);
     }
+  };
+
+  const checkRuntime = async () => {
+    setIsCheckingRuntime(true);
+    setError('');
+    setRuntimeStatus(null);
+    try {
+      const response = await robinConfigApi.runtimeStatus(reloadServiceId);
+      if (!response.data) throw new Error('Robin returned no runtime configuration status.');
+      setRuntimeStatus(response.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to read runtime configuration status');
+    } finally { setIsCheckingRuntime(false); }
   };
 
   if (isLoading) {
@@ -464,14 +487,21 @@ export function RobinConfigPage() {
         <PageHeader
           icon={appIcons.robinConfig}
           title="Robin config"
-          description="Per-file managed config with a shared Default (base) and per-server overrides. Robin pulls this config itself — use Sync now to force a re-pull + reload (no fleet agent, so no Sync tab)."
+          description="Save database configuration separately from applying it. A fleet reload target is not a configuration server ID; each target loads its own overrides."
           actions={(
             <div className="flex items-center gap-2">
-              <button onClick={fetchFiles} className="btn btn-secondary">
+              <button onClick={fetchFiles} disabled={isSyncing} className="btn btn-secondary">
                 <RefreshCw className="w-4 h-4" />
                 Refresh
               </button>
-              <button onClick={() => void handleSync()} disabled={isSyncing} className="btn btn-primary">
+              <label className="text-sm">Reload target
+                <select className="input" value={reloadServiceId} disabled={isSyncing || isCheckingRuntime} onChange={e => { setReloadServiceId(e.target.value); setApplyState('unknown'); setSuccess(''); setRuntimeStatus(null); }}>
+                  <option value="default">Configured default endpoint</option>
+                  {robinServices.map(service => <option key={service.serviceId} value={service.serviceId}>{service.name}</option>)}
+                </select>
+              </label>
+              <button onClick={() => void checkRuntime()} disabled={isSyncing || isCheckingRuntime || isLoadingConfig || (files.length > 0 && !configData)} className="btn btn-secondary">Check runtime</button>
+              <button onClick={() => void handleSync()} disabled={isSyncing || isCheckingRuntime || isLoadingConfig || (files.length > 0 && !configData) || hasChanges || isSaving} className="btn btn-primary">
                 <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
                 {isSyncing ? 'Syncing…' : 'Sync now'}
               </button>
@@ -479,6 +509,19 @@ export function RobinConfigPage() {
           )}
         />
       </div>
+
+      <p className="mb-4 text-sm text-gray-500" role="status">
+        {applyState === 'unknown' && 'Runtime apply state: unknown. Database content is not proof of effective configuration.'}
+        {applyState === 'saved' && 'Runtime apply state: saved; application not confirmed. Restart-only settings still require a planned restart.'}
+        {applyState === 'applied' && 'Runtime apply state: reload confirmed for the selected endpoint. Check effective settings and restart-only changes separately.'}
+        {applyState === 'restart-needed' && 'Runtime apply state: restart needed for settings reported by Robin.'}
+      </p>
+
+      {runtimeStatus && <details className="card mb-4 p-4" open>
+        <summary>Loaded source fingerprints and reload capability</summary>
+        <p className="my-2 text-sm text-gray-500">Reported by the selected Robin process, not inferred from database saves. Hashes cover normalized parsed source before secret expansion, not live listener or pool settings.</p>
+        <pre className="overflow-auto text-xs">{JSON.stringify(runtimeStatus, null, 2)}</pre>
+      </details>}
 
       {error && (
         <div className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 p-4 rounded-lg mb-6 flex items-center gap-2">
@@ -488,7 +531,7 @@ export function RobinConfigPage() {
       )}
 
       {success && (
-        <div className="bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 p-4 rounded-lg mb-6 flex items-center gap-2">
+        <div className={`${applyState === 'restart-needed' ? 'bg-amber-50 text-amber-800 dark:bg-amber-900/20 dark:text-amber-300' : 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400'} p-4 rounded-lg mb-6 flex items-center gap-2`}>
           <CheckCircle className="w-5 h-5" />
           {success}
         </div>

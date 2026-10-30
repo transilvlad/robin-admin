@@ -40,6 +40,12 @@ export class RobinInstanceUnusableError extends Error {
   }
 }
 
+export class RobinManagementConfigurationError extends Error {}
+
+export function robinAuthHeaders(apiAuth = config.robin.apiAuth): Record<string, string> {
+  return apiAuth ? { Authorization: `Basic ${Buffer.from(apiAuth).toString('base64')}` } : {};
+}
+
 /**
  * The HTTP answer for a Robin API failure, or null for any other error:
  * 503 when Robin can't be reached, 502 with Robin's reason when it refused.
@@ -49,6 +55,9 @@ export function robinApiFailure(error: unknown, unavailableMessage: string): { s
     return { status: 503, error: unavailableMessage };
   }
   if (error instanceof RobinInstanceUnusableError) {
+    return { status: 400, error: error.message };
+  }
+  if (error instanceof RobinManagementConfigurationError) {
     return { status: 400, error: error.message };
   }
   if (error instanceof RobinApiRejectedError) {
@@ -123,34 +132,77 @@ export function clearInstanceCache(instanceId?: string): void {
  *
  * Robin is self-syncing: it reads its own config from the DB via its
  * ConfigStoreSyncManager. `POST /config/reload` triggers that pull + reload
- * (the reload's applied/skipped counts land in Robin's own logs — viewable on
- * the Robin Logs page). This endpoint lives on Robin's **Service API**
+ * The response must explicitly confirm application. This endpoint lives on Robin's **Service API**
  * (ROBIN_METRICS_URL), not the Client API (apiUrl) used for queue/send.
  */
 export async function reloadRobinConfig(
   instanceId?: string,
 ): Promise<{ ok: boolean; status: number; body: unknown; url: string }> {
+  return robinManagementRequest('/config/reload', 'POST', instanceId);
+}
+
+export async function getRobinConfigStatus(
+  instanceId?: string,
+): Promise<{ ok: boolean; status: number; body: unknown; url: string }> {
+  return robinManagementRequest('/config/status', 'GET', instanceId);
+}
+
+async function robinManagementRequest(
+  path: '/config/reload' | '/config/status',
+  method: 'GET' | 'POST',
+  instanceId?: string,
+): Promise<{ ok: boolean; status: number; body: unknown; url: string }> {
   assertRobinApiEnabled();
   let base = process.env.ROBIN_METRICS_URL || 'http://localhost:8080';
+  let apiAuth = config.robin.apiAuth;
   if (instanceId && instanceId !== 'default') {
-    const instance = await getInstanceById(instanceId).catch(() => null);
-    if (instance?.metricsUrl) base = instance.metricsUrl;
+    const instance = await getInstanceById(instanceId);
+    if (!instance || !instance.enabled) {
+      throw new RobinInstanceUnusableError(instanceId, instance ? 'disabled' : 'not registered');
+    }
+    if (!instance.metricsUrl) {
+      throw new RobinManagementConfigurationError('The selected Robin service has no management metrics URL');
+    }
+    base = instance.metricsUrl;
+    apiAuth = instance.apiAuth || undefined;
   }
-  const url = `${base.replace(/\/$/, '')}/config/reload`;
+  if (!apiAuth || !/^[^:]+:.+$/.test(apiAuth)) {
+    throw new RobinManagementConfigurationError('Configure ROBIN_API_AUTH to match authenticated Robin management endpoints');
+  }
+  let endpoint: URL;
+  try { endpoint = new URL(base); }
+  catch { throw new RobinManagementConfigurationError('Robin management URL must be an absolute HTTP(S) URL'); }
+  if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
+    throw new RobinManagementConfigurationError('Robin management URL must use HTTP(S) without embedded credentials');
+  }
+  if (endpoint.search || endpoint.hash) {
+    throw new RobinManagementConfigurationError('Robin management base URL must not include a query or fragment');
+  }
+  const url = `${base.replace(/\/$/, '')}${path}`;
   let res: globalThis.Response;
   try {
     res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...robinAuthHeaders(apiAuth),
+      },
+      signal: AbortSignal.timeout(30_000),
+      redirect: 'error',
     });
   } catch (error) {
-    logger.warn('Robin configuration reload request failed', {
+    logger.warn('Robin configuration management request failed', {
       instanceId,
+      path,
       error: (error as Error).message,
     });
     throw new RobinApiUnavailableError(error);
   }
-  const body = await res.json().catch(() => ({}));
+  let body: unknown;
+  try { body = await res.json(); }
+  catch {
+    throw new RobinApiRejectedError(res.status, 'Robin returned an invalid management response; application is unconfirmed');
+  }
   return { ok: res.ok, status: res.status, body, url };
 }
 
@@ -176,8 +228,7 @@ async function robinFetch(
   
   // Add basic auth if configured
   if (instanceConfig.apiAuth) {
-    const base64Auth = Buffer.from(instanceConfig.apiAuth).toString('base64');
-    headers['Authorization'] = `Basic ${base64Auth}`;
+    Object.assign(headers, robinAuthHeaders(instanceConfig.apiAuth));
   }
   
   let response: globalThis.Response;

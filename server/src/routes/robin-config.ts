@@ -38,7 +38,7 @@ import {
   upsertRobinClamavServiceLink,
 } from '../db/queries/robin-clamav-links.js';
 import { getFleetServiceById } from '../db/queries/fleet-services.js';
-import { reloadRobinConfig, robinApiFailure } from '../services/robin-api.js';
+import { getRobinConfigStatus, reloadRobinConfig, robinApiFailure } from '../services/robin-api.js';
 import { routeParam } from './params.js';
 
 const router = Router();
@@ -58,6 +58,25 @@ function computeSha256(obj: object): string {
   const canonical = JSON.stringify(obj);
   return createHash('sha256').update(canonical).digest('hex');
 }
+
+router.get('/runtime-status', requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    if (req.query.serviceId !== undefined && (typeof req.query.serviceId !== 'string' || !req.query.serviceId.trim())) {
+      res.status(400).json({ success: false, error: 'serviceId must identify a Robin fleet service or default' });
+      return;
+    }
+    const result = await getRobinConfigStatus(typeof req.query.serviceId === 'string' ? req.query.serviceId.trim() : undefined);
+    if (!result.ok || !result.body || typeof result.body !== 'object' || Array.isArray(result.body)) {
+      res.status(502).json({ success: false, error: `Robin runtime configuration status is unavailable (HTTP ${result.status})` });
+      return;
+    }
+    res.json({ success: true, data: result.body });
+  } catch (error) {
+    const failure = robinApiFailure(error, 'Robin runtime configuration status is unavailable.');
+    if (failure) { res.status(failure.status).json({ success: false, error: failure.error }); return; }
+    next(error);
+  }
+});
 
 /**
  * Get all unique server IDs.
@@ -80,32 +99,49 @@ router.get('/server-ids', requireAuth, requireAdmin, async (req: Request, res: R
 /**
  * Force Robin to re-pull config from its configured shared store and hot-reload it.
  * This is Robin's "sync": robin-admin writes the DB, Robin pulls it. Applied/
- * skipped counts land in Robin's own logs (Robin Logs page).
- * POST /api/robin-config/reload  { serverId?: string }
+ * skipped counts are reported only when Robin confirms them.
+ * POST /api/robin-config/reload  { serviceId?: string }
  */
 router.post('/reload', requireAuth, requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const serverId = typeof req.body?.serverId === 'string' && req.body.serverId.trim()
-      ? req.body.serverId.trim()
+    if (req.body?.serverId !== undefined) {
+      res.status(400).json({ success: false, error: 'Select a fleet serviceId, not a configuration serverId, as the reload target' });
+      return;
+    }
+    if (req.body?.serviceId !== undefined && (typeof req.body.serviceId !== 'string' || !req.body.serviceId.trim())) {
+      res.status(400).json({ success: false, error: 'serviceId must identify a Robin fleet service or default' });
+      return;
+    }
+    const serviceId = typeof req.body?.serviceId === 'string'
+      ? req.body.serviceId.trim()
       : undefined;
-    const result = await reloadRobinConfig(serverId);
+    const result = await reloadRobinConfig(serviceId);
+    const body = result.body && typeof result.body === 'object' && !Array.isArray(result.body)
+      ? result.body as Record<string, unknown> : null;
+    const applied = result.ok && body?.applied === true
+      && (!Array.isArray(body.failed) || body.failed.length === 0);
     await logAudit(req, AuditActions.CONFIG_UPDATE, {
       entityType: 'robin-config-reload',
-      entityId: serverId ?? 'default',
-      newValues: { ok: result.ok, status: result.status },
+      entityId: serviceId ?? 'default',
+      newValues: { ok: result.ok, status: result.status, applied, restartRequired: body?.restartRequired === true },
     });
-    if (!result.ok) {
-      const body = result.body as { error?: unknown; message?: unknown } | null;
+    if (!applied) {
       const reason = body?.error || body?.message;
       return res.status(502).json({
         success: false,
-        error: `Robin reload failed (HTTP ${result.status})${reason ? `: ${String(reason).slice(0, 300)}` : ''}`,
+        error: `Robin did not confirm configuration application (HTTP ${result.status})${reason ? `: ${String(reason).slice(0, 300)}` : ''}`,
+        data: { applied: false },
       });
     }
-    logger.info('Robin config reload triggered', { serverId: serverId ?? 'default' });
+    logger.info('Robin config reload confirmed', { serviceId: serviceId ?? 'default' });
     res.json({ success: true, data: result.body });
   } catch (error) {
-    const failure = robinApiFailure(error, 'Robin MTA API is unavailable. Configuration was saved but could not be reloaded.');
+    const failure = robinApiFailure(error, 'Robin MTA API is unavailable. Configuration application is unconfirmed.');
+    await logAudit(req, AuditActions.CONFIG_UPDATE, {
+      entityType: 'robin-config-reload',
+      entityId: typeof req.body?.serviceId === 'string' ? req.body.serviceId.trim() : 'default',
+      newValues: { ok: false, applied: false, error: failure?.error ?? 'Configuration reload failed' },
+    });
     if (failure) {
       res.status(failure.status).json({ success: false, error: failure.error });
       return;

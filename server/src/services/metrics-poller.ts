@@ -20,6 +20,7 @@ import {
 } from '../db/queries/fleet-service-secrets.js';
 import { recordFleetServiceObservation } from '../db/queries/fleet-service-observations.js';
 import { logger } from '../logger.js';
+import { robinAuthHeaders } from './robin-api.js';
 import {
   getClamavLiveMetrics,
   getClamavRawStats,
@@ -622,7 +623,7 @@ function emptyJsonResponse(): JsonResponse {
   return { ...emptyProbe(), data: null };
 }
 
-async function fetchText(url: string, headers?: Record<string, string>): Promise<TextResponse> {
+async function fetchText(url: string, headers?: Record<string, string>, redirect?: RequestInit['redirect']): Promise<TextResponse> {
   try {
     const response = await fetch(url, {
       method: 'GET',
@@ -631,6 +632,7 @@ async function fetchText(url: string, headers?: Record<string, string>): Promise
         ...headers,
       },
       signal: AbortSignal.timeout(10000),
+      redirect,
     });
 
     return {
@@ -693,7 +695,7 @@ async function probeEndpoint(url: string, headers?: Record<string, string>): Pro
 }
 
 async function fetchGraphiteMetrics(metricsUrl: string): Promise<Map<string, number>> {
-  const response = await fetchText(buildUrl(metricsUrl, '/metrics/graphite'));
+  const response = await fetchText(buildUrl(metricsUrl, '/metrics/graphite'), robinAuthHeaders(), 'error');
   if (!response.ok || response.text === null) {
     throw new Error(`HTTP ${response.statusCode ?? 'unreachable'} while fetching Robin graphite metrics`);
   }
@@ -701,7 +703,7 @@ async function fetchGraphiteMetrics(metricsUrl: string): Promise<Map<string, num
 }
 
 async function fetchPrometheusMetrics(metricsUrl: string): Promise<Map<string, number>> {
-  const response = await fetchText(buildUrl(metricsUrl, '/metrics/prometheus'));
+  const response = await fetchText(buildUrl(metricsUrl, '/metrics/prometheus'), robinAuthHeaders(), 'error');
   if (!response.ok || response.text === null) {
     throw new Error(`HTTP ${response.statusCode ?? 'unreachable'} while fetching Robin Prometheus metrics`);
   }
@@ -2200,7 +2202,7 @@ export async function getRawRobinMetrics(serviceId?: string): Promise<string> {
   }
 
   const metricsUrl = service?.metricsUrl || service?.apiUrl || getDefaultRobinMetricsUrl();
-  const response = await fetchText(buildUrl(metricsUrl, '/metrics/prometheus'));
+  const response = await fetchText(buildUrl(metricsUrl, '/metrics/prometheus'), robinAuthHeaders(), 'error');
 
   if (!response.ok || response.text === null) {
     return `# Error fetching metrics: HTTP ${response.statusCode ?? 'unreachable'}`;

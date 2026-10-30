@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as connection from '../db/connection.js';
 import * as serviceMetrics from '../db/queries/service-metrics.js';
 import * as secrets from '../db/queries/fleet-service-secrets.js';
-import { getLiveRspamdMetrics, getRobinMetricsHistory, buildRspamdSnapshotFromRaw, buildRobinSnapshotFromRaw, withRobinProcessCpu } from './metrics-poller.js';
+import { getLiveRspamdMetrics, getLiveRobinMetrics, getRawRobinMetrics, getRobinMetricsHistory, buildRspamdSnapshotFromRaw, buildRobinSnapshotFromRaw, withRobinProcessCpu } from './metrics-poller.js';
+import { config } from '../config.js';
 
 vi.mock('../db/connection.js');
 vi.mock('../db/queries/service-metrics.js');
@@ -195,6 +196,29 @@ describe('metrics-poller', () => {
       expect.stringContaining('SELECT COUNT(*) AS count FROM robin_metrics_history'),
       [24, 7]
     );
+  });
+
+  it('authenticates every direct Robin metrics surface after management API hardening', async () => {
+    const old = config.robin.apiAuth;
+    config.robin.apiAuth = 'fixture:synthetic';
+    try {
+      mockGetMetricsFleetServiceById.mockResolvedValue({
+        id: 7, serviceId: 'robin-west', serviceType: 'robin', name: 'West',
+        description: null, apiUrl: null, healthUrl: null, metricsUrl: 'http://fixture:8080',
+        controllerUrl: null, normalUrl: null, enabled: true,
+      });
+      mockFetch.mockResolvedValue({ ok: true, status: 200, text: async () => 'robin_email_receipt_start_total 1\n' });
+      await getLiveRobinMetrics('robin-west');
+      await getRawRobinMetrics('robin-west');
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      for (const [url, options] of mockFetch.mock.calls) {
+        expect(url).toMatch(/^http:\/\/fixture:8080\/metrics\/(graphite|prometheus)$/);
+        expect(options).toMatchObject({
+          redirect: 'error',
+          headers: { Authorization: `Basic ${Buffer.from('fixture:synthetic').toString('base64')}` },
+        });
+      }
+    } finally { config.robin.apiAuth = old; }
   });
 
   it('falls back to Rspamd controller stat payloads when Prometheus counters are missing', async () => {

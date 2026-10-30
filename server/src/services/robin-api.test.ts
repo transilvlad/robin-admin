@@ -12,8 +12,11 @@ import {
   bounceQueueItem,
   bounceQueueItems,
   checkRobinHealth,
+  reloadRobinConfig,
+  getRobinConfigStatus,
 } from './robin-api.js';
 import { config } from '../config.js';
+import { getInstanceById } from '../db/queries/fleet-services.js';
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -39,6 +42,7 @@ vi.mock('../db/queries/fleet-services.js', () => ({
         name: 'Test Instance',
         apiUrl: 'http://test:8090',
         apiAuth: 'test:test',
+        metricsUrl: 'http://test:8080',
         enabled: true,
       });
     }
@@ -54,7 +58,63 @@ describe('robin-api service', () => {
 
   afterEach(() => {
     config.robin.enabled = true;
+    config.robin.apiAuth = 'admin:password';
+    vi.unstubAllEnvs();
     vi.clearAllMocks();
+  });
+
+  describe('authenticated management endpoints', () => {
+    it('authenticates against the selected service, not a config server id or default endpoint', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ applied: true }) });
+      await reloadRobinConfig('test-instance');
+      expect(mockFetch).toHaveBeenCalledWith('http://test:8080/config/reload', expect.objectContaining({
+        method: 'POST',
+        redirect: 'error',
+        signal: expect.any(AbortSignal),
+        headers: { 'Content-Type': 'application/json', Authorization: `Basic ${Buffer.from('test:test').toString('base64')}` },
+      }));
+    });
+
+    it('uses the explicit default metrics URL and management credentials for status', async () => {
+      vi.stubEnv('ROBIN_METRICS_URL', 'http://127.0.0.1:18080');
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ manualReloadAvailable: true }) });
+      await getRobinConfigStatus('default');
+      expect(mockFetch).toHaveBeenCalledWith('http://127.0.0.1:18080/config/status', expect.objectContaining({
+        method: 'GET', headers: expect.objectContaining({ Authorization: `Basic ${Buffer.from('admin:password').toString('base64')}` }),
+      }));
+    });
+
+    it('never falls back to default when an explicit service is unknown, disabled, or lacks its endpoint', async () => {
+      await expect(reloadRobinConfig('unknown')).rejects.toMatchObject({ name: 'RobinInstanceUnusableError' });
+      vi.mocked(getInstanceById).mockResolvedValueOnce({ enabled: false } as never);
+      await expect(reloadRobinConfig('disabled')).rejects.toMatchObject({ name: 'RobinInstanceUnusableError' });
+      vi.mocked(getInstanceById).mockResolvedValueOnce({ enabled: true, metricsUrl: null } as never);
+      await expect(reloadRobinConfig('missing-url')).rejects.toThrow('no management metrics URL');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('does not swallow registry failures or attempt an unauthenticated reload', async () => {
+      vi.mocked(getInstanceById).mockRejectedValueOnce(new Error('database unavailable'));
+      await expect(reloadRobinConfig('test-instance')).rejects.toThrow('database unavailable');
+      config.robin.apiAuth = '';
+      await expect(reloadRobinConfig()).rejects.toThrow('ROBIN_API_AUTH');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects unsafe management URL shapes before attaching credentials', async () => {
+      for (const url of ['file:///tmp/fixture', 'http://user:pass@localhost:8080', 'http://localhost:8080?x=1', 'invalid']) {
+        vi.stubEnv('ROBIN_METRICS_URL', url);
+        await expect(reloadRobinConfig()).rejects.toThrow();
+      }
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('does not turn a malformed response into successful application', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => { throw new SyntaxError('HTML response'); } });
+      await expect(reloadRobinConfig()).rejects.toMatchObject({ name: 'RobinApiRejectedError' });
+      mockFetch.mockRejectedValueOnce(new Error('redirect rejected'));
+      await expect(reloadRobinConfig()).rejects.toMatchObject({ name: 'RobinApiUnavailableError' });
+    });
   });
 
   describe('retryQueueItem', () => {

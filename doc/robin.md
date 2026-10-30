@@ -101,7 +101,10 @@ The Config Diff page shows differences between:
 
 This helps identify what's customized per server.
 
-> **Gotcha**: Configuration changes require Robin restart to take effect. The UI doesn't automatically restart Robin.
+Saving configuration does not apply it to a running process. **Sync now**
+requests an authenticated reload from the separately selected **Reload target**.
+The configuration's server ID selects database overrides; it is not a fleet
+service ID and is never used as an implicit management endpoint.
 
 ### Form field types
 
@@ -117,10 +120,48 @@ The config form automatically renders appropriate controls:
 When you save configuration:
 1. Form data is serialized to JSON
 2. Sent to backend API
-3. Written to the appropriate `.json5` file
-4. Changes are validated before saving
+3. Written to the configured PostgreSQL config-store row
+4. Reported as saved, with runtime application still unconfirmed
 
-> **Gotcha**: Invalid JSON5 will be rejected. Check server logs for validation errors.
+The UI parses JSON5 before saving structured JSON. Database save success is not
+proof that Robin accepts the setting, has loaded it, or can hot-apply it.
+
+### Applying and reading back configuration
+
+Admin calls `POST /config/reload` on the selected Robin service's metrics base
+URL. Both management APIs use the provisioned Basic credential in
+`ROBIN_API_AUTH`; Admin will not issue anonymous reloads. The configured default
+uses `ROBIN_METRICS_URL` (default `http://localhost:8080`). Explicit fleet targets
+must be registered, enabled, and have a metrics URL; errors never fall back to a
+different service. Requests have a 30-second timeout and do not follow redirects
+with management credentials.
+
+The Admin endpoint is `POST /api/robin-config/reload` with
+`{ "serviceId": "fleet-west" }` or `{ "serviceId": "default" }`.
+The former ambiguous `{ "serverId": ... }` body is rejected. An HTTP 200 from an
+old Robin API without `applied: true` remains **unconfirmed**, not success.
+
+Robin's `applied: true` and `scope: "configuration-snapshot"` confirm that its
+configuration snapshot was replaced, not that listeners, SQL authentication,
+queue workers or scanners were reconstructed. A `restartRequired: true`
+response is shown as **restart needed**. Admin never restarts Robin as part of a
+save or reload. Plan and verify restart-only changes separately.
+
+**Check runtime** reads `GET /config/status` through the authenticated
+`GET /api/robin-config/runtime-status?serviceId=...` proxy. It shows the selected
+process's redacted loaded-source fingerprints, automatic/manual reload availability
+and sync status. These are not inferred from database saves. Source hashes cover
+successfully parsed source JSON with recursively sorted keys and compact UTF-8
+encoding, before secret/magic expansion; they do not prove live listener or pool
+settings. They need not equal order-dependent hashes of database rows. If the running Robin
+version does not support readback, the UI reports that failure explicitly.
+Apply state starts as unknown after reopening the page; an earlier browser
+success message is not durable evidence of the current runtime.
+
+Both proxy endpoints require the admin role and `admin:*` API-key scope.
+Reload attempts record the actual target, upstream status, confirmation and
+restart requirement in the audit log. Saved rows and reload outcomes are not
+silently treated as an audited live migration.
 
 ### Rspamd relationship
 
@@ -133,6 +174,15 @@ Robin Admin exposes a separate **Fleet -> Rspamd** workspace for:
 Robin's own `rspamd.json5` remains under **Fleet -> Robin -> Config** because it
 is Robin's consumer configuration. It is not synchronized from the Rspamd
 workspace; operators update it as part of Robin-side configuration.
+
+The production suite uses **Rspamd as the single DKIM signer**. Existing Admin
+key generation, sealed storage, selector overlap and agent delivery remain at
+Rspamd's `local.d/dkim/<domain>.<selector>.key`. Robin's independent local signer
+must stay disabled for that deployment. Required authenticated outbound signing
+must defer when Rspamd fails to return a signature; DNS TXT publication, a saved
+key or an acknowledged file write alone does not prove signing. Verify a real
+authenticated submission and its resulting DKIM signature before declaring a
+domain operational.
 
 ---
 
