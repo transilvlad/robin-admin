@@ -95,11 +95,12 @@ export const RSPAMD_CORE_SECTIONS: ManagedFileCatalogEntry[] = [
     description: 'dkim_signing.conf — outbound DKIM signing policy.',
     fields: [
       { key: 'rspamdDkimEnabled', label: 'Enabled', type: 'boolean' },
-      { key: 'rspamdDkimPathTemplate', label: 'Key path template', type: 'text', placeholder: '/var/lib/rspamd/dkim/$domain.$selector.key' },
+      { key: 'rspamdDkimPathTemplate', label: 'Key path template', type: 'text', placeholder: '$LOCAL_CONFDIR/local.d/dkim/$domain.$selector.key' },
       { key: 'rspamdDkimUseDomain', label: 'Use domain', type: 'select', options: ['header', 'envelope', 'auth'].map((v) => ({ value: v, label: v })) },
       { key: 'rspamdDkimFallbackSelector', label: 'Fallback selector', type: 'text', placeholder: 'dkim' },
       { key: 'rspamdDkimSignAuthenticated', label: 'Sign authenticated', type: 'boolean' },
       { key: 'rspamdDkimSignLocal', label: 'Sign local', type: 'boolean' },
+      { key: 'rspamdDkimAllowUsernameMismatch', label: 'Allow username mismatch (requires upstream sender authorization)', type: 'boolean' },
       { key: 'rspamdDkimTryFallback', label: 'Try fallback selector', type: 'boolean' },
       { key: 'rspamdDkimCheckPubkey', label: 'Check public key', type: 'boolean' },
       { key: 'rspamdDkimAllowPubkeyMismatch', label: 'Allow pubkey mismatch', type: 'boolean' },

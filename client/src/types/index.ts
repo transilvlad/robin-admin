@@ -1010,6 +1010,7 @@ export interface RspamdManagedConfig {
   rspamdDkimPathTemplate: string;
   rspamdDkimSignAuthenticated: boolean;
   rspamdDkimSignLocal: boolean;
+  rspamdDkimAllowUsernameMismatch: boolean;
   rspamdDkimUseDomain: string;
   rspamdDkimTryFallback: boolean;
   rspamdDkimFallbackSelector: string;

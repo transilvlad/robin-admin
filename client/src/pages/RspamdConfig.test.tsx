@@ -123,6 +123,7 @@ describe('RspamdConfigPage', () => {
           rspamdDkimPathTemplate: '/var/lib/rspamd/dkim/$domain.$selector.key',
           rspamdDkimSignAuthenticated: true,
           rspamdDkimSignLocal: true,
+          rspamdDkimAllowUsernameMismatch: false,
           rspamdDkimUseDomain: 'header',
           rspamdDkimTryFallback: true,
           rspamdDkimFallbackSelector: 'dkim',
@@ -176,5 +177,6 @@ describe('RspamdConfigPage', () => {
     expect((await screen.findAllByText('DKIM signing')).length).toBeGreaterThan(0);
     expect(screen.getByText('Bayes classifier')).toBeInTheDocument();
     expect(screen.getByText('Key path template')).toBeInTheDocument();
+    expect(screen.getByText('Allow username mismatch (requires upstream sender authorization)')).toBeInTheDocument();
   });
 });

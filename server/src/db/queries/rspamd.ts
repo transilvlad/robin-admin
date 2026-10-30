@@ -36,9 +36,10 @@ const RSPAMD_SETTINGS_DEFAULTS = {
 
 const RSPAMD_MANAGED_DEFAULTS = {
   rspamdDkimEnabled: true,
-  rspamdDkimPathTemplate: '/var/lib/rspamd/dkim/$domain.$selector.key',
+  rspamdDkimPathTemplate: '$LOCAL_CONFDIR/local.d/dkim/$domain.$selector.key',
   rspamdDkimSignAuthenticated: true,
-  rspamdDkimSignLocal: true,
+  rspamdDkimSignLocal: false,
+  rspamdDkimAllowUsernameMismatch: false,
   rspamdDkimUseDomain: 'header',
   rspamdDkimTryFallback: true,
   rspamdDkimFallbackSelector: 'dkim',
@@ -102,6 +103,7 @@ export interface RspamdManagedConfig {
   rspamdDkimPathTemplate: string;
   rspamdDkimSignAuthenticated: boolean;
   rspamdDkimSignLocal: boolean;
+  rspamdDkimAllowUsernameMismatch: boolean;
   rspamdDkimUseDomain: string;
   rspamdDkimTryFallback: boolean;
   rspamdDkimFallbackSelector: string;
@@ -377,6 +379,7 @@ function mapStoredManagedConfig(payload: Record<string, unknown>): RspamdManaged
     rspamdDkimPathTemplate: parseString(payload.rspamdDkimPathTemplate, RSPAMD_MANAGED_DEFAULTS.rspamdDkimPathTemplate),
     rspamdDkimSignAuthenticated: parseBoolean(payload.rspamdDkimSignAuthenticated, RSPAMD_MANAGED_DEFAULTS.rspamdDkimSignAuthenticated),
     rspamdDkimSignLocal: parseBoolean(payload.rspamdDkimSignLocal, RSPAMD_MANAGED_DEFAULTS.rspamdDkimSignLocal),
+    rspamdDkimAllowUsernameMismatch: parseBoolean(payload.rspamdDkimAllowUsernameMismatch, RSPAMD_MANAGED_DEFAULTS.rspamdDkimAllowUsernameMismatch),
     rspamdDkimUseDomain: parseString(payload.rspamdDkimUseDomain, RSPAMD_MANAGED_DEFAULTS.rspamdDkimUseDomain),
     rspamdDkimTryFallback: parseBoolean(payload.rspamdDkimTryFallback, RSPAMD_MANAGED_DEFAULTS.rspamdDkimTryFallback),
     rspamdDkimFallbackSelector: parseString(payload.rspamdDkimFallbackSelector, RSPAMD_MANAGED_DEFAULTS.rspamdDkimFallbackSelector),

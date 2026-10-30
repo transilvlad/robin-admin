@@ -184,6 +184,37 @@ key or an acknowledged file write alone does not prove signing. Verify a real
 authenticated submission and its resulting DKIM signature before declaring a
 domain operational.
 
+Fresh Admin managed policy uses
+`path = "$LOCAL_CONFDIR/local.d/dkim/$domain.$selector.key"`,
+`sign_authenticated = true`, `sign_local = false`, and
+`allow_username_mismatch = false`. Existing stored operator policy is preserved,
+not silently migrated. For the production suite, explicitly review the managed
+Rspamd scope and set `rspamdDkimAllowUsernameMismatch:true` **only after** Robin
+enforces explicit sender grants for both envelope and message From. Otherwise a
+delegated sender can be incorrectly rejected by Rspamd or, with no upstream
+authorization, arbitrary identities can be signed.
+
+Admin-only `PUT /api/rspamd/config?serviceId=rspamd` accepts:
+
+```json
+{
+  "managedConfig": {
+    "rspamdDkimEnabled": true,
+    "rspamdDkimPathTemplate": "$LOCAL_CONFDIR/local.d/dkim/$domain.$selector.key",
+    "rspamdDkimSignAuthenticated": true,
+    "rspamdDkimSignLocal": false,
+    "rspamdDkimAllowUsernameMismatch": true,
+    "rspamdDkimUseDomain": "header"
+  },
+  "fileManagement": { "dkim": true }
+}
+```
+
+The managed root is `local.d/dkim_signing.conf`. Agent manifests append the
+active per-domain selector/path map without changing those signing-policy
+flags. Key rotation and a saved root remain distinct from successful delivery,
+reload and a verified outbound signature; apply-only agents do not prove reload.
+
 ---
 
 ## Metrics

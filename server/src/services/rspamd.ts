@@ -613,13 +613,14 @@ async function readManagedFile(
   };
 }
 
-function renderDkimSigningConf(config: RspamdManagedConfig): string {
+export function renderDkimSigningConf(config: RspamdManagedConfig): string {
   return [
     MANAGED_MARKER,
     `enabled = ${config.rspamdDkimEnabled ? 'true' : 'false'};`,
     `path = "${config.rspamdDkimPathTemplate}";`,
     `sign_authenticated = ${config.rspamdDkimSignAuthenticated ? 'true' : 'false'};`,
     `sign_local = ${config.rspamdDkimSignLocal ? 'true' : 'false'};`,
+    `allow_username_mismatch = ${config.rspamdDkimAllowUsernameMismatch ? 'true' : 'false'};`,
     `use_domain = "${config.rspamdDkimUseDomain}";`,
     `try_fallback = ${config.rspamdDkimTryFallback ? 'true' : 'false'};`,
     `selector = "${config.rspamdDkimFallbackSelector}";`,
