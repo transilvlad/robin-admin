@@ -1,0 +1,57 @@
+# Explicit host-root-equivalent trust boundary. Add ONLY to the local-source
+# chain, then enable --profile host-control. Enroll the agent through Fleet,
+# supply its credential or one-time enrollment token, and explicitly assign
+# service axes. Admin never depends on it and bootstrap remains direct-only.
+services:
+  suite-admin-agent:
+    profiles: [host-control]
+    build:
+      context: ./agent
+      target: colocated
+    image: robin-admin-agent:local-source
+    container_name: suite-admin-agent
+    restart: unless-stopped
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 100
+    mem_limit: 256m
+    cpus: 0.50
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+    depends_on:
+      suite-admin: { condition: service_healthy }
+    environment:
+      - ROBIN_ADMIN_URL=http://admin-backend:3001
+      - ROBIN_AGENT_ID=${SUITE_AGENT_ID:-suite-admin-agent}
+      # Optional during interpolation, required by the agent at enrollment.
+      - ROBIN_AGENT_CREDENTIAL=${SUITE_AGENT_CREDENTIAL:-}
+      - ROBIN_ENROLLMENT_TOKEN=${SUITE_AGENT_ENROLLMENT_TOKEN:-}
+      - ROBIN_AGENT_STATE=/var/lib/robin-agent/state.json
+      - ROBIN_AGENT_MANAGED_ROOT=/tmp/managed
+      - ROBIN_AGENT_APPLY_ONLY=1
+      - ROBIN_AGENT_DOVECOT_LOG_FILE=/logs/dovecot/dovecot.log
+      - ROBIN_AGENT_CYRUS_LOG_FILE=/logs/cyrus/cyrus.log
+      - ROBIN_AGENT_CLAMAV_LOG_FILE=/logs/clamav/clamd.log
+      - ROBIN_AGENT_POSTGRES_LOG_DIR=/logs/postgres
+      - ROBIN_AGENT_REDIS_LOG_CONTAINER=suite-redis
+      - ROBIN_AGENT_EXEC_PREFIX=suite-${MAILBOX_BACKEND:-dovecot}=docker exec suite-${MAILBOX_BACKEND:-dovecot},rspamd=docker exec suite-rspamd,suite-clamav=docker exec suite-clamav
+    volumes:
+      - ${SUITE_LOG_MOUNT:-../robin/log}:/logs:ro
+      - suite-admin-agent-state:/var/lib/robin-agent
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/robin-agent", "--version"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      suite: {}
+
+volumes:
+  suite-admin-agent-state:
+    name: suite-admin-agent-state

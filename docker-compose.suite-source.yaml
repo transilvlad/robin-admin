@@ -1,0 +1,56 @@
+# Local-source production integration, NOT an overlay for the published suite
+# overlay. Use docker-compose.yaml + this file; do not include .suite.yaml or
+# .dev.yaml. This does not start or enroll a host-privileged agent.
+services:
+  suite-admin-gateway:
+    networks:
+      suite:
+        aliases: [admin-gateway]
+
+  suite-admin:
+    build:
+      context: ./server
+    image: robin-admin-server:local-source
+    environment:
+      - NODE_ENV=production
+      - COOKIE_SECURE=true
+      - DB_NAME=${DB_NAME:-robin}
+      - DB_USER=${DB_USER:-robin}
+      - ROBIN_API_ENABLED=true
+      - ROBIN_API_URL=${ROBIN_API_URL:-http://mta-backend:8090}
+      - ROBIN_METRICS_URL=${ROBIN_METRICS_URL:-http://mta-backend:8080}
+      - ROBIN_API_AUTH=${ROBIN_API_AUTH:-}
+      - ROBIN_CONFIG_TABLE=${ROBIN_CONFIG_TABLE:-robin_config_store}
+      - POSTGRES_ADMIN_DSN=${POSTGRES_ADMIN_DSN:-postgresql://${DB_USER:-robin}:${DB_PASSWORD}@postgres-backend:5432/${DB_NAME:-robin}}
+      - REDIS_ADMIN_DSN=${REDIS_ADMIN_DSN:-redis://redis-backend:6379}
+      - SHERIFF_BASE_URL=${SHERIFF_BASE_URL:-http://sheriff-backend:3025}
+      - ROBIN_LOG_DIR=/mnt/logs/robin
+      # Explicit operator bootstrap only. Omitting host control must never leave
+      # automatic references to a non-running privileged agent.
+      - FLEET_AGENTS_BOOTSTRAP_JSON=${FLEET_AGENTS_BOOTSTRAP_JSON:-[]}
+      - 'FLEET_SERVICES_BOOTSTRAP_JSON=${FLEET_SERVICES_BOOTSTRAP_JSON:-[{"serviceId":"suite-redis","serviceType":"redis","name":"Suite Redis"},{"serviceId":"suite-postgres","serviceType":"postgres","name":"Suite PostgreSQL"},{"serviceId":"suite-clamav","serviceType":"clamav","name":"Suite ClamAV","apiUrl":"http://antivirus-backend:3310"}]}'
+    volumes:
+      - ${RSPAMD_CONFIG_MOUNT:-../robin/.suite/etc/rspamd/local.d}:/mnt/rspamd/local.d
+      - ${RSPAMD_STORE_MOUNT:-../robin/store/rspamd}:/mnt/rspamd/store
+      - ${ROBIN_LOG_MOUNT:-../robin/log/robin}:/mnt/logs/robin:ro
+    networks:
+      suite:
+        aliases: [admin-backend]
+    depends_on: !override
+      suite-victoriametrics: { condition: service_healthy }
+
+  suite-admin-ui:
+    build:
+      context: ./client
+    image: robin-admin-client:local-source
+    networks:
+      suite:
+        aliases: [admin-frontend]
+
+  suite-admin-postgres:
+    profiles: [standalone-database]
+
+networks:
+  suite:
+    external: true
+    name: suite

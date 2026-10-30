@@ -180,6 +180,57 @@ command long-poll and run through the same exec prefix; see
 
 ## Worked reference: the bundled suite
 
+### Local-source production opt-in
+
+For unpublished Admin changes use this **alternative** include chain, relative to
+the Admin checkout:
+
+```sh
+docker compose -f docker-compose.yaml -f docker-compose.suite-source.yaml up -d --build
+```
+
+Do **not** also include `docker-compose.suite.yaml` or `docker-compose.dev.yaml`.
+The source overlay builds `robin-admin-server:local-source` and
+`robin-admin-client:local-source`, forces production mode and secure cookies,
+and uses the existing external `suite` network and suite database.
+Set `ROBIN_ADMIN_PUBLIC_URL`, `SESSION_SECRET`, `ROBIN_ADMIN_ENCRYPTION_KEY`,
+`DB_PASSWORD`, and matching Robin `ROBIN_API_AUTH` explicitly.
+Fresh fleet registrations use direct collection; no agent is automatically
+enrolled or referenced. Modules and additional fleet services require explicit
+`MODULES_BOOTSTRAP_JSON` / `FLEET_SERVICES_BOOTSTRAP_JSON` or UI registration.
+Existing database registrations and agent assignments are not erased by changing
+Compose profiles: release their axes through Fleet before disabling an agent.
+
+Host control is a separate, **host-root-equivalent** opt-in:
+
+```sh
+docker compose -f docker-compose.yaml -f docker-compose.suite-source.yaml \
+  -f docker-compose.suite-source-host-control.yaml --profile host-control up -d --build
+```
+
+This builds `robin-admin-agent:local-source` and mounts the Docker socket. Create
+and enroll the agent in Fleet, passing `SUITE_AGENT_ID` and a one-time
+`SUITE_AGENT_ENROLLMENT_TOKEN`, or explicitly bootstrap a known credential and
+pass the same `SUITE_AGENT_CREDENTIAL`. Assign service axes separately. Neither
+including the host-control file without its profile nor omitting it requires
+agent credentials. Admin has no dependency on the agent. Config delivery remains
+apply-only until explicitly configured otherwise; this is **not** proof that
+DKIM keys were delivered or daemons reloaded.
+
+These are local-source contracts, not claims about the suite's pinned published
+`v1.1.1` include. They retain fixed suite container/volume names and must not be
+started beside an existing suite on the same host as a test fixture.
+`server/scripts/test-suite-source-compose.ps1` verifies only the resolved models,
+using synthetic credentials and without starting containers.
+
+Rspamd controller credentials are provisioned separately: admin-only
+`PUT /api/rspamd/settings` accepts `serviceId`, `rspamdControllerPassword`, and
+`rspamdEnablePassword`. They are sealed per service in `fleet_service_secrets`
+using `ROBIN_ADMIN_ENCRYPTION_KEY`; public settings redact them. No controller
+plaintext env/file bootstrap is provided. A deployment's Rspamd UCL password
+hash file is not an Admin credential: provision the matching plaintext through
+the authenticated settings API. Keep both out of source control and logs.
+
 The suite overlay (`docker-compose.suite.yaml`) runs one pre-provisioned
 `suite-admin-agent` (robin-agent + Docker CLI, root, Docker socket, the suite
 log tree mounted read-only). Services are registered by
