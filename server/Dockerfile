@@ -12,20 +12,17 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM node:26.12.1-bookworm-slim AS production-dependencies
+FROM node:26.12.1-alpine3.23@sha256:bc2b334006f15c7167bbeb2f08f28c2df883f7594a0470e04454ebe7560cfe68 AS production-dependencies
 
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-FROM node:26.12.1-bookworm-slim AS runtime
+FROM node:26.12.1-alpine3.23@sha256:bc2b334006f15c7167bbeb2f08f28c2df883f7594a0470e04454ebe7560cfe68 AS runtime
 
-# Patch Debian OS packages (gnutls, libcap2, gpgv, ...) so the release Trivy
-# gate passes; Node itself is installed from nodejs.org, not apt, so it is
-# unaffected.
-RUN apt-get update \
-    && apt-get upgrade -y \
-    && rm -rf /var/lib/apt/lists/* \
+# Patch Alpine OS packages so the release Trivy gate passes.
+RUN apk upgrade --no-cache \
+    && apk add --no-cache "libexpat>=2.9.0-r0" \
     && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 WORKDIR /app

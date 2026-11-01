@@ -19,7 +19,7 @@ RUN npm run build
 FROM nginx:1.31.8-alpine@sha256:1ef7ca94d7879df82421428ce13bd1eaa412404953859cf7a5b6512c25e67a60 AS runtime
 
 # Patch Alpine OS packages (openssl et al.) so the release Trivy gate passes.
-RUN apk upgrade --no-cache && apk add --no-cache 'pcre2>=10.49-r0'
+RUN apk upgrade --no-cache && apk add --no-cache 'pcre2>=10.49-r0' 'curl>=8.23.0-r0' 'libcurl>=8.23.0-r0'
 RUN sed -Ei 's|pid[[:space:]]+/run/nginx.pid;|pid /tmp/nginx.pid;|' /etc/nginx/nginx.conf
 
 ENV BASE_PATH=/
