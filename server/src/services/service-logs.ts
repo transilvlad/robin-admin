@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { getFleetServiceById, type FleetService } from '../db/queries/fleet-services.js';
 import { getAgentServiceLogs, storeAgentServiceLogs } from '../db/queries/fleet-agent-logs.js';
 import { getRspamdAuthHeaders } from './metrics-poller.js';
+import { normalizeLogText } from './log-text.js';
 import { type FleetServiceType } from './service-types.js';
 import { logger } from '../logger.js';
 import { getConfig } from '../db/queries/config.js';
@@ -234,9 +235,9 @@ async function readAgentPushedLogs(
 export async function ingestAgentLogs(serviceId: string, source: string, lines: string[], reset: boolean): Promise<number> {
   const config = await getConfig();
   const maxLines = Math.max(1, Math.min(10000, config.logMaxLines || MAX_LINES));
-  const clean = lines.filter((l) => typeof l === 'string' && l.length > 0);
+  const clean = lines.filter((l) => typeof l === 'string' && l.length > 0).map(normalizeLogText);
   const previous = reset ? [] : (await getAgentServiceLogs(serviceId))?.lines ?? [];
-  await storeAgentServiceLogs(serviceId, source || 'agent', [...previous, ...clean].slice(-maxLines));
+  await storeAgentServiceLogs(serviceId, normalizeLogText(source || 'agent'), [...previous, ...clean].slice(-maxLines));
   return clean.length;
 }
 

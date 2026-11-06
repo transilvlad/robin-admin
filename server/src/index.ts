@@ -96,6 +96,8 @@ import { startMetricsPoller, stopMetricsPoller } from './services/metrics-poller
 import { startAlertDeliveryWorker, stopAlertDeliveryWorker } from './services/alerts/delivery-worker.js';
 import { startAlertScheduler, stopAlertScheduler } from './services/alerts/scheduler.js';
 import { startTelemetryRuleScheduler, stopTelemetryRuleScheduler } from './services/alerts/telemetry-rule-scheduler.js';
+import { startLogsRuleScheduler, stopLogsRuleScheduler } from './services/alerts/logs-rule-scheduler.js';
+import { startLogsDeliveryWorker, stopLogsDeliveryWorker } from './services/logs-delivery.js';
 import { reportIngestionBody } from './middleware/report-ingestion-body.js';
 import { startMonitoringScheduler, stopMonitoringScheduler } from './services/monitoring/scheduler.js';
 import { startMonitoringHeartbeats, stopMonitoringHeartbeats } from './services/monitoring/heartbeat.js';
@@ -271,8 +273,10 @@ app.use('/api/monitoring', express.urlencoded({ extended: false, limit: '1mb', i
 const generalJson = express.json({ limit: config.bodyLimit });
 const generalForm = express.urlencoded({ extended: true, limit: config.bodyLimit });
 const isModuleApi = (req: Request) => req.path === '/api/modules' || req.path.startsWith('/api/modules/');
-app.use((req, res, next) => isModuleApi(req) ? next() : generalJson(req, res, next));
-app.use((req, res, next) => isModuleApi(req) ? next() : generalForm(req, res, next));
+const isRawLogsIngest = (req: Request) => req.path === '/api/logs/ingest' || req.path === '/api/logs/sentry';
+const bypassGeneralBodyParser = (req: Request) => isModuleApi(req) || isRawLogsIngest(req);
+app.use((req, res, next) => bypassGeneralBodyParser(req) ? next() : generalJson(req, res, next));
+app.use((req, res, next) => bypassGeneralBodyParser(req) ? next() : generalForm(req, res, next));
 
 // PostgreSQL session store for persistent sessions across restarts
 const PgSession = connectPgSimple(session);
@@ -337,19 +341,16 @@ app.use(session({
 // default meant for arbitrary external API callers and get real reports
 // rejected with 429s.
 //
-// The fleet agent channel gets its own, larger bucket: one agent makes several
-// calls per service every 30s plus its command long-poll, and several agents
-// can share one NAT address, so the UI-sized default would drop their metrics
-// and logs. Enrollment, the one unauthenticated agent route, keeps the default.
-// Telemetry ingest shares that bucket: each Vector host pushes a batch every
-// few seconds and is authenticated by its API key.
+// Fleet agents and push-ingest endpoints get their own larger bucket: agents
+// make several calls per service every 30s, while collectors can send frequent
+// batches. Enrollment, the unauthenticated agent route, keeps the default.
 //
 // Rate limits run after the session so signed-in admins get their own bucket.
 const AGENT_CHANNEL_RATE_MULTIPLIER = 10;
-const TELEMETRY_INGEST_PATHS = ['/api/telemetry/write', '/api/telemetry/import'];
-const isAgentChannel = (req: Request) =>
+const INGEST_RATE_LIMIT_PATHS = ['/api/telemetry/write', '/api/telemetry/import', '/api/logs/ingest', '/api/logs/sentry'];
+const isHighVolumeChannel = (req: Request) =>
   (req.originalUrl.startsWith('/api/fleet/agent/') && !req.originalUrl.startsWith('/api/fleet/agent/enroll'))
-  || TELEMETRY_INGEST_PATHS.includes(req.originalUrl.split('?')[0]);
+  || INGEST_RATE_LIMIT_PATHS.includes(req.originalUrl.split('?')[0]);
 
 // A signed-in admin is limited per account, not per IP, with a larger budget:
 // one page load makes several API calls, and admins behind one office NAT
@@ -362,7 +363,7 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => (req.session?.admin ? `admin:${req.session.admin.id}` : getTrustedClientIp(req)),
-  skip: (req) => isLoopbackConnection(req) || isAgentChannel(req),
+  skip: (req) => isLoopbackConnection(req) || isHighVolumeChannel(req),
 });
 const agentChannelLimiter = rateLimit({
   windowMs: config.rateLimit.windowMs,
@@ -370,7 +371,7 @@ const agentChannelLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => getTrustedClientIp(req),
-  skip: (req) => isLoopbackConnection(req) || !isAgentChannel(req),
+  skip: (req) => isLoopbackConnection(req) || !isHighVolumeChannel(req),
 });
 app.use('/api', limiter);
 app.use('/api', agentChannelLimiter);
@@ -543,13 +544,15 @@ async function start() {
     await bootstrapFleetServicesFromConfig();
 
     // Singleton background jobs (metrics polling, alert scheduling/delivery,
-    // Rspamd DKIM maintenance) must run on exactly one replica at a time — see
-    // services/leader-lock.ts. This is a no-op wait when running a single
-    // instance: leadership is acquired immediately.
+    // Logs delivery, Rspamd DKIM maintenance) must run on exactly one replica
+    // at a time — see services/leader-lock.ts. This is a no-op wait when
+    // running a single instance: leadership is acquired immediately.
     runAsLeader(() => {
       startMetricsPoller();
       startAlertScheduler();
       startTelemetryRuleScheduler();
+      startLogsRuleScheduler();
+      startLogsDeliveryWorker();
       startAlertDeliveryWorker();
       startEmailDeliveryWorker();
       startMonitoringHeartbeats();
@@ -570,6 +573,8 @@ async function start() {
       void stopMetricsPoller();
       stopAlertScheduler();
       stopTelemetryRuleScheduler();
+      stopLogsRuleScheduler();
+      stopLogsDeliveryWorker();
       stopAlertDeliveryWorker();
       stopEmailDeliveryWorker();
       stopMonitoringScheduler();

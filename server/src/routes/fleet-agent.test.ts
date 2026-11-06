@@ -10,7 +10,7 @@ import * as fleetAgentSync from '../db/queries/fleet-agent-sync.js';
 import * as fleetAgentSyncService from '../services/fleet-agent-sync.js';
 import * as metricsPoller from '../services/metrics-poller.js';
 import * as fleetServiceObservations from '../db/queries/fleet-service-observations.js';
-import * as serviceLogs from '../services/service-logs.js';
+import * as fleetLogs from '../services/fleet-logs.js';
 import { agentSupports, resetAgentCommandsForTests, runAgentCommand } from '../services/agent-commands.js';
 import { resetAgentCommandQueryMock } from '../../tests/agent-command-query-mock.js';
 
@@ -39,15 +39,16 @@ vi.mock('../db/queries/monitoring-probes.js', () => ({
 
 vi.mock('../services/metrics-poller.js', () => ({
   ingestAgentMetrics: vi.fn(),
-  ingestPostfixLogLines: vi.fn(),
 }));
 
 vi.mock('../db/queries/fleet-service-observations.js', () => ({
   recordFleetServiceObservation: vi.fn(),
 }));
 
-vi.mock('../services/service-logs.js', () => ({
-  ingestAgentLogs: vi.fn(),
+vi.mock('../services/fleet-logs.js', () => ({
+  acceptFleetLogBatch: vi.fn(),
+  FleetLogsBatchTooLargeError: class FleetLogsBatchTooLargeError extends Error {},
+  FleetLogsQueueFullError: class FleetLogsQueueFullError extends Error {},
 }));
 
 vi.mock('../db/queries/fleet-agent-sync.js', () => ({
@@ -71,8 +72,7 @@ const mockCredentialMatches = vi.mocked(fleetAgents.fleetAgentCredentialMatches)
 const mockBuildManifest = vi.mocked(fleetAgentSyncService.buildManagedServiceManifest);
 const mockIngestMetrics = vi.mocked(metricsPoller.ingestAgentMetrics);
 const mockRecordObservation = vi.mocked(fleetServiceObservations.recordFleetServiceObservation);
-const mockIngestLogs = vi.mocked(serviceLogs.ingestAgentLogs);
-const mockIngestPostfixLines = vi.mocked(metricsPoller.ingestPostfixLogLines);
+const mockAcceptLogs = vi.mocked(fleetLogs.acceptFleetLogBatch);
 const mockUpsertSyncStatus = vi.mocked(fleetAgentSync.upsertFleetServiceSyncStatus);
 const mockGetProbeManifest = vi.mocked(monitoringProbes.getMonitoringProbeManifest);
 const mockIsProbeOnlyAgent = vi.mocked(monitoringProbes.isProbeOnlyAgent);
@@ -140,7 +140,7 @@ beforeEach(() => {
   mockBuildManifest.mockResolvedValue({ sha256: 'a'.repeat(64), etag: '"abc"', files: [] } as never);
   mockIngestMetrics.mockResolvedValue({ timestamp: new Date('2024-01-01T00:00:00Z') } as never);
   mockRecordObservation.mockResolvedValue(undefined as never);
-  mockIngestLogs.mockResolvedValue(1 as never);
+  mockAcceptLogs.mockResolvedValue({ stored: 1, duplicate: false });
   mockUpsertSyncStatus.mockResolvedValue({} as never);
   mockGetProbeManifest.mockResolvedValue({
     manifest: {
@@ -270,21 +270,63 @@ describe('managed config file fetch', () => {
 });
 
 describe('agent log batches', () => {
-  it('feeds only incremental Postfix batches into message counters', async () => {
+  const headers = { Authorization: 'Bearer token', 'x-robin-agent-id': 'full-agent' };
+  const push = (body: unknown) => requestJson('/services/svc-1/logs', { method: 'POST', headers, body: JSON.stringify(body) });
+
+  beforeEach(() => {
     mockGetFleetServiceById.mockResolvedValue(buildService({ agentId: 'full-agent', collectionMode: 'agent' }) as never);
-    const headers = { Authorization: 'Bearer token', 'x-robin-agent-id': 'full-agent' };
-    const push = (body: unknown) => requestJson('/services/svc-1/logs', { method: 'POST', headers, body: JSON.stringify(body) });
+  });
 
-    await push({ source: 'journalctl -u postfix@-', lines: ['old'], reset: true });
-    expect(mockIngestLogs).toHaveBeenLastCalledWith('svc-1', 'journalctl -u postfix@-', ['old'], true);
-    expect(mockIngestPostfixLines).not.toHaveBeenCalled();
+  it('passes the batch, its id and aligned line times to ingestion', async () => {
+    const result = await push({ source: 'file', lines: ['a', 7, 'b'], times: ['2026-11-03T10:00:00Z', 'x', '2026-11-03T10:00:01Z'], batchId: 'b-1', reset: false });
+    expect(result.response.status).toBe(200);
+    expect(result.body).toEqual({ success: true, data: { stored: 1, duplicate: false } });
+    expect(mockAcceptLogs).toHaveBeenCalledWith({
+      fleetServiceId: 1,
+      serviceType: 'postfix',
+      serviceId: 'svc-1',
+      agentId: 'full-agent',
+      source: 'file',
+      lines: ['a', 'b'],
+      times: ['2026-11-03T10:00:00Z', '2026-11-03T10:00:01Z'],
+      batchId: 'b-1',
+      reset: false,
+    });
+  });
 
-    await push({ source: 'journalctl -u postfix@-', lines: ['new'], reset: false });
-    expect(mockIngestLogs).toHaveBeenLastCalledWith('svc-1', 'journalctl -u postfix@-', ['new'], false);
-    expect(mockIngestPostfixLines).toHaveBeenCalledWith(1, ['new']);
+  it('treats a batch without reset=false as a tail refresh', async () => {
+    await push({ lines: ['tail'] });
+    expect(mockAcceptLogs).toHaveBeenCalledWith(expect.objectContaining({ source: 'agent', reset: true, batchId: null }));
+  });
+
+  it('validates batch ids and times', async () => {
+    expect((await push({ lines: ['a'], batchId: 'bad id' })).response.status).toBe(400);
+    expect((await push({ lines: ['a'], batchId: 'x'.repeat(101) })).response.status).toBe(400);
+    expect((await push({ lines: ['a'], times: 'now' })).response.status).toBe(400);
+    expect((await push({ source: 's'.repeat(121), lines: ['a'] })).response.status).toBe(400);
+    expect(mockAcceptLogs).not.toHaveBeenCalled();
+  });
+
+  it('fails the push so the agent retries when the batch cannot be accepted', async () => {
+    mockAcceptLogs.mockRejectedValueOnce(new Error('database unavailable'));
+    expect((await push({ lines: ['a'], batchId: 'b-2', reset: false })).response.status).toBe(500);
+  });
+
+  it('returns retryable backpressure when queue admission is full', async () => {
+    mockAcceptLogs.mockRejectedValueOnce(new fleetLogs.FleetLogsQueueFullError('queue full'));
+    const result = await push({ lines: ['a'], batchId: 'b-3', reset: false });
+    expect(result.response.status).toBe(503);
+    expect(result.response.headers.get('retry-after')).toBe('5');
+    expect(result.body).toMatchObject({ success: false, error: 'queue full' });
+  });
+
+  it('returns 413 for a batch that the agent must split', async () => {
+    mockAcceptLogs.mockRejectedValueOnce(new fleetLogs.FleetLogsBatchTooLargeError('split this batch'));
+    const result = await push({ lines: ['a', 'b'], batchId: 'b-4', reset: false });
+    expect(result.response.status).toBe(413);
+    expect(result.body).toMatchObject({ success: false, error: 'split this batch' });
   });
 });
-
 describe('Cyrus agent collection', () => {
   it('accepts Cyrus collector fields but refuses config access for its metrics agent', async () => {
     mockGetFleetServiceById.mockResolvedValue(buildService({ serviceType: 'cyrus', agentId: 'full-agent', collectionMode: 'agent' }) as never);

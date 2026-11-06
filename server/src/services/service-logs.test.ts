@@ -219,6 +219,11 @@ describe('ingestAgentLogs', () => {
     expect(storeAgentServiceLogs).toHaveBeenCalledWith('s1', '/var/log/mail.log', ['a', 'b', 'c']);
   });
 
+  it('normalizes unsupported characters in agent log tails', async () => {
+    await ingestAgentLogs('s1', 'file\u0000\uD800', ['a\u0000\uD800', 'b\uDC00'], true);
+    expect(storeAgentServiceLogs).toHaveBeenCalledWith('s1', 'file\uFFFD\uFFFD', ['a\uFFFD\uFFFD', 'b\uFFFD']);
+  });
+
   it('appends incremental batches, keeping the newest logMaxLines', async () => {
     getConfig.mockResolvedValue({ logDefaultLines: 200, logMaxLines: 3 });
     getAgentServiceLogs.mockResolvedValue({ source: 'x', lines: ['a', 'b'], capturedAt: new Date() });

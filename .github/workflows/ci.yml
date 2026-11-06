@@ -8,8 +8,7 @@
 # Branch Protection Recommendations:
 # - Require status checks to pass before merging
 # - Require branches to be up to date before merging
-# - Require the following checks: build-client, build-server, typecheck,
-#   dependency-audit, secret-scan
+# - Require the CI Success check, which includes Checks and Logs integration.
 # - These are the checks that should be marked "required" in this repo's
 #   branch protection settings for `main` (GitHub branch protection cannot be
 #   configured from this workflow file — set it up manually in repo settings).
@@ -17,10 +16,9 @@
 name: CI
 
 # Automatic runs (pull requests, and pushes to main through
-# production-images.yml) do only the Checks job. The Postgres integration
-# tests, probe end-to-end test, reliability drill and Compose smoke tests are
-# manual: run this workflow from the Actions tab before a release. Agent tests
-# run in agent-release.yml; the images are built by the publish workflows.
+# production-images.yml) run Checks and the Logs integration tests. Other
+# Postgres integration tests, the probe end-to-end test, reliability drill and
+# Compose smoke tests are manual. Agent tests run in agent-release.yml.
 on:
   workflow_call:
   workflow_dispatch:
@@ -138,9 +136,74 @@ jobs:
         working-directory: installer
         run: npm test
 
-  # The unit suite mocks the database; these run the DMARC ingest, rollup and
-  # partition SQL against a real Postgres. One file at a time: they share and
-  # reset the same tables.
+  # One file at a time: these tests share and reset the same disposable tables.
+  test-logs-integration:
+    name: Test Logs (Postgres and VictoriaLogs)
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    needs: checks
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: robin_test_logs_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d robin_test_logs_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      victorialogs:
+        image: victoriametrics/victoria-logs:v1.53.0@sha256:251121fa882af99b95ba0c230a4a2f412ea602d2698c64a96c58dc9842bb755d
+        ports:
+          - 9428:9428
+    env:
+      LOGS_IT_DB: '1'
+      LOGS_STORE_URL: http://127.0.0.1:9428
+      LOGS_SENTRY_CLIENT_SECRET: logs-integration-test-secret
+      ROBIN_ADMIN_ENCRYPTION_KEY: ci-logs-encryption-key-for-tests-only-0123456789
+      SESSION_SECRET: ci-integration-session-secret
+      SETUP_ID_FILE: /tmp/robin-admin-logs-test-setup-id
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_NAME: robin_test_logs_ci
+      DB_USER: test
+      DB_PASSWORD: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Restore node_modules
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            client/node_modules
+            server/node_modules
+          key: node-modules-${{ runner.os }}-node-${{ env.NODE_VERSION }}-${{ hashFiles('**/package-lock.json') }}
+      - name: Install server dependencies if cache is unavailable
+        working-directory: server
+        run: if [ ! -x node_modules/.bin/vitest ]; then npm ci; fi
+      - name: Run Logs integration tests
+        working-directory: server
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:9428/health >/dev/null; then break; fi
+            if [ "$attempt" -eq 60 ]; then echo "VictoriaLogs did not become ready" >&2; exit 1; fi
+            sleep 1
+          done
+          timeout 240s npx vitest run src/db/queries/logs.integration.test.ts
+          timeout 240s npx vitest run src/services/logs-delivery.integration.test.ts
+          timeout 240s npx vitest run src/services/alerts/logs-webhook.integration.test.ts
+
+  # The remaining integration suites use real Postgres and fleet databases.
   test-server-integration:
     name: Test Server (Postgres integration)
     if: github.event_name == 'workflow_dispatch'
@@ -314,13 +377,14 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [checks, test-server-integration, test-probe-e2e, reliability-smoke, compose-smoke]
+    needs: [checks, test-logs-integration, test-server-integration, test-probe-e2e, reliability-smoke, compose-smoke]
     if: always()
     steps:
       - name: Check all jobs passed
         run: |
           ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
           if [[ "${{ needs.checks.result }}" != "success" ]] || \
+             [[ "${{ needs.test-logs-integration.result }}" != "success" ]] || \
              ! ok "${{ needs.test-server-integration.result }}" || \
              ! ok "${{ needs.test-probe-e2e.result }}" || \
              ! ok "${{ needs.reliability-smoke.result }}" || \

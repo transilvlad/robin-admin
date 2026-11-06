@@ -5,6 +5,7 @@ $synthetic = @{
     SESSION_SECRET = 'fixture-session-secret-not-for-production'
     ROBIN_ADMIN_ENCRYPTION_KEY = 'fixture-encryption-key-not-for-production'
     DB_PASSWORD = 'fixture-database-password'
+    SUITE_LOG_MOUNT = (Join-Path $root 'fixture-suite-logs')
     ROBIN_ADMIN_PUBLIC_URL = 'https://admin.example.test'
     FLEET_AGENTS_BOOTSTRAP_JSON = ''
     FLEET_SERVICES_BOOTSTRAP_JSON = ''

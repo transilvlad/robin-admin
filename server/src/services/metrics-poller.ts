@@ -2,6 +2,7 @@
  * Metrics polling service for all supported fleet service types.
  */
 
+import type { PoolClient } from 'pg';
 import { query } from '../db/connection.js';
 import { AGENT_RAW_TYPES } from './capability-rules.js';
 import { getConfig } from '../db/queries/config.js';
@@ -1438,12 +1439,12 @@ async function postfixCountersFor(fleetServiceId: number): Promise<PostfixMessag
  * service's cumulative message counters; the next queue snapshot stores them.
  * One atomic upsert, so concurrent pushes to different replicas both count.
  */
-export async function ingestPostfixLogLines(fleetServiceId: number, lines: string[]): Promise<void> {
+export async function ingestPostfixLogLines(fleetServiceId: number, lines: string[], client?: PoolClient): Promise<void> {
   const added = countPostfixLogLines(lines);
   if (!added.messagesDelivered && !added.messagesDeferred && !added.messagesBounced && !added.messagesRejected) {
     return;
   }
-  await query(
+  const sql =
     `INSERT INTO postfix_message_counters AS counters (
        fleet_service_id, messages_delivered, messages_deferred, messages_bounced, messages_rejected
      )
@@ -1459,9 +1460,10 @@ export async function ingestPostfixLogLines(fleetServiceId: number, lines: strin
        messages_deferred = counters.messages_deferred + $3::bigint,
        messages_bounced = counters.messages_bounced + $4::bigint,
        messages_rejected = counters.messages_rejected + $5::bigint,
-       updated_at = CURRENT_TIMESTAMP`,
-    [fleetServiceId, added.messagesDelivered, added.messagesDeferred, added.messagesBounced, added.messagesRejected]
-  );
+       updated_at = CURRENT_TIMESTAMP`;
+  const params = [fleetServiceId, added.messagesDelivered, added.messagesDeferred, added.messagesBounced, added.messagesRejected];
+  if (client) await client.query(sql, params);
+  else await query(sql, params);
 }
 
 // A postfix_exporter reports queue depth only; the message counters come from

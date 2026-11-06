@@ -4,7 +4,7 @@
 #   docker compose -f docker-compose.yaml -f docker-compose.host.yaml up -d
 #
 # Robin Admin uses host networking and binds 127.0.0.1:3001; every role address
-# is a loopback address (override in .env). The telemetry store and the UI are
+# is a loopback address (override in .env). The telemetry and logs stores and the UI are
 # published on loopback ports for Robin Admin and the host proxy. The bundled
 # gateway and Robin Admin's own database are off: the host's proxy and database
 # are used instead.
@@ -18,6 +18,12 @@ services:
       - HOST=${HOST:-127.0.0.1}
       - DB_HOST=${DB_HOST:-127.0.0.1}
       - TELEMETRY_STORE_URL=${TELEMETRY_STORE_URL:-http://127.0.0.1:8428}
+      - LOGS_STORE_URL=${LOGS_STORE_URL:-http://127.0.0.1:${LOGS_STORE_PORT:-9428}}
+      - LOGS_SENTRY_CLIENT_SECRET=${LOGS_SENTRY_CLIENT_SECRET:-}
+      - LOGS_RETENTION_DAYS=${LOGS_RETENTION_DAYS:-14}
+      - LOGS_STORE_MAX_DISK=${LOGS_STORE_MAX_DISK:-10GiB}
+      - LOGS_REQUEST_TIMEOUT_MS=${LOGS_REQUEST_TIMEOUT_MS:-15000}
+      - LOGS_INGEST_BODY_LIMIT_BYTES=${LOGS_INGEST_BODY_LIMIT_BYTES:-8388608}
       - MODULE_INSTALLER_URL=${MODULE_INSTALLER_URL:-http://127.0.0.1:3041}
     depends_on: !override
       suite-victoriametrics: { condition: service_healthy }
@@ -29,6 +35,11 @@ services:
     networks: !override
       suite-admin: {}
     ports: ["127.0.0.1:${TELEMETRY_STORE_PORT:-8428}:8428"]
+
+  suite-victorialogs:
+    networks: !override
+      suite-admin: {}
+    ports: ["127.0.0.1:${LOGS_STORE_PORT:-9428}:9428"]
 
   suite-admin-installer:
     networks: !override

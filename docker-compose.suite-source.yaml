@@ -32,7 +32,12 @@ services:
     volumes:
       - ${RSPAMD_CONFIG_MOUNT:-../robin/.suite/etc/rspamd/local.d}:/mnt/rspamd/local.d
       - ${RSPAMD_STORE_MOUNT:-../robin/store/rspamd}:/mnt/rspamd/store
-      - ${ROBIN_LOG_MOUNT:-../robin/log/robin}:/mnt/logs/robin:ro
+      - type: bind
+        source: ${ROBIN_LOG_MOUNT:-${SUITE_LOG_MOUNT:?Set SUITE_LOG_MOUNT to the absolute path of the suite log directory}/robin}
+        target: /mnt/logs/robin
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       suite:
         aliases: [admin-backend]

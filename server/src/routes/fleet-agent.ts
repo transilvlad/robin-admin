@@ -5,9 +5,10 @@ import {
   fleetAgentCredentialMatches,
   recordFleetAgentHeartbeat,
 } from '../db/queries/fleet-agents.js';
-import { ingestAgentMetrics, ingestPostfixLogLines } from '../services/metrics-poller.js';
+import { ingestAgentMetrics } from '../services/metrics-poller.js';
+import { MAX_SOURCE_NAME_LENGTH } from '../services/logs-store.js';
 import { recordFleetServiceObservation } from '../db/queries/fleet-service-observations.js';
-import { ingestAgentLogs } from '../services/service-logs.js';
+import { acceptFleetLogBatch, FleetLogsBatchTooLargeError, FleetLogsQueueFullError } from '../services/fleet-logs.js';
 import {
   appendFleetServiceSyncLog,
   getFleetServiceSyncStatus,
@@ -697,27 +698,59 @@ router.post('/services/:serviceId/metrics', requireFleetAgentMetricsAuth, async 
 
 // POST /api/fleet/agent/services/:serviceId/logs — an agent pushes the log lines
 // it read (journald/file/container) for a service it owns: its recent tail with
-// reset=true after (re)start, then only new lines. robin-admin keeps a rolling
-// buffer for the Logs page and derives Postfix message counters from new lines.
+// reset=true when it has no saved position, then only new lines, each batch
+// with a batchId it repeats until the push succeeds and optional line times.
+// robin-admin keeps a rolling buffer for the service page, queues new lines for
+// Logs search and derives Postfix message counters from them.
 router.post('/services/:serviceId/logs', requireFleetAgentLogsAuth, async (req: Request, res: Response) => {
   try {
     const service = req.fleetAgentService!;
     const body = isRecord(req.body) ? req.body : {};
     const source = typeof body.source === 'string' && body.source.trim() ? body.source.trim() : 'agent';
+    if (source.length > MAX_SOURCE_NAME_LENGTH) {
+      res.status(400).json({ success: false, error: `source must be at most ${MAX_SOURCE_NAME_LENGTH} characters` });
+      return;
+    }
     if (!Array.isArray(body.lines)) {
       res.status(400).json({ success: false, error: 'lines[] is required' });
       return;
     }
-    const lines = body.lines.filter((l): l is string => typeof l === 'string');
-    // A reset batch is the agent's recent tail after (re)start — already
-    // counted or predating it — so only incremental batches feed counters.
-    const reset = body.reset !== false;
-    const stored = await ingestAgentLogs(service.serviceId, source, lines, reset);
-    if (!reset && service.serviceType === 'postfix') {
-      await ingestPostfixLogLines(service.id, lines);
+    if (body.times !== undefined && !Array.isArray(body.times)) {
+      res.status(400).json({ success: false, error: 'times must be an array' });
+      return;
     }
-    res.json({ success: true, data: { stored } });
+    if (body.batchId !== undefined && (typeof body.batchId !== 'string' || !/^[A-Za-z0-9._:-]{1,100}$/.test(body.batchId))) {
+      res.status(400).json({ success: false, error: 'batchId must be up to 100 letters, digits, dots, colons, underscores or hyphens' });
+      return;
+    }
+    const lines: string[] = [];
+    const times: unknown[] = [];
+    body.lines.forEach((line, index) => {
+      if (typeof line !== 'string') return;
+      lines.push(line);
+      times.push(Array.isArray(body.times) ? body.times[index] : undefined);
+    });
+    const result = await acceptFleetLogBatch({
+      fleetServiceId: service.id,
+      serviceType: service.serviceType,
+      serviceId: service.serviceId,
+      agentId: req.fleetAgentId,
+      source,
+      lines,
+      times,
+      batchId: typeof body.batchId === 'string' ? body.batchId : null,
+      reset: body.reset !== false,
+    });
+    res.json({ success: true, data: result });
   } catch (error) {
+    if (error instanceof FleetLogsBatchTooLargeError) {
+      res.status(413).json({ success: false, error: error.message });
+      return;
+    }
+    if (error instanceof FleetLogsQueueFullError) {
+      res.set('Retry-After', '5').status(503).json({ success: false, error: error.message });
+      return;
+    }
     logger.error('Fleet agent logs ingest failed', { serviceId: routeParam(req, 'serviceId'), error: (error as Error).message });
     res.status(500).json({ success: false, error: 'Logs ingest failed' });
   }

@@ -54,6 +54,7 @@ export interface AdminConfig extends ObservabilitySettings, ReportingSettings, O
   mailboxesEnabled: boolean;
   monitoringEnabled: boolean;
   telemetryEnabled: boolean;
+  logsEnabled: boolean;
   modulesEnabled: boolean;
   robinConfigTableName: string;
 
@@ -209,6 +210,7 @@ const DEFAULT_CONFIG: AdminConfig = {
   mailboxesEnabled: false,
   monitoringEnabled: false,
   telemetryEnabled: false,
+  logsEnabled: false,
   modulesEnabled: false,
   robinConfigTableName: validatePostgresIdentifier(
     process.env.ROBIN_CONFIG_TABLE || 'robin_config_store',
@@ -534,6 +536,9 @@ async function loadConfig(): Promise<AdminConfig> {
           break;
         case 'telemetryEnabled':
           config.telemetryEnabled = row.value === 'true';
+          break;
+        case 'logsEnabled':
+          config.logsEnabled = row.value === 'true';
           break;
         case 'modulesEnabled':
           config.modulesEnabled = row.value === 'true';

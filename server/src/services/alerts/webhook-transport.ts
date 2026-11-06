@@ -1,4 +1,5 @@
 import { lookup } from 'node:dns/promises';
+import type { LookupAddress } from 'node:dns';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import ipaddr from 'ipaddr.js';
@@ -30,11 +31,11 @@ export function publicWebhookAddress(address: string): boolean {
 }
 
 export function createAlertTransport(dependencies: {
-  resolve?: typeof lookup;
+  resolve?: (hostname: string, options: { all: true; verbatim: true }) => Promise<LookupAddress[]>;
   request?: typeof httpsRequest;
   addressAllowed?: typeof publicWebhookAddress;
 } = {}) {
-  const resolveAddress = dependencies.resolve ?? lookup;
+  const resolveAddress: (hostname: string, options: { all: true; verbatim: true }) => Promise<LookupAddress[]> = dependencies.resolve ?? lookup;
   const request = dependencies.request ?? httpsRequest;
   const addressAllowed = dependencies.addressAllowed ?? publicWebhookAddress;
   return async function send(input: AlertTransportInput): Promise<AlertTransportResult> {

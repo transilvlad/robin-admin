@@ -1011,6 +1011,7 @@ router.get('/features', async (req: Request, res: Response) => {
         fleet: config.fleetEnabled,
         monitoring: config.monitoringEnabled,
         telemetry: config.telemetryEnabled,
+        logs: config.logsEnabled,
         modules: config.modulesEnabled,
         robinConfig: hasRobinConfig,
         rspamd: fleetCounts.byType.rspamd.enabled > 0,
@@ -1024,6 +1025,7 @@ router.get('/features', async (req: Request, res: Response) => {
         fleetEnabled: config.fleetEnabled,
         monitoringEnabled: config.monitoringEnabled,
         telemetryEnabled: config.telemetryEnabled,
+        logsEnabled: config.logsEnabled,
         telemetryStoreConfigured: authenticated ? await telemetryStoreConfigured() : false,
         modulesEnabled: config.modulesEnabled,
         fleetServices: {

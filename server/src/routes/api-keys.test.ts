@@ -97,6 +97,19 @@ function createKey(body: Record<string, unknown>) {
 }
 
 describe('POST /api-keys expiry defaulting (SEC-13)', () => {
+  it('allows least-privilege Logs read and manage scopes', async () => {
+    const response = await createKey({
+      name: 'logs automation',
+      role: 'admin',
+      scopes: ['logs:read', 'logs:manage'],
+    });
+
+    expect(response.status).toBe(201);
+    expect(mockCreateApiKey).toHaveBeenCalledWith(expect.objectContaining({
+      scopes: ['logs:read', 'logs:manage'],
+    }));
+  });
+
   it('defaults an omitted expiresAt to the configured max lifetime instead of never expiring', async () => {
     const before = Date.now();
     const response = await createKey({

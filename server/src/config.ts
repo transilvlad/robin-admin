@@ -54,6 +54,13 @@ export interface Config {
     baseUrl: string;
     rootPublicKeyPem: string;
   };
+  logs: {
+    storeUrl: string;
+    sentryClientSecret: string;
+    retentionDays: number;
+    maxDiskBytes: number | null;
+    spoolMaxBytes: number;
+  };
   telemetry: {
     storeUrl: string;
   };
@@ -112,6 +119,30 @@ function getEnvInt(key: string, defaultValue: number): number {
     throw new Error(`Invalid integer for environment variable: ${key}`);
   }
   return parsed;
+}
+
+function getEnvBytes(key: string, defaultValue: string): number | null {
+  const value = getEnv(key, defaultValue).trim();
+  const match = /^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$/i.exec(value);
+  if (!match) return null;
+  const unit = (match[2] ?? 'B').toLowerCase();
+  const base = unit.endsWith('ib') ? 1024 : 1000;
+  const exponent = unit === 'b' ? 0
+    : unit.startsWith('k') ? 1
+      : unit.startsWith('m') ? 2
+        : unit.startsWith('g') ? 3
+          : 4;
+  const bytes = Number(match[1]) * base ** exponent;
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : null;
+}
+
+const MIN_LOGS_SPOOL_BYTES = 64 * 1024;
+
+function getLogsSpoolMaxBytes(): number {
+  const bytes = getEnvBytes('LOGS_SPOOL_MAX_BYTES', '256MiB');
+  if (bytes === null) throw new Error('LOGS_SPOOL_MAX_BYTES must be a positive byte size');
+  if (bytes < MIN_LOGS_SPOOL_BYTES) throw new Error('LOGS_SPOOL_MAX_BYTES must be at least 64KiB');
+  return bytes;
 }
 
 function getEnvBool(key: string, defaultValue: boolean): boolean {
@@ -255,6 +286,16 @@ export const config: Config = {
     // metrics-backend). Trusted like DB_HOST: host-networked installs set a
     // loopback address here.
     storeUrl: getEnv('TELEMETRY_STORE_URL', 'http://metrics-backend:8428').trim().replace(/\/+$/, ''),
+  },
+  logs: {
+    // Bundled VictoriaLogs store (role alias logs-backend). Optional: search is
+    // off until Logs is enabled; store outages do not block Fleet agent pushes.
+    storeUrl: getEnv('LOGS_STORE_URL', 'http://logs-backend:9428').trim().replace(/\/+$/, ''),
+    sentryClientSecret: getEnv('LOGS_SENTRY_CLIENT_SECRET', ''),
+    retentionDays: Math.max(1, getEnvInt('LOGS_RETENTION_DAYS', 14)),
+    maxDiskBytes: getEnvBytes('LOGS_STORE_MAX_DISK', '10GiB'),
+    // PostgreSQL space for accepted lines waiting for the logs store.
+    spoolMaxBytes: getLogsSpoolMaxBytes(),
   },
   moduleInstaller: {
     url: getEnv('MODULE_INSTALLER_URL', 'http://installer-backend:3041'),

@@ -3032,6 +3032,135 @@ export async function initializeSchema(): Promise<void> {
           || (EXTRACT(EPOCH FROM i.opened_at) * 1000)::bigint || ':failure:' || d.webhook_id
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS logs_saved_searches (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(120) NOT NULL,
+        description VARCHAR(500),
+        filters_json JSONB NOT NULL,
+        created_by INTEGER REFERENCES admins(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_logs_saved_searches_name
+      ON logs_saved_searches (name, id)
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS logs_alert_rules (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(120) NOT NULL,
+        description VARCHAR(500),
+        query TEXT NOT NULL,
+        window_seconds INTEGER NOT NULL,
+        comparator VARCHAR(2) NOT NULL,
+        threshold DOUBLE PRECISION NOT NULL,
+        for_seconds INTEGER NOT NULL DEFAULT 300,
+        enabled BOOLEAN NOT NULL DEFAULT true,
+        status VARCHAR(16) NOT NULL DEFAULT 'ok',
+        last_value DOUBLE PRECISION,
+        pending_since TIMESTAMPTZ,
+        firing_since TIMESTAMPTZ,
+        generation INTEGER NOT NULL DEFAULT 0,
+        last_notified_at TIMESTAMPTZ,
+        last_evaluated_at TIMESTAMPTZ,
+        last_error VARCHAR(500),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT valid_logs_alert_comparator CHECK (comparator IN ('>', '>=', '<', '<=', '==', '!=')),
+        CONSTRAINT valid_logs_alert_window CHECK (window_seconds BETWEEN 60 AND 86400),
+        CONSTRAINT valid_logs_alert_for CHECK (for_seconds BETWEEN 60 AND 86400),
+        CONSTRAINT valid_logs_alert_threshold CHECK (threshold >= 0),
+        CONSTRAINT valid_logs_alert_status CHECK (status IN ('ok', 'pending', 'firing'))
+      )
+    `);
+    // Accepted log batches wait here until the logs store confirms them, so a
+    // restart or store outage does not lose acknowledged lines. Delivered and
+    // delivered rows keep only their idempotency receipt until they are purged;
+    // rejected rows remain in bounded quarantine until an administrator acts.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS logs_ingest_spool (
+        id BIGSERIAL PRIMARY KEY,
+        batch_id UUID NOT NULL DEFAULT gen_random_uuid(),
+        origin VARCHAR(16) NOT NULL,
+        idempotency_key VARCHAR(200),
+        status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        entries JSONB NOT NULL DEFAULT '[]'::jsonb,
+        line_count INTEGER NOT NULL,
+        bytes INTEGER NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        uncertain BOOLEAN NOT NULL DEFAULT false,
+        next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        claimed_until TIMESTAMPTZ,
+        last_error VARCHAR(500),
+        last_error_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMPTZ,
+        CONSTRAINT valid_logs_spool_origin CHECK (origin IN ('fleet', 'http', 'sentry')),
+        CONSTRAINT valid_logs_spool_status CHECK (status IN ('pending', 'sent', 'dropped', 'rejected', 'discarded')),
+        CONSTRAINT valid_logs_spool_counts CHECK (line_count >= 0 AND bytes >= 0)
+      )
+    `);
+    await client.query(`
+      ALTER TABLE logs_ingest_spool DROP CONSTRAINT IF EXISTS valid_logs_spool_status;
+      ALTER TABLE logs_ingest_spool ADD CONSTRAINT valid_logs_spool_status
+        CHECK (status IN ('pending', 'sent', 'dropped', 'rejected', 'discarded'))
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_ingest_spool_idempotency
+      ON logs_ingest_spool (origin, idempotency_key)
+      WHERE idempotency_key IS NOT NULL
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_logs_ingest_spool_pending
+      ON logs_ingest_spool (next_attempt_at, id)
+      WHERE status = 'pending'
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_logs_ingest_spool_completed
+      ON logs_ingest_spool (completed_at)
+      WHERE status <> 'pending'
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS logs_pipeline_health_state (
+        id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        degraded BOOLEAN NOT NULL DEFAULT false,
+        failing_checks INTEGER NOT NULL DEFAULT 0,
+        healthy_checks INTEGER NOT NULL DEFAULT 0,
+        generation BIGINT NOT NULL DEFAULT 0,
+        dropped_rows_total BIGINT,
+        dropped_observed_at TIMESTAMPTZ,
+        last_reason VARCHAR(1000),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await client.query(`
+      ALTER TABLE logs_pipeline_health_state
+        ADD COLUMN IF NOT EXISTS dropped_rows_total BIGINT,
+        ADD COLUMN IF NOT EXISTS dropped_observed_at TIMESTAMPTZ
+    `);
+    await client.query(`
+      INSERT INTO logs_pipeline_health_state (id) VALUES (1)
+      ON CONFLICT (id) DO NOTHING
+    `);
+    // Keep the latest accepted Fleet batch even after short-lived spool receipts
+    // are purged, so an agent can retry a pending batch after a long outage.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS fleet_log_receipts (
+        fleet_service_id INTEGER PRIMARY KEY REFERENCES fleet_services(id) ON DELETE CASCADE ON UPDATE CASCADE,
+        batch_id VARCHAR(100) NOT NULL
+      )
+    `);
+    // Most recent confirmed delivery; delivered rows without receipts are deleted.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS logs_ingest_delivery_marker (
+        id SMALLINT PRIMARY KEY,
+        delivered_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT single_logs_delivery_marker CHECK (id = 1)
+      )
+    `);
+
     // ========================================================================
     // REPORTING INTELLIGENCE TABLES
     // These derived tables power the unified reporting experience

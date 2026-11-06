@@ -15,6 +15,10 @@ export const OBSERVABILITY_SETTINGS = {
   monitoringQueueWaitMs: { default: 30000, min: 1000, max: 120000 },
   monitoringObservationRetentionDays: { default: 30, min: 1, max: 3650, env: 'MONITORING_OBSERVATION_RETENTION_DAYS' },
   monitoringHistoryRetentionDays: { default: 400, min: 1, max: 3650, env: 'MONITORING_HISTORY_RETENTION_DAYS' },
+  logsSourceQuietAfterSeconds: { default: 900, min: 60, max: 86400 },
+  logsSourceLimit: { default: 200, min: 10, max: 1000 },
+  logsRequestTimeoutMs: { default: 15000, min: 1000, max: 60000, env: 'LOGS_REQUEST_TIMEOUT_MS' },
+  logsIngestBodyLimitBytes: { default: 8388608, min: 65536, max: 33554432, env: 'LOGS_INGEST_BODY_LIMIT_BYTES' },
 } as const;
 
 export type ObservabilityKey = keyof typeof OBSERVABILITY_SETTINGS;

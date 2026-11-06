@@ -233,6 +233,7 @@ router.put('/', requireAdmin, async (req: Request, res: Response) => {
       'mailboxesEnabled',
       'monitoringEnabled',
       'telemetryEnabled',
+      'logsEnabled',
       'modulesEnabled',
       'robinConfigTableName',
       'alertDeliveryRetentionDays',
@@ -583,7 +584,7 @@ router.put('/', requireAdmin, async (req: Request, res: Response) => {
       res.status(400).json({ success: false, error: 'mailboxesEnabled must be a boolean' });
       return;
     }
-    for (const key of ['loginProtectionEnabled', 'ingestionAuthRequired', 'csrfProtectionEnabled', 'allowPrivateServiceUrls', 'fleetEnabled', 'monitoringEnabled', 'telemetryEnabled', 'modulesEnabled']) {
+    for (const key of ['loginProtectionEnabled', 'ingestionAuthRequired', 'csrfProtectionEnabled', 'allowPrivateServiceUrls', 'fleetEnabled', 'monitoringEnabled', 'telemetryEnabled', 'logsEnabled', 'modulesEnabled']) {
       if (filteredUpdates[key] !== undefined) {
         filteredUpdates[key] = Boolean(filteredUpdates[key]);
       }

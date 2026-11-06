@@ -22,6 +22,8 @@ describe('alert type catalog', () => {
       ['monitoring_issue', null],
       ['email_delivery_failure', null],
       ['telemetry_rule', null],
+      ['logs_rule', null],
+      ['logs_pipeline_health', null],
     ]);
     expect(defaultAlertSubscriptions().every((subscription) => !subscription.enabled)).toBe(true);
   });
@@ -30,7 +32,7 @@ describe('alert type catalog', () => {
     const subscriptions = normalizeAlertSubscriptions([
       { alertType: 'postfix_queue', enabled: true, threshold: 2000 },
     ]);
-    expect(subscriptions).toHaveLength(18);
+    expect(subscriptions).toHaveLength(20);
     expect(subscriptions.find((item) => item.alertType === 'postfix_queue')).toMatchObject({
       enabled: true,
       threshold: 2000,

@@ -35,6 +35,8 @@ api() { curl -sk -b "$JAR" -c "$JAR" "$@"; }
 if [ "$LAYOUT" = suite ]; then
   # A minimal stand-in for the Robin suite: its network and the roles Admin uses.
   export SUITE_AGENT_CREDENTIAL=$(random 32) MODULE_PROXY_SECRETS_JSON='{}'
+  export SUITE_LOG_MOUNT=$(mktemp -d)
+  mkdir -p "$SUITE_LOG_MOUNT/robin"
   docker network create suite >/dev/null
   docker run -d --name smoke-suite-postgres --network suite --network-alias postgres-backend \
     -e POSTGRES_DB=robin -e POSTGRES_USER=robin -e "POSTGRES_PASSWORD=$DB_PASSWORD" postgres:18-alpine >/dev/null
@@ -51,6 +53,7 @@ cleanup() {
   if [ "$LAYOUT" = suite ]; then
     docker rm -f smoke-suite-postgres smoke-suite-redis >/dev/null 2>&1
     docker network rm suite >/dev/null 2>&1
+    rmdir "$SUITE_LOG_MOUNT/robin" "$SUITE_LOG_MOUNT" 2>/dev/null || true
   fi
   rm -f "$JAR"
 }

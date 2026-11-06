@@ -19,6 +19,8 @@ export const ALERT_TYPES = [
   'monitoring_issue',
   'email_delivery_failure',
   'telemetry_rule',
+  'logs_rule',
+  'logs_pipeline_health',
 ] as const;
 
 export type AlertType = (typeof ALERT_TYPES)[number];

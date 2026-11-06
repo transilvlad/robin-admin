@@ -9,7 +9,7 @@
 # found by its role alias (<role>-backend / <role>-frontend), never by name.
 # Robin Admin reaches each dependency through an environment setting whose
 # default is the role alias: DB_HOST=postgres-backend,
-# TELEMETRY_STORE_URL=http://metrics-backend:8428, and so on.
+# TELEMETRY_STORE_URL=http://metrics-backend:8428, LOGS_STORE_URL=http://logs-backend:9428.
 
 name: robin-admin
 
@@ -85,6 +85,13 @@ services:
       - DB_USER=${DB_USER:-robin_admin}
       - DB_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD}
       - TELEMETRY_STORE_URL=${TELEMETRY_STORE_URL:-http://metrics-backend:8428}
+      - LOGS_STORE_URL=${LOGS_STORE_URL:-http://logs-backend:9428}
+      - LOGS_SENTRY_CLIENT_SECRET=${LOGS_SENTRY_CLIENT_SECRET:-}
+      - LOGS_RETENTION_DAYS=${LOGS_RETENTION_DAYS:-14}
+      - LOGS_STORE_MAX_DISK=${LOGS_STORE_MAX_DISK:-10GiB}
+      - LOGS_REQUEST_TIMEOUT_MS=${LOGS_REQUEST_TIMEOUT_MS:-15000}
+      - LOGS_INGEST_BODY_LIMIT_BYTES=${LOGS_INGEST_BODY_LIMIT_BYTES:-8388608}
+      - LOGS_SPOOL_MAX_BYTES=${LOGS_SPOOL_MAX_BYTES:-256MiB}
       - MODULE_INSTALLER_URL=${MODULE_INSTALLER_URL:-http://installer-backend:3041}
       - MODULE_INSTALLER_SIGNING_SECRET=${MODULE_INSTALLER_SIGNING_SECRET:-}
       # Standalone: no Robin MTA, modules, agents or fleet services are assumed.
@@ -187,6 +194,33 @@ services:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8428/health"]
 
+  # Logs store: optional. Robin Admin forwards agent-shipped log lines here and
+  # searches it for the Logs page once Logs is enabled. Robin Admin does not wait
+  # for it; an unreachable store only pauses Logs search and history.
+  # The image has no shell or wget, so there is no container healthcheck;
+  # Logs > Health shows the store's status instead.
+  suite-victorialogs:
+    <<: *hardened
+    image: victoriametrics/victoria-logs:v1.53.0@sha256:251121fa882af99b95ba0c230a4a2f412ea602d2698c64a96c58dc9842bb755d
+    container_name: suite-victorialogs
+    pids_limit: 128
+    mem_limit: ${LOGS_STORE_MEMORY:-512m}
+    cpus: ${LOGS_STORE_CPUS:-0.5}
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    command:
+      - -storageDataPath=/storage
+      - -retentionPeriod=${LOGS_RETENTION_DAYS:-14}d
+      - -retention.maxDiskSpaceUsageBytes=${LOGS_STORE_MAX_DISK:-10GiB}
+      - -memory.allowedPercent=60
+      - -httpListenAddr=:9428
+      - -search.maxQueryDuration=15s
+      - -search.maxConcurrentRequests=4
+    volumes:
+      - suite-victorialogs-data:/storage
+    networks:
+      suite-admin-internal:
+        aliases: [logs-backend]
+
   # Module installer (holds the Docker socket; Robin Admin never does). Opt in:
   #   docker compose --profile installer up -d
   suite-admin-installer:
@@ -220,7 +254,7 @@ services:
 networks:
   suite-admin:
     name: suite-admin
-  # Database, telemetry store and installer: reachable from Robin Admin only.
+  # Database, telemetry and logs stores and installer: reachable from Robin Admin only.
   suite-admin-internal:
     name: suite-admin-internal
     internal: true
@@ -230,6 +264,8 @@ volumes:
     name: suite-admin-postgres-data
   suite-victoriametrics-data:
     name: suite-victoriametrics-data
+  suite-victorialogs-data:
+    name: suite-victorialogs-data
   suite-admin-module-identity:
     name: suite-admin-module-identity
   suite-admin-gateway-data:

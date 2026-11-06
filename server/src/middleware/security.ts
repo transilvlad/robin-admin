@@ -220,6 +220,9 @@ export function requiredScopeForRequest(req: Request): string {
     if (!write) return 'telemetry:read';
     return path === '/write' || path === '/import' ? 'telemetry:write' : 'telemetry:manage';
   }
+  if (base.startsWith('/api/logs')) {
+    return path === '/ingest' ? 'logs:write' : write ? 'logs:manage' : 'logs:read';
+  }
   if (base.startsWith('/api/audit')) {
     return 'audit:read';
   }

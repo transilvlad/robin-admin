@@ -38,7 +38,12 @@ services:
     volumes:
       - ${RSPAMD_CONFIG_MOUNT:-../robin/.suite/etc/rspamd/local.d}:/mnt/rspamd/local.d
       - ${RSPAMD_STORE_MOUNT:-../robin/store/rspamd}:/mnt/rspamd/store
-      - ${ROBIN_LOG_MOUNT:-../robin/log/robin}:/mnt/logs/robin:ro
+      - type: bind
+        source: ${ROBIN_LOG_MOUNT:-${SUITE_LOG_MOUNT:?Set SUITE_LOG_MOUNT to the absolute path of the suite log directory}/robin}
+        target: /mnt/logs/robin
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       suite:
         aliases: [admin-backend]
@@ -91,7 +96,12 @@ services:
       - ROBIN_AGENT_REDIS_LOG_CONTAINER=suite-redis
       - ROBIN_AGENT_EXEC_PREFIX=suite-${MAILBOX_BACKEND:-dovecot}=docker exec suite-${MAILBOX_BACKEND:-dovecot},rspamd=docker exec suite-rspamd,suite-clamav=docker exec suite-clamav
     volumes:
-      - ${SUITE_LOG_MOUNT:-../robin/log}:/logs:ro
+      - type: bind
+        source: ${SUITE_LOG_MOUNT:?Set SUITE_LOG_MOUNT to the absolute path of the suite log directory}
+        target: /logs
+        read_only: true
+        bind:
+          create_host_path: false
       - suite-admin-agent-state:/var/lib/robin-agent
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:

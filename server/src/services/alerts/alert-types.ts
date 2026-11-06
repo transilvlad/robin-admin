@@ -200,6 +200,28 @@ export const ALERT_CATALOG: readonly AlertCatalogEntry[] = [
     minimum: null,
     maximum: null,
   },
+  {
+    key: 'logs_rule',
+    label: 'Logs alert rule',
+    description: 'Alerts when a saved Logs rule crosses its threshold and when it recovers.',
+    serviceTypes: ['monitoring'],
+    unit: 'none',
+    direction: 'boolean',
+    defaultThreshold: null,
+    minimum: null,
+    maximum: null,
+  },
+  {
+    key: 'logs_pipeline_health',
+    label: 'Logs pipeline health',
+    description: 'Alerts when log delivery is degraded and when the ingestion pipeline recovers.',
+    serviceTypes: ['monitoring'],
+    unit: 'none',
+    direction: 'boolean',
+    defaultThreshold: null,
+    minimum: null,
+    maximum: null,
+  },
 ];
 
 const catalogByKey = new Map(ALERT_CATALOG.map((entry) => [entry.key, entry]));

@@ -4,6 +4,7 @@ import {
   hasApiKeyScope,
   ipMatchesCidrs,
   parseList,
+  requiredScopeForRequest,
   safeFetch,
   validateOutboundUrl,
   validateOutboundUrlWithDns,
@@ -54,6 +55,18 @@ describe('security middleware helpers', () => {
     expect(hasApiKeyScope(req, 'metrics:read')).toBe(true);
     expect(hasApiKeyScope(req, 'reports:ingest')).toBe(true);
     expect(hasApiKeyScope(req, 'users:read')).toBe(false);
+  });
+
+  it('requires distinct read, ingest, and management scopes for Logs API routes', () => {
+    const request = (method: string, path: string) => ({
+      method,
+      baseUrl: '/api/logs',
+      path,
+    }) as never;
+
+    expect(requiredScopeForRequest(request('GET', '/search'))).toBe('logs:read');
+    expect(requiredScopeForRequest(request('POST', '/ingest'))).toBe('logs:write');
+    expect(requiredScopeForRequest(request('POST', '/alerts'))).toBe('logs:manage');
   });
 
   it('blocks unsafe outbound URLs unless private URLs are explicitly allowed', () => {
