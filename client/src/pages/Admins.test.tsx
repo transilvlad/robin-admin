@@ -20,6 +20,8 @@ it('opens the existing key manager with a write-only telemetry preset', async ()
   const name = await screen.findByLabelText('Key name');
   await waitFor(() => expect(screen.getByLabelText('telemetry:write')).toBeChecked());
   expect(screen.getByLabelText('reports:read')).not.toBeChecked();
+  expect(screen.getByLabelText('logs:read')).toBeInTheDocument();
+  expect(screen.getByLabelText('logs:manage')).toBeInTheDocument();
   fireEvent.change(name, { target: { value: 'Telemetry sender' } });
   fireEvent.click(screen.getByRole('button', { name: 'Create key' }));
   await waitFor(() => expect(api.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Telemetry sender', role: 'viewer', scopes: ['telemetry:write'] })));

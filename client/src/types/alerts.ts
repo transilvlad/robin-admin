@@ -16,7 +16,9 @@ export type AlertType =
   | 'clamav_database_age'
   | 'monitoring_issue'
   | 'email_delivery_failure'
-  | 'telemetry_rule';
+  | 'telemetry_rule'
+  | 'logs_rule'
+  | 'logs_pipeline_health';
 
 export type AlertServiceType = FleetServiceType | 'monitoring';
 

@@ -167,6 +167,7 @@ by container name.
 | `suite-admin-ui` | `admin-frontend` | Static UI |
 | `suite-admin-postgres` | `postgres-backend` (private) | Robin Admin's database (standalone stack) |
 | `suite-victoriametrics` | `metrics-backend` (private) | Bundled telemetry store |
+| `suite-victorialogs` | `logs-backend` (private) | Bundled log store |
 | `suite-admin-installer` | `installer-backend` (private) | Module installer (profile `installer`) |
 | `suite-admin-agent` | none | Co-located agent for the suite's containers (suite overlay) |
 
@@ -190,12 +191,18 @@ docker exec suite-admin cat /tmp/robin-admin-setup-id
 Default HTTPS entrypoint: `https://localhost:3443` (`ADMIN_HTTPS_PORT`).
 
 The telemetry store is part of the stack: enable Telemetry and it works with no
-further configuration (see [Telemetry](doc/telemetry.md)). The server refuses to
+further configuration (see [Telemetry](doc/telemetry.md)). The optional logs store
+(`suite-victorialogs`) backs searchable log history once Logs is enabled (see
+[Logs](doc/logs.md)). The server refuses to
 start in production with missing or default secrets.
 
 For the Robin suite, start the suite first (`docker compose -f
 .suite/docker-compose.yaml up -d` in the Robin repository), then Robin Admin
-with the suite overlay, then the modules.
+with the suite overlay, then the modules. Set `SUITE_LOG_MOUNT` to the absolute
+host path of the existing suite `log` directory; set `ROBIN_LOG_MOUNT` only if
+Robin's logs are elsewhere. Absolute paths are required for Git-based Compose
+includes, whose relative paths resolve inside the downloaded project. See
+[co-located agents](doc/agent-co-location.md#worked-reference-the-bundled-suite).
 
 ### Standalone path-prefix deployment
 
@@ -282,6 +289,7 @@ database is provisioned automatically; populated databases keep their data.
 - [Fleet](doc/fleet.md)
 - [Fleet service capabilities](doc/fleet-service-capabilities.md)
 - [Telemetry](doc/telemetry.md)
+- [Logs](doc/logs.md)
 - [Robin](doc/robin.md)
 - [Administration](doc/management.md)
 - [Module protocol](doc/module-protocol.md)

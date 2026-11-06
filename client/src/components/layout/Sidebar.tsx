@@ -487,6 +487,19 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     },
     {
       type: 'group',
+      key: 'logs',
+      icon: appIcons.logs,
+      label: 'Logs',
+      show: isAdmin && features.logs,
+      children: [
+        { type: 'item', key: 'logs-search', to: '/logs', icon: appIcons.logsSearch, label: 'Search', show: isAdmin && features.logs, end: true },
+        { type: 'item', key: 'logs-health', to: '/logs/health', icon: appIcons.metrics, label: 'Health', show: isAdmin && features.logs },
+        { type: 'item', key: 'logs-sources', to: '/logs/sources', icon: appIcons.telemetrySources, label: 'Sources', show: isAdmin && features.logs },
+        { type: 'item', key: 'logs-alerts', to: '/logs/alerts', icon: appIcons.alerts, label: 'Alerts', show: isAdmin && features.logs },
+      ],
+    },
+    {
+      type: 'group',
       key: 'reports',
       icon: appIcons.reportingOverview,
       label: 'Reports',
@@ -534,6 +547,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         { type: 'item', key: 'administration-integration', to: '/administration/integration', icon: appIcons.integration, label: 'Integrations', show: isAdmin },
         { type: 'item', key: 'administration-reporting', to: '/administration/reporting', icon: appIcons.reporting, label: 'Reporting', show: isAdmin },
         { type: 'item', key: 'administration-telemetry', to: '/administration/telemetry', icon: appIcons.telemetry, label: 'Telemetry', show: isAdmin },
+        { type: 'item', key: 'administration-logs', to: '/administration/logs', icon: appIcons.logs, label: 'Logs', show: isAdmin },
         { type: 'item', key: 'administration-monitoring', to: '/administration/monitoring', icon: appIcons.monitoring, label: 'Monitoring', show: isAdmin },
         { type: 'item', key: 'administration-alerts', to: '/administration/alerts', icon: appIcons.alerts, label: 'Alerts', show: isAdmin },
         { type: 'item', key: 'administration-email', to: '/administration/email', icon: appIcons.email, label: 'Email', show: isAdmin },

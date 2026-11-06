@@ -143,7 +143,7 @@ If robin-admin itself uses a self-signed certificate on an internal network, add
 | `ROBIN_ADMIN_URL` | robin-admin base URL the agent dials out to. |
 | `ROBIN_AGENT_ID` / `ROBIN_ENROLLMENT_TOKEN` | From **Fleet → Agents**; needed only for the first enrollment. |
 | `ROBIN_AGENT_CREDENTIAL` | A pre-provisioned long-lived credential — skips enrollment (for automated/reproducible fleets; see [agent-co-location.md](agent-co-location.md#provisioning-enrollment-vs-a-pre-set-credential)). |
-| `ROBIN_AGENT_STATE` | Credential/state file (default `/var/lib/robin-agent/state.json`). Persist it to avoid re-enrolling. |
+| `ROBIN_AGENT_STATE` | Credential/state file (default `/var/lib/robin-agent/state.json`). Persist its directory to avoid re-enrolling and retain log positions and unacknowledged batches in `<state>.log-cursors.json`. See [source retention and recovery limits](logs.md#source-retention-and-agent-recovery). |
 | `ROBIN_AGENT_PROBE` | Comma list of `type=host:port` to TCP-probe for discovery. |
 | `ROBIN_AGENT_MANAGED_ROOT` | Prefix for written config (default `/`; point at a staging dir to preview). |
 | `ROBIN_AGENT_APPLY_ONLY` | `1` = deliver config but skip validate+reload (staging model). |

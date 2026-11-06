@@ -23,7 +23,8 @@ reporting, fleet management, modules, and the public API.
 16. [Agent co-location guide](agent-co-location.md)
 17. [Host module installer](../installer/README.md)
 18. [Telemetry](telemetry.md)
-19. [Configuration reference](configuration.md)
+19. [Logs](logs.md)
+20. [Configuration reference](configuration.md)
 
 ## Product map
 

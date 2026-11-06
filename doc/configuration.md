@@ -113,6 +113,9 @@ set their starting values.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `TELEMETRY_STORE_URL` | `http://metrics-backend:8428` | VictoriaMetrics (or compatible) store for telemetry. |
+| `LOGS_STORE_URL` | `http://logs-backend:9428` | Bundled VictoriaLogs store for [Logs](logs.md) search. When unreachable, queued delivery retries subject to the queue's capacity and source retention. |
+| `LOGS_SENTRY_CLIENT_SECRET` | empty | Server-only Sentry webhook signing secret for [external Logs ingestion](logs.md#external-push-integrations). |
+| `LOGS_SPOOL_MAX_BYTES` | `256MiB` | Maximum line data held in the durable [Logs ingestion queue](logs.md#delivery) while the store is slow or unavailable. Must be at least `64KiB`. |
 
 ## Rspamd uploads
 

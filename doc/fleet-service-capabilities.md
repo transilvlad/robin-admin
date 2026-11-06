@@ -188,11 +188,14 @@ buffer. Otherwise a configured **`<TYPE>_LOG_URL`** takes precedence, Rspamd use
 its controller, and other services use a co-located host file when available:
 
 1. **Agent** — the agent follows the log on the service's host and ships only new
-   lines each cycle (its first push after start is the recent tail, marked as a
-   reset). Sources, in order: a container's console log
-   (`ROBIN_AGENT_<TYPE>_LOG_CONTAINER`, via `docker logs`), a file, the newest file
-   in a dir, then journald. Robin Admin keeps a rolling buffer per service and
-   derives Postfix message counters from the new lines.
+   lines each cycle. It saves its read position beside its state file, so a
+   restart normally resumes where it stopped; the recent tail is shipped as a
+   reset only when it has no saved position for the source. Available rotated
+   files are followed before newer files; see [recovery limits](logs.md#source-retention-and-agent-recovery).
+   Sources, in order: a container's
+   console log (`ROBIN_AGENT_<TYPE>_LOG_CONTAINER`, via `docker logs`), a file,
+   the newest file in a dir, then journald. Robin Admin keeps a rolling buffer
+   per service and derives Postfix message counters from the new lines.
 2. **HTTP endpoint** — read over the network, works cross-container / off-host:
    - **Rspamd** → the controller's authenticated **`/errors`** endpoint (needs the
      controller password, set in **Fleet → Services → Edit**).
@@ -204,8 +207,9 @@ its controller, and other services use a co-located host file when available:
      (`<TYPE>_LOG_UNIT`) first.
    - Newest file in a **dir** (`<TYPE>_LOG_DIR` + glob) — for logs rotated by filename.
      **Robin** uses this: its Java app writes world-readable `YYYYMMDD.log` files and has
-     no log endpoint, so robin-admin tails the newest. In the suite the host `../log/robin`
-     directory is bind-mounted read-only into the Robin Admin container.
+     no log endpoint, so robin-admin tails the newest. In the suite the host
+     `${SUITE_LOG_MOUNT}/robin` directory is bind-mounted read-only into the
+     Robin Admin container.
 
 **Limitations:**
 - **Console-only services need the container source.** A Postfix or Dovecot
@@ -214,7 +218,8 @@ its controller, and other services use a co-located host file when available:
 - **Root-owned logs need an agent, a sidecar, or host log access.** A bind-mounted
   `0600` or `0640` log remains unreadable by the container's unprivileged user.
 - **Rspamd logs need the controller password** (set in **Fleet → Services → Edit**); without it `/errors` 401s and the item hides.
-- Read-only, tail-style, capped at 1000 lines. No follow/stream, no full-text search.
+- Read-only, tail-style, capped at 1000 lines. No follow/stream. For searchable
+  history of agent-shipped logs, enable [Logs](logs.md).
 
 ## Cyrus IMAP monitoring
 

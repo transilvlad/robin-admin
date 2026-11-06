@@ -82,8 +82,9 @@ export function AdminsPage() {
   useEffect(() => {
     const queryTab = searchParams.get('tab');
     if (ACCESS_TABS.some(tab => tab.id === queryTab)) setActiveTab(queryTab as AccessTab);
-    if (searchParams.get('preset') === 'telemetry') {
-      setNewApiKey(current => ({ ...current, role: 'viewer', scopes: ['telemetry:write'] }));
+    const preset = searchParams.get('preset');
+    if (preset === 'telemetry' || preset === 'logs') {
+      setNewApiKey(current => ({ ...current, role: 'viewer', scopes: [`${preset}:write`] }));
     }
   }, [searchParams]);
 
@@ -222,7 +223,7 @@ export function AdminsPage() {
       setNewApiKey({
         name: '',
         role: 'viewer',
-        scopes: searchParams.get('preset') === 'telemetry' ? ['telemetry:write'] : ['reports:read'],
+        scopes: searchParams.get('preset') === 'telemetry' ? ['telemetry:write'] : searchParams.get('preset') === 'logs' ? ['logs:write'] : ['reports:read'],
         allowedCidrs: '',
         expiresAt: '',
       });
@@ -245,7 +246,8 @@ export function AdminsPage() {
   const API_KEY_SCOPES = [
     'users:read', 'users:write', 'aliases:read', 'aliases:write', 'queue:read', 'queue:write',
     'mail:send', 'fleet:read', 'fleet:write', 'metrics:read', 'reporting:read',
-    'reporting:write', 'reports:read', 'reports:ingest', 'telemetry:read', 'telemetry:write', 'telemetry:manage', 'audit:read', 'admin:*',
+    'reporting:write', 'reports:read', 'reports:ingest', 'telemetry:read', 'telemetry:write', 'telemetry:manage',
+    'logs:read', 'logs:write', 'logs:manage', 'audit:read', 'admin:*',
   ];
 
   const columns = [

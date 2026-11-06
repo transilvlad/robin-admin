@@ -219,6 +219,10 @@ export interface AdminConfig extends OperationsPolicy {
   monitoringQueueWaitMs: number;
   monitoringObservationRetentionDays: number;
   monitoringHistoryRetentionDays: number;
+  logsSourceQuietAfterSeconds: number;
+  logsSourceLimit: number;
+  logsRequestTimeoutMs: number;
+  logsIngestBodyLimitBytes: number;
   reportingRetentionDays: number;
   reportingCacheMiB: number;
   reportingCacheEntries: number;
@@ -254,6 +258,7 @@ export interface AdminConfig extends OperationsPolicy {
   mailboxesEnabled: boolean;
   monitoringEnabled: boolean;
   telemetryEnabled: boolean;
+  logsEnabled: boolean;
   modulesEnabled: boolean;
   robinConfigTableName: string;
   alertDeliveryRetentionDays: number;
@@ -759,6 +764,151 @@ export interface ServiceLogs {
   error?: string;
 }
 
+/** One line from the logs store, newest first in search results. */
+export interface LogSearchRow {
+  time: string;
+  serviceType: string;
+  serviceId: string;
+  source: string;
+  sourceType: string;
+  sourceName: string;
+  severity: string;
+  host: string;
+  environment: string;
+  eventId: string;
+  receivedAt: string;
+  message: string;
+}
+
+export interface LogSearchResult {
+  rows: LogSearchRow[];
+  limit: number;
+  truncated: boolean;
+  query: string;
+}
+
+export interface LogsStoreStatus {
+  enabled: boolean;
+  reachable: boolean;
+  storageBytes: number | null;
+  maxDiskBytes: number | null;
+  retentionDays: number;
+  rowsIngested24h: number | null;
+  oldestLogAt: string | null;
+  metrics: {
+    rowsIngestedTotal: number | null;
+    bytesIngestedTotal: number | null;
+    rowsDroppedTotal: number | null;
+    streamsCreatedTotal: number | null;
+  };
+  error?: string;
+  write: {
+    queuedLines: number;
+    queuedBytes: number;
+    quarantinedBatches: number;
+    quarantinedLines: number;
+    quarantinedBytes: number;
+    usedBytes: number;
+    capacityBytes: number;
+    oldestQueuedAt: string | null;
+    retryingBatches: number;
+    uncertainBatches: number;
+    uncertainDeliveries24h: number;
+    droppedLines24h: number;
+    rejectedLines24h: number;
+    discardedLines24h: number;
+    lastDeliveredAt: string | null;
+    lastErrorAt: string | null;
+    lastError: string | null;
+  };
+}
+
+export interface RejectedLogsBatch {
+  id: string;
+  origin: 'fleet' | 'http' | 'sentry';
+  lineCount: number;
+  bytes: number;
+  error: string | null;
+  createdAt: string;
+}
+
+export type LogsRangePreset = '15m' | '1h' | '6h' | '24h' | '7d' | '30d';
+
+export interface LogsSearchFilters {
+  query: string;
+  serviceId: string;
+  sourceName: string;
+  rangePreset: LogsRangePreset;
+}
+
+export interface LogsSavedSearch {
+  id: number;
+  name: string;
+  description: string | null;
+  filters: LogsSearchFilters;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LogsSource {
+  sourceName: string;
+  sourceType: string;
+  serviceType: string;
+  serviceId: string;
+  count: number;
+  lastSeen: string | null;
+}
+
+export interface LogsSourcesResult {
+  windowDays: number;
+  sources: LogsSource[];
+  truncated: boolean;
+  limit: number;
+  quietAfterSeconds: number;
+}
+
+export interface LogsConfiguration {
+  enabled: boolean;
+  storeUrl: string;
+  retentionDays: number;
+  maxDiskBytes: number | null;
+  sentryWebhookConfigured: boolean;
+  endpoints: { ingest: string; sentry: string };
+}
+
+export type LogsAlertComparator = '>' | '>=' | '<' | '<=' | '==' | '!=';
+export type LogsAlertStatus = 'ok' | 'pending' | 'firing';
+
+export interface LogsAlertRuleInput {
+  name: string;
+  description: string | null;
+  query: string;
+  windowSeconds: number;
+  comparator: LogsAlertComparator;
+  threshold: number;
+  forSeconds: number;
+  enabled: boolean;
+}
+
+export interface LogsAlertRule extends LogsAlertRuleInput {
+  id: number;
+  status: LogsAlertStatus;
+  lastValue: number | null;
+  generation: number;
+  pendingSince: string | null;
+  firingSince: string | null;
+  lastEvaluatedAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LogsAlertPreview {
+  value: number;
+  matches: boolean;
+}
+
 // ── Fleet config-sync (robin-admin → agent → service) ──────────────────────
 export type FleetServiceApplyStatus = 'unknown' | 'pending' | 'succeeded' | 'failed';
 
@@ -822,6 +972,8 @@ export interface Features {
   monitoring: boolean;
   /** Telemetry is enabled and a store is configured. */
   telemetry: boolean;
+  /** Searchable log history (bundled logs store). */
+  logs: boolean;
   modules: boolean;
   robinConfig: boolean;
   rspamd: boolean;
@@ -836,6 +988,7 @@ export interface Features {
   monitoringEnabled: boolean;
   telemetryEnabled: boolean;
   telemetryStoreConfigured: boolean;
+  logsEnabled: boolean;
   modulesEnabled: boolean;
   fleetServices: FleetServiceCounts;
   /** What each service can do in its setup (loaded after sign-in). */

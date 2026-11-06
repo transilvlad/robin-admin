@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, authApi } from './client';
+import { ApiError, authApi, logsApi } from './client';
 
 describe('API client response handling', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -28,5 +28,23 @@ describe('API client response handling', () => {
       message: 'Failed to fetch',
       status: 0,
     } satisfies Partial<ApiError>);
+  });
+
+  it('sends exact Logs filters without splitting commas', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify({ success: true, data: { rows: [], limit: 200, truncated: false, query: '*' } }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+
+    await logsApi.search({
+      start: 100,
+      end: 200,
+      serviceIds: ['checkout, europe', 'worker'],
+      sourceNames: ['collector, production', 'other'],
+    });
+
+    const url = new URL(String(fetchMock.mock.calls[0][0]), 'https://admin.example.test');
+    expect(url.searchParams.getAll('serviceIds')).toEqual(['checkout, europe', 'worker']);
+    expect(url.searchParams.getAll('sourceNames')).toEqual(['collector, production', 'other']);
   });
 });

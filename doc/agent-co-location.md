@@ -236,6 +236,16 @@ The suite overlay (`docker-compose.suite.yaml`) runs one pre-provisioned
 log tree mounted read-only). Services are registered by
 `FLEET_SERVICES_BOOTSTRAP_JSON`:
 
+Set `SUITE_LOG_MOUNT` to the **absolute host path** of the existing suite `log`
+directory before starting the overlay (and the optional local-source
+host-control overlay). Robin Admin also reads its `robin` subdirectory; set
+`ROBIN_LOG_MOUNT` separately only when those logs live elsewhere. The
+directories must already exist: Compose will not create empty bind sources.
+This matters especially for a Git-based Compose `include`, where relative
+paths resolve inside Compose's downloaded project rather than the parent suite.
+Set the variables in the parent project's environment or `.env` file and use
+`docker compose config` to check the resolved bind sources before starting.
+
 | Service | metrics | config | logs | How |
 |---|---|---|---|---|
 | Dovecot | agent | agent (apply-only) | agent | `docker exec suite-dovecot …`; logs from `/logs/dovecot` |

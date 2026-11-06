@@ -26,6 +26,7 @@ const defaultFeatures: Features = {
   fleet: false,
   monitoring: false,
   telemetry: false,
+  logs: false,
   modules: false,
   robinConfig: false,
   rspamd: false,
@@ -40,6 +41,7 @@ const defaultFeatures: Features = {
   monitoringEnabled: false,
   telemetryEnabled: false,
   telemetryStoreConfigured: false,
+  logsEnabled: false,
   modulesEnabled: false,
   fleetServices: {
     total: 0,

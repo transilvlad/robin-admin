@@ -72,6 +72,11 @@ const PostgresConfigPage = lazy(() => import('./pages/PostgresConfig').then((m) 
 const PostgresMetricsPage = lazy(() => import('./pages/PostgresMetrics').then((m) => ({ default: m.PostgresMetricsPage })));
 const MariadbConfigPage = lazy(() => import('./pages/MariadbConfig').then((m) => ({ default: m.MariadbConfigPage })));
 const MariadbMetricsPage = lazy(() => import('./pages/MariadbMetrics').then((m) => ({ default: m.MariadbMetricsPage })));
+const LogsSearchPage = lazy(() => import('./pages/LogsSearch').then((m) => ({ default: m.LogsSearchPage })));
+const LogsSettingsPage = lazy(() => import('./pages/LogsSettings').then((m) => ({ default: m.LogsSettingsPage })));
+const LogsHealthPage = lazy(() => import('./pages/LogsHealth').then((m) => ({ default: m.LogsHealthPage })));
+const LogsSourcesPage = lazy(() => import('./pages/LogsSources').then((m) => ({ default: m.LogsSourcesPage })));
+const LogsAlertsPage = lazy(() => import('./pages/LogsAlerts').then((m) => ({ default: m.LogsAlertsPage })));
 const ServiceLogsPage = lazy(() => import('./pages/ServiceLogsPage').then((m) => ({ default: m.ServiceLogsPage })));
 const ModulesPage = lazy(() => import('./pages/Modules').then((m) => ({ default: m.ModulesPage })));
 const ModuleHostPage = lazy(() => import('./pages/ModuleHost').then((m) => ({ default: m.ModuleHostPage })));
@@ -197,6 +202,11 @@ function MailboxRoute({ section, children }: { section: 'users' | 'aliases' | 'a
 function MonitoringRoute({ children }: { children: React.ReactNode }) {
   const { features } = useFeatures();
   return <FeatureRoute enabled={features.monitoring} requireAdmin>{children}</FeatureRoute>;
+}
+
+function LogsRoute({ children }: { children: React.ReactNode }) {
+  const { features } = useFeatures();
+  return <FeatureRoute enabled={features.logs} requireAdmin>{children}</FeatureRoute>;
 }
 
 function TelemetryRoute({ children }: { children: React.ReactNode }) {
@@ -325,6 +335,11 @@ export function App() {
                   <Route path="telemetry/explore" element={<TelemetryRoute><Suspended><TelemetryExplorePage /></Suspended></TelemetryRoute>} />
                   <Route path="telemetry/sources" element={<TelemetryRoute><Suspended><TelemetrySourcesPage /></Suspended></TelemetryRoute>} />
                   <Route path="telemetry/issues" element={<AdminRoute><TelemetryRoute><Suspended><TelemetryIssuesPage /></Suspended></TelemetryRoute></AdminRoute>} />
+                  <Route path="logs" element={<LogsRoute><Suspended><LogsSearchPage /></Suspended></LogsRoute>} />
+                  <Route path="logs/saved-searches" element={<Navigate to="/logs" replace />} />
+                  <Route path="logs/health" element={<LogsRoute><Suspended><LogsHealthPage /></Suspended></LogsRoute>} />
+                  <Route path="logs/sources" element={<LogsRoute><Suspended><LogsSourcesPage /></Suspended></LogsRoute>} />
+                  <Route path="logs/alerts" element={<LogsRoute><Suspended><LogsAlertsPage /></Suspended></LogsRoute>} />
                   <Route path="dmarc" element={<ReportingRoute><Suspended><DmarcPage /></Suspended></ReportingRoute>} />
                   <Route path="tlsrpt" element={<ReportingRoute><Suspended><TlsrptPage /></Suspended></ReportingRoute>} />
                   <Route path="forensic" element={<ReportingRoute><Suspended><ForensicPage /></Suspended></ReportingRoute>} />
@@ -369,6 +384,7 @@ export function App() {
                   <Route path="administration/integration" element={<ConfigPageView section="integration" />} />
                   <Route path="administration/reporting" element={<ConfigPageView section="reporting" />} />
                   <Route path="administration/telemetry" element={<AdminRoute><Suspended><ObservabilitySettingsPage section="telemetry" /></Suspended></AdminRoute>} />
+                  <Route path="administration/logs" element={<AdminRoute><Suspended><LogsSettingsPage /></Suspended></AdminRoute>} />
                   <Route path="administration/monitoring" element={<AdminRoute><Suspended><ObservabilitySettingsPage section="monitoring" /></Suspended></AdminRoute>} />
                   <Route path="administration/email" element={
                     <AdminRoute>

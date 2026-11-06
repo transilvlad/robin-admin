@@ -62,6 +62,7 @@ interface AdminConfig extends OperationsPolicy {
   mailboxesEnabled: boolean;
   monitoringEnabled: boolean;
   telemetryEnabled: boolean;
+  logsEnabled: boolean;
   modulesEnabled: boolean;
   robinConfigTableName: string;
   alertDeliveryRetentionDays: number;
@@ -151,6 +152,7 @@ const CAPABILITY_SWITCHES = [
   { key: 'fleetEnabled', label: 'Enable fleet', description: 'Shows Fleet and its service workspaces. Registered services and their settings are retained when disabled.' },
   { key: 'monitoringEnabled', label: 'Enable monitoring', description: 'Shows Monitoring and runs scheduled checks. Checks and their history are retained when disabled.' },
   { key: 'telemetryEnabled', label: 'Enable telemetry', description: 'Shows Telemetry dashboards, Explore and Sources. Stored metrics and dashboards are retained when disabled.' },
+  { key: 'logsEnabled', label: 'Enable logs', description: 'Stores new agent-shipped log lines in the bundled logs store and shows Logs search. Stored lines are retained (until their retention) when disabled.' },
   { key: 'reportingIntegrationEnabled', label: 'Enable reports', description: 'Shows Reports and its reporting workspaces. Stored reports and ingestion settings are retained when disabled.' },
   { key: 'modulesEnabled', label: 'Enable modules', description: 'Shows Modules and installed module navigation. Installed modules and their data are retained when disabled.' },
 ] as const;
@@ -291,6 +293,7 @@ export function ConfigPageView({ section = 'security' }: { section?: ConfigSecti
     mailboxesEnabled: false,
     monitoringEnabled: false,
     telemetryEnabled: false,
+    logsEnabled: false,
     modulesEnabled: false,
     robinConfigTableName: 'robin_config_store',
     alertDeliveryRetentionDays: 30,

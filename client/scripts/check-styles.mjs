@@ -11,7 +11,7 @@ const rules = [];
 css.walkRules((rule) => rules.push(rule));
 const hasRule = (selector) => rules.some((rule) => rule.selector === selector);
 const declarations = (selector, property) => rules
-  .filter((rule) => rule.selector === selector)
+  .filter((rule) => rule.selector.split(',').some((item) => item.trim() === selector))
   .flatMap((rule) => rule.nodes.filter((node) => node.type === 'decl' && node.prop === property))
   .map((node) => node.value);
 

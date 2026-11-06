@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshCw, ScrollText } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { RefreshCw, ScrollText, TextSearch } from 'lucide-react';
 import { configApi, logsApi } from '../../api/client';
 import { Button } from '../ui/Button';
+import { useFeatures } from '../../context/FeaturesContext';
 import type { FleetServiceType, ServiceLogs } from '../../types';
 
 const LINE_OPTIONS = [100, 200, 500, 1000];
@@ -12,6 +14,7 @@ const LINE_OPTIONS = [100, 200, 500, 1000];
  * state when robin-admin is not co-located with the service.
  */
 export function ServiceLogsPanel({ serviceType, serviceId }: { serviceType: FleetServiceType; serviceId: string | undefined }) {
+  const { features } = useFeatures();
   const [logs, setLogs] = useState<ServiceLogs | null>(null);
   const [lines, setLines] = useState(200);
   const [lineOptions, setLineOptions] = useState(LINE_OPTIONS);
@@ -81,6 +84,15 @@ export function ServiceLogsPanel({ serviceType, serviceId }: { serviceType: Flee
           )}
         </div>
         <div className="flex items-center gap-3">
+          {features.logs && serviceId && (
+            <Link
+              to={`/logs?service=${encodeURIComponent(serviceId)}`}
+              className="flex items-center gap-1 text-sm text-robin-orange hover:underline"
+            >
+              <TextSearch className="h-4 w-4" />
+              Search history
+            </Link>
+          )}
           <label className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
             <input
               type="checkbox"

@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { ServiceLogsPanel } from './ServiceLogsPanel';
 
-const { logsGet, configGet } = vi.hoisted(() => ({
+const { logsGet, configGet, features } = vi.hoisted(() => ({
   logsGet: vi.fn(),
   configGet: vi.fn(),
+  features: { logs: false },
+}));
+
+vi.mock('../../context/FeaturesContext', () => ({
+  useFeatures: () => ({ features }),
 }));
 
 vi.mock('../../api/client', () => ({
@@ -24,6 +30,17 @@ describe('ServiceLogsPanel', () => {
     cleanup();
     vi.clearAllMocks();
     configGet.mockResolvedValue({ data: { logDefaultLines: 200, logMaxLines: 1000 } });
+    features.logs = false;
+  });
+
+  it('links to Logs search for the service when Logs is enabled', async () => {
+    features.logs = true;
+    logsGet.mockResolvedValue({ data: { serviceType: 'dovecot', serviceId: 'suite dovecot', available: true, source: 'agent', lines: ['x'] } });
+
+    render(<MemoryRouter><ServiceLogsPanel serviceType="dovecot" serviceId="suite dovecot" /></MemoryRouter>);
+
+    const link = await screen.findByRole('link', { name: /Search history/ });
+    expect(link).toHaveAttribute('href', '/logs?service=suite%20dovecot');
   });
 
   it('shows log lines when logs are available', async () => {

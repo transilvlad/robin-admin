@@ -55,6 +55,15 @@ import type {
   DovecotMetricsStats,
   PostfixConfigState,
   ServiceLogs,
+  LogSearchResult,
+  LogsStoreStatus,
+  RejectedLogsBatch,
+  LogsConfiguration,
+  LogsSavedSearch,
+  LogsSourcesResult,
+  LogsAlertRule,
+  LogsAlertRuleInput,
+  LogsAlertPreview,
   FleetServiceSyncStatus,
   FleetServiceSyncLogEntry,
   FleetAgent,
@@ -1730,6 +1739,61 @@ export const logsApi = {
       `/logs?serviceType=${encodeURIComponent(serviceType)}&serviceId=${encodeURIComponent(serviceId)}&lines=${lines}`
     ),
 
+  /** Search stored log history (Logs). Times are Unix seconds. */
+  search: (params: { start: number; end: number; serviceIds?: string[]; sourceNames?: string[]; q?: string; limit?: number }) => {
+    const query = new URLSearchParams({ start: String(params.start * 1000), end: String(params.end * 1000) });
+    for (const serviceId of params.serviceIds ?? []) query.append('serviceIds', serviceId);
+    for (const sourceName of params.sourceNames ?? []) query.append('sourceNames', sourceName);
+    if (params.q?.trim()) query.set('q', params.q.trim());
+    if (params.limit) query.set('limit', String(params.limit));
+    return request<ApiResponse<LogSearchResult>>(`/logs/search?${query}`);
+  },
+
+  status: () => request<ApiResponse<LogsStoreStatus>>('/logs/status'),
+
+  listQuarantined: () => request<ApiResponse<RejectedLogsBatch[]>>('/logs/quarantine'),
+
+  getQuarantined: (id: string) => request<ApiResponse<Record<string, unknown>[]>>(`/logs/quarantine/${id}`),
+
+  retryQuarantined: (id: string) => request<ApiResponse<void>>(`/logs/quarantine/${id}/retry`, { method: 'POST' }),
+
+  discardQuarantined: (id: string) => request<ApiResponse<void>>(`/logs/quarantine/${id}`, { method: 'DELETE' }),
+
+  configuration: () => request<ApiResponse<LogsConfiguration>>('/logs/configuration'),
+
+  listSavedSearches: () => request<ApiResponse<LogsSavedSearch[]>>('/logs/saved-searches'),
+
+  createSavedSearch: (data: Omit<LogsSavedSearch, 'id' | 'createdBy' | 'createdAt' | 'updatedAt'>) =>
+    request<ApiResponse<LogsSavedSearch>>('/logs/saved-searches', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateSavedSearch: (id: number, data: Omit<LogsSavedSearch, 'id' | 'createdBy' | 'createdAt' | 'updatedAt'>) =>
+    request<ApiResponse<LogsSavedSearch>>(`/logs/saved-searches/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  deleteSavedSearch: (id: number) =>
+    request<ApiResponse<void>>(`/logs/saved-searches/${id}`, { method: 'DELETE' }),
+
+  listSources: (windowDays = 7) =>
+    request<ApiResponse<LogsSourcesResult>>(`/logs/sources?windowDays=${windowDays}`),
+
+  listAlertRules: () => request<ApiResponse<LogsAlertRule[]>>('/logs/alerts'),
+
+  createAlertRule: (data: LogsAlertRuleInput) =>
+    request<ApiResponse<LogsAlertRule>>('/logs/alerts', { method: 'POST', body: JSON.stringify(data) }),
+
+  updateAlertRule: (id: number, data: LogsAlertRuleInput) =>
+    request<ApiResponse<LogsAlertRule>>(`/logs/alerts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  deleteAlertRule: (id: number) =>
+    request<ApiResponse<void>>(`/logs/alerts/${id}`, { method: 'DELETE' }),
+
+  previewAlertRule: (data: LogsAlertRuleInput) =>
+    request<ApiResponse<LogsAlertPreview>>('/logs/alerts/preview', { method: 'POST', body: JSON.stringify(data) }),
 };
 
 // Fleet config-sync: status, audit log, and agent pull token.
