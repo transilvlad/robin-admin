@@ -153,27 +153,33 @@ func TestContainerCopyIsBoundedAndRedacted(t *testing.T) {
 	}
 }
 
-func TestFailedLogCapturePreservesCursor(t *testing.T) {
+func TestFailedLogCaptureKeepsThePosition(t *testing.T) {
 	for _, name := range []string{"docker", "journalctl"} {
-		t.Run(name, func(t *testing.T) {
-			processTool(t, name, "overflow")
-			svc := ownedService{ServiceID: "fixture", ServiceType: "postfix"}
-			t.Setenv("ROBIN_AGENT_LOG_FIXTURE_FILE", filepath.Join(t.TempDir(), "missing"))
-			if name == "docker" {
-				t.Setenv("ROBIN_AGENT_LOG_FIXTURE_CONTAINER", "fixture")
-			}
-			cur := &logCursor{source: "fixture", since: time.Now().Add(-time.Minute), journal: "old-cursor"}
-			before := *cur
-			logCursors[svc.ServiceID] = cur
-			t.Cleanup(func() { delete(logCursors, svc.ServiceID) })
-			_, lines, _, ok := collectNewLogs(context.Background(), svc)
-			if ok || len(lines) != 0 || logCursors[svc.ServiceID] != cur || *cur != before {
-				t.Fatalf("failed logs advanced or reset the cursor: %+v", logCursors[svc.ServiceID])
-			}
-		})
+		for _, mode := range []string{"fail", "overflow"} {
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				processTool(t, name, mode)
+				svc := ownedService{ServiceID: "fixture", ServiceType: "postfix"}
+				t.Setenv("ROBIN_AGENT_LOG_FIXTURE_FILE", filepath.Join(t.TempDir(), "missing"))
+				key := "journald:postfix@-|"
+				if name == "docker" {
+					t.Setenv("ROBIN_AGENT_LOG_FIXTURE_CONTAINER", "fixture")
+					key = "docker:fixture|"
+				}
+				cur := logCursor{Key: key, Source: "fixture", Since: time.Now().Add(-time.Minute).UTC(), Journal: "old-cursor"}
+				batch, _, err := collectLogs(context.Background(), svc, &cur)
+				if mode == "fail" {
+					if err == nil {
+						t.Fatalf("a failed read must be reported, got %+v", batch)
+					}
+					return
+				}
+				if err != nil || batch == nil || len(batch.Lines) != 0 || batch.Reset || batch.Next != cur {
+					t.Fatalf("unreadable output moved the position: %+v, %v", batch, err)
+				}
+			})
+		}
 	}
 }
-
 func TestCapabilityProbeRejectsCaptureFailure(t *testing.T) {
 	for _, mode := range []string{"overflow", "orphan", "sleep"} {
 		t.Run(mode, func(t *testing.T) {

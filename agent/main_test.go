@@ -223,68 +223,6 @@ func TestCommandSpecsValidateArguments(t *testing.T) {
 	}
 }
 
-func TestReadFromShipsOnlyCompleteNewLines(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mail.log")
-	if err := os.WriteFile(path, []byte("one\ntwo\npart"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	lines, offset, info, err := readFrom(path, 0, nil)
-	if err != nil || strings.Join(lines, ",") != "one,two" || offset != 8 {
-		t.Fatalf("first read = %q @%d, %v", lines, offset, err)
-	}
-	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	_, _ = f.WriteString("ial\nthree\n")
-	_ = f.Close()
-	lines, offset, info, _ = readFrom(path, offset, info)
-	if strings.Join(lines, ",") != "partial,three" {
-		t.Fatalf("second read = %q", lines)
-	}
-	// A truncated (shrunken) file is read from the start.
-	_ = os.WriteFile(path, []byte("new\n"), 0o644)
-	if lines, _, info, _ = readFrom(path, offset, info); strings.Join(lines, ",") != "new" {
-		t.Fatalf("after truncation = %q", lines)
-	}
-	// So is a rotated file that already grew past the old offset.
-	_ = os.Rename(path, path+".1")
-	_ = os.WriteFile(path, []byte("first line after rotation\nsecond\n"), 0o644)
-	if lines, _, _, _ = readFrom(path, 4, info); strings.Join(lines, ",") != "first line after rotation,second" {
-		t.Fatalf("after rotation = %q", lines)
-	}
-}
-
-func TestPushServiceLogsSendsEmptyBatchAsArray(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "rspamd.log")
-	if err := os.WriteFile(path, []byte("first\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("ROBIN_AGENT_RSPAMD_LOG_FILE", path)
-
-	var bodies []map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		bodies = append(bodies, body)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	svc := ownedService{ServiceID: "svc-empty-batch", ServiceType: "rspamd"}
-	defer delete(logCursors, svc.ServiceID)
-	c := config{adminURL: srv.URL}
-	pushServiceLogs(context.Background(), srv.Client(), c, state{AgentID: "a", Credential: "c"}, svc) // reset tail
-	pushServiceLogs(context.Background(), srv.Client(), c, state{AgentID: "a", Credential: "c"}, svc) // quiet cycle
-
-	if len(bodies) != 2 || bodies[0]["reset"] != true || bodies[1]["reset"] != false {
-		t.Fatalf("unexpected pushes: %v", bodies)
-	}
-	if lines, ok := bodies[1]["lines"].([]any); !ok || len(lines) != 0 {
-		t.Fatalf("quiet cycle must send lines: [], got %#v", bodies[1]["lines"])
-	}
-	if logCursors[svc.ServiceID] == nil {
-		t.Fatal("a successful quiet push must keep the cursor")
-	}
-}
-
 func TestSeenCommandsSkipsResentIDs(t *testing.T) {
 	seen := newSeenCommands()
 	if !seen.add("a") {

@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -215,31 +214,7 @@ func saveProbeObservationBuffer(file string, observations []remoteProbeObservati
 	if len(data) > probeObservationMaxBytes {
 		return errors.New("probe observation buffer exceeds the size limit")
 	}
-	if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
-		return err
-	}
-	handle, err := os.CreateTemp(filepath.Dir(file), ".probe-observations-*")
-	if err != nil {
-		return err
-	}
-	temporary := handle.Name()
-	defer os.Remove(temporary)
-	if err := handle.Chmod(0600); err != nil {
-		_ = handle.Close()
-		return err
-	}
-	if _, err := handle.Write(data); err != nil {
-		_ = handle.Close()
-		return err
-	}
-	if err := handle.Sync(); err != nil {
-		_ = handle.Close()
-		return err
-	}
-	if err := handle.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporary, file)
+	return writeFileAtomic(file, data)
 }
 
 func checkJitter(seed, intervalSeconds int) time.Duration {
