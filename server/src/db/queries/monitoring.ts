@@ -671,6 +671,18 @@ export async function listDueMonitoringChecks(limit = 25): Promise<MonitoringChe
   return result.rows.map(mapCheck);
 }
 
+export async function isMonitoringCheckPlacedLocally(check: Pick<MonitoringCheck, 'placementMode' | 'locationIds'>): Promise<boolean> {
+  const result = await query<{ placed: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM monitoring_locations l
+       WHERE l.location_key = 'local' AND l.enabled
+         AND ($1 = 'all' OR l.id = ANY($2::int[]))
+     ) AS placed`,
+    [check.placementMode, check.locationIds],
+  );
+  return result.rows[0]?.placed === true;
+}
+
 export async function recordMonitoringObservation(input: {
   check: MonitoringCheck;
   status: Exclude<MonitoringStatus, 'unknown'>;

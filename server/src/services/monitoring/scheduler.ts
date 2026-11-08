@@ -11,6 +11,7 @@ import { logger } from '../../logger.js';
 import {
   getMonitoringCheck,
   getMonitoringCheckSecrets,
+  isMonitoringCheckPlacedLocally,
   listDueMonitoringChecks,
   pruneMonitoringHistory,
   recordMonitoringObservation,
@@ -94,6 +95,12 @@ function drainChecks(): void {
 async function executeCheck(item: PendingCheck): Promise<CheckResult> {
   const check = await getMonitoringCheck(item.id);
   if (!check || (item.scheduled && (!check.enabled || check.pausedAt))) return null;
+  if (!await isMonitoringCheckPlacedLocally(check)) {
+    if (item.scheduled) return null;
+    const error = new Error('This check is not assigned to an enabled Local location; it runs only from its assigned locations.');
+    error.name = 'MonitoringPlacementError';
+    throw error;
+  }
   // Observations carry the probe's start time, so the next run is one interval
   // after this one started and slow probes do not push the schedule back.
   const observedAt = new Date();

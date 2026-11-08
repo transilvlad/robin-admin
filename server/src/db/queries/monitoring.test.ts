@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { query } from '../connection.js';
 import { createAlertDelivery } from './alerts.js';
 import { syncAutomaticStatusPageReports } from './status-page.js';
-import { closeStaleMonitoringIssue, createMonitoringCheck, evaluateMonitoringCheckLocations, getMonitoringCheckHistory, getMonitoringCheckSecrets, listDueMonitoringChecks, recordMonitoringObservation, updateMonitoringCheck } from './monitoring.js';
+import { closeStaleMonitoringIssue, createMonitoringCheck, evaluateMonitoringCheckLocations, getMonitoringCheckHistory, getMonitoringCheckSecrets, isMonitoringCheckPlacedLocally, listDueMonitoringChecks, recordMonitoringObservation, updateMonitoringCheck } from './monitoring.js';
 import { encryptStoredSecret } from './secret-crypto.js';
 import type { MonitoringCheck } from '../../types/monitoring.js';
 
@@ -449,6 +449,17 @@ describe('monitoring query state transitions', () => {
     expect(statement).toContain('FOR UPDATE OF c SKIP LOCKED');
     expect(statement).toContain("CASE WHEN c.check_type = 'push' THEN LEAST(c.interval_seconds, 60) ELSE c.interval_seconds END");
     expect(params).toEqual([100]);
+  });
+
+  it('only treats checks assigned to an enabled Local location as locally placed', async () => {
+    mockQueryRows([{ placed: true }]);
+    await expect(isMonitoringCheckPlacedLocally({ placementMode: 'selected', locationIds: [1, 2] })).resolves.toBe(true);
+    const [statement, params] = vi.mocked(query).mock.calls[0];
+    expect(statement).toContain("l.location_key = 'local' AND l.enabled");
+    expect(params).toEqual(['selected', [1, 2]]);
+
+    mockQueryRows([{ placed: false }]);
+    await expect(isMonitoringCheckPlacedLocally({ placementMode: 'all', locationIds: [] })).resolves.toBe(false);
   });
 
   it('excludes certificate-error warnings from availability but retains warning totals', async () => {

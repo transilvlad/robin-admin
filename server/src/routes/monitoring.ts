@@ -627,6 +627,10 @@ router.post('/checks/:id/run', requireAuth, requireAdmin, async (req: Request, r
       res.status(503).json({ success: false, error: error.message });
       return;
     }
+    if (error instanceof Error && error.name === 'MonitoringPlacementError') {
+      res.status(409).json({ success: false, error: error.message });
+      return;
+    }
     routeError(res, 'Failed to run monitoring check', error);
   }
 });

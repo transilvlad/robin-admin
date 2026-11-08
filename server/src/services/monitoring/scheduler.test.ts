@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { observabilityDefaults } from '../observability-settings.js';
 import { getConfig } from '../../db/queries/config.js';
 vi.mock('../../db/queries/config.js', () => ({ getConfig: vi.fn() }));
-import { getMonitoringCheck, getMonitoringCheckSecrets, listDueMonitoringChecks, pruneMonitoringHistory, recordMonitoringObservation } from '../../db/queries/monitoring.js';
+import { getMonitoringCheck, getMonitoringCheckSecrets, isMonitoringCheckPlacedLocally, listDueMonitoringChecks, pruneMonitoringHistory, recordMonitoringObservation } from '../../db/queries/monitoring.js';
 import { runMonitoringProbe } from './probes.js';
 import { runMonitoringCheckNow, runMonitoringMaintenance, runMonitoringSchedulerOnce } from './scheduler.js';
 
@@ -11,6 +11,7 @@ vi.mock('../../db/queries/monitoring.js', () => ({
   recordMonitoringObservation: vi.fn(),
   getMonitoringCheck: vi.fn(),
   getMonitoringCheckSecrets: vi.fn(),
+  isMonitoringCheckPlacedLocally: vi.fn(),
   pruneMonitoringHistory: vi.fn(),
 }));
 vi.mock('./probes.js', () => ({ runMonitoringProbe: vi.fn() }));
@@ -25,7 +26,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getConfig).mockResolvedValue({ ...policy } as never);
   nextId = 1;
-  vi.mocked(getMonitoringCheck).mockImplementation(async id => ({ id, enabled: true, pausedAt: null, secretHeaderNames: [] }) as never);
+  vi.mocked(getMonitoringCheck).mockImplementation(async id => ({ id, enabled: true, pausedAt: null, secretHeaderNames: [], placementMode: 'all', locationIds: [] }) as never);
+  vi.mocked(isMonitoringCheckPlacedLocally).mockResolvedValue(true);
   vi.mocked(recordMonitoringObservation).mockResolvedValue({} as never);
   vi.mocked(listDueMonitoringChecks).mockImplementation(async (limit = 25) =>
     Array.from({ length: limit }, () => ({ id: nextId++ })) as never);
@@ -37,6 +39,34 @@ it('records an unavailable credential failure without probing or exposing the de
   await runMonitoringCheckNow(987);
   expect(runMonitoringProbe).not.toHaveBeenCalled();
   expect(recordMonitoringObservation).toHaveBeenCalledWith(expect.objectContaining({ status: 'down', error: 'Stored check credentials unavailable' }));
+});
+
+it('rejects a manual run for a check not placed on the enabled Local location', async () => {
+  const check = { id: 987, enabled: true, pausedAt: null, secretHeaderNames: [], placementMode: 'selected', locationIds: [2] };
+  vi.mocked(getMonitoringCheck).mockResolvedValueOnce(check as never);
+  vi.mocked(isMonitoringCheckPlacedLocally).mockResolvedValueOnce(false);
+
+  await expect(runMonitoringCheckNow(check.id)).rejects.toMatchObject({
+    name: 'MonitoringPlacementError',
+    message: 'This check is not assigned to an enabled Local location; it runs only from its assigned locations.',
+  });
+  expect(runMonitoringProbe).not.toHaveBeenCalled();
+  expect(recordMonitoringObservation).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['all', []],
+  ['selected', [1]],
+])('allows a manual run when placement mode is %s and Local is assigned', async (placementMode, locationIds) => {
+  const check = { id: 987, enabled: true, pausedAt: null, secretHeaderNames: [], placementMode, locationIds };
+  vi.mocked(getMonitoringCheck).mockResolvedValueOnce(check as never);
+  vi.mocked(runMonitoringProbe).mockResolvedValueOnce(UP);
+
+  await runMonitoringCheckNow(check.id);
+
+  expect(isMonitoringCheckPlacedLocally).toHaveBeenCalledWith(check);
+  expect(runMonitoringProbe).toHaveBeenCalledOnce();
+  expect(recordMonitoringObservation).toHaveBeenCalledOnce();
 });
 
 /** Probes that stay pending until released one by one. */

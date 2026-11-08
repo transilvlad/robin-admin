@@ -242,6 +242,18 @@ describe('monitoring route permissions', () => {
     expect(response.headers.get('retry-after')).toBe('1');
     await expect(response.json()).resolves.toMatchObject({ success: false, error: 'Monitoring is busy' });
   });
+
+  it('returns conflict when a manual run is not assigned to the Local location', async () => {
+    const error = new Error('This check is not assigned to an enabled Local location; it runs only from its assigned locations.');
+    error.name = 'MonitoringPlacementError';
+    vi.mocked(monitoringScheduler.runMonitoringCheckNow).mockRejectedValueOnce(error);
+
+    const response = await fetch(`${baseUrl}/monitoring/checks/1/run`, { method: 'POST' });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ success: false, error: error.message });
+  });
+
   it('allows authenticated non-admin users to read the monitoring summary', async () => {
     authState.admin = false;
 
