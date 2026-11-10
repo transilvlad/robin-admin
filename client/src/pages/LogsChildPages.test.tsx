@@ -185,6 +185,28 @@ describe('Logs child pages', () => {
     await waitFor(() => expect(listSources).toHaveBeenLastCalledWith(30));
   });
 
+  it('shows Fleet pipeline counters and warnings even when no lines reach the store', async () => {
+    listSources.mockResolvedValue({ data: {
+      windowDays: 7, sources: [], truncated: false, limit: 200, quietAfterSeconds: 900,
+      pipelineStreams: [{
+        serviceId: 'mx-quiet', serviceType: 'postfix', source: 'docker containers',
+        capturedAt: new Date().toISOString(), lagCycles: 3,
+        counters: { read: 100, excluded: 90, masked: 4, truncated: 2, rateLimited: 3, rateLimitedCurrent: 1, shipped: 7, bytesShipped: 2048, readLagMs: 120000 },
+      }, {
+        serviceId: 'mx-recovered', serviceType: 'postfix', source: 'docker containers',
+        capturedAt: new Date().toISOString(), lagCycles: 0,
+        counters: { read: 100, excluded: 0, masked: 0, truncated: 0, rateLimited: 3, rateLimitedCurrent: 0, shipped: 97, bytesShipped: 4096, readLagMs: 0 },
+      }],
+      pipelineStreamsTruncated: false,
+    } });
+    renderPage(<LogsSourcesPage />);
+    expect(await screen.findByText('postfix · mx-quiet')).toBeInTheDocument();
+    expect(screen.getByText('Rate-limited · Lagging for 3 cycles')).toBeInTheDocument();
+    expect(screen.getByText('Healthy')).toBeInTheDocument();
+    expect(screen.getByText('120.0s')).toBeInTheDocument();
+    expect(screen.getByText('2,048')).toBeInTheDocument();
+  });
+
   it('scopes source links by type, including legacy Fleet and unattributed rows', async () => {
     listSources.mockResolvedValue({ data: {
       windowDays: 7,

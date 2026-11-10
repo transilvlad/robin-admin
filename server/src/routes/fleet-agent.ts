@@ -719,8 +719,40 @@ router.post('/services/:serviceId/logs', requireFleetAgentLogsAuth, async (req: 
       res.status(400).json({ success: false, error: 'times must be an array' });
       return;
     }
+    let counters: Record<string, number | string> | undefined;
+    if (body.counters !== undefined) {
+      if (!isRecord(body.counters)) {
+        res.status(400).json({ success: false, error: 'counters must be an object' });
+        return;
+      }
+      const fields = ['read', 'excluded', 'masked', 'truncated', 'rateLimited', 'shipped', 'bytesShipped', 'readLagMs'] as const;
+      const parsed: Record<string, number | string> = {};
+      for (const field of fields) {
+        const value = body.counters[field];
+        if (typeof value !== 'number' || !Number.isFinite(value) || (field === 'readLagMs' ? value < -1 : value < 0)) {
+          res.status(400).json({ success: false, error: `counters.${field} must be a non-negative number` });
+          return;
+        }
+        parsed[field] = value;
+      }
+      if (body.counters.rateLimitedCurrent !== undefined) {
+        const value = body.counters.rateLimitedCurrent;
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+          res.status(400).json({ success: false, error: 'counters.rateLimitedCurrent must be a non-negative number' });
+          return;
+        }
+        parsed.rateLimitedCurrent = value;
+      }
+      if (typeof body.counters.updatedAt === 'string') parsed.updatedAt = body.counters.updatedAt;
+      counters = parsed;
+    }
     if (body.batchId !== undefined && (typeof body.batchId !== 'string' || !/^[A-Za-z0-9._:-]{1,100}$/.test(body.batchId))) {
       res.status(400).json({ success: false, error: 'batchId must be up to 100 letters, digits, dots, colons, underscores or hyphens' });
+      return;
+    }
+    if (body.resetAppend !== undefined && (typeof body.resetAppend !== 'boolean'
+      || (body.resetAppend && (body.reset === false || !body.batchId)))) {
+      res.status(400).json({ success: false, error: 'resetAppend requires a reset batch with a batchId' });
       return;
     }
     const lines: string[] = [];
@@ -740,6 +772,8 @@ router.post('/services/:serviceId/logs', requireFleetAgentLogsAuth, async (req: 
       times,
       batchId: typeof body.batchId === 'string' ? body.batchId : null,
       reset: body.reset !== false,
+      ...(body.resetAppend === true ? { resetAppend: true } : {}),
+      counters,
     });
     res.json({ success: true, data: result });
   } catch (error) {

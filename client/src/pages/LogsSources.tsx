@@ -6,7 +6,7 @@ import { MetricCard } from '../components/ui/MetricCard';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Spinner } from '../components/ui/Spinner';
 import { appIcons } from '../constants/appIcons';
-import type { LogsSource, LogsSourcesResult } from '../types';
+import type { FleetLogStreamStatus, LogsSource, LogsSourcesResult } from '../types';
 import { formatSpan } from '../utils/telemetry';
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
@@ -14,6 +14,24 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   http: 'HTTP ingest',
   sentry: 'Sentry webhook',
 };
+
+const PIPELINE_COUNTERS = [
+  ['Read', 'read'],
+  ['Excluded', 'excluded'],
+  ['Masked', 'masked'],
+  ['Truncated', 'truncated'],
+  ['Rate-limited', 'rateLimited'],
+  ['Shipped', 'shipped'],
+  ['Bytes shipped', 'bytesShipped'],
+  ['Read lag', 'readLagMs'],
+] as const;
+
+function pipelineCounter(stream: FleetLogStreamStatus, key: typeof PIPELINE_COUNTERS[number][1]): string {
+  const raw = stream.counters?.[key];
+  const value = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN;
+  if (!Number.isFinite(value) || value < 0) return 'Unavailable';
+  return key === 'readLagMs' ? `${(value / 1000).toFixed(1)}s` : value.toLocaleString();
+}
 
 export function sourceTypeLabel(type: string): string {
   return SOURCE_TYPE_LABELS[type] ?? (type || 'Unattributed');
@@ -132,6 +150,44 @@ export function LogsSourcesPage() {
         )}
         {data?.truncated && <p role="status" className="border-t border-gray-200 px-4 py-3 text-sm text-amber-700 dark:border-gray-700 dark:text-amber-400">Source results are limited. At most {data.limit.toLocaleString()} sources are shown; counts may be incomplete.</p>}
       </section>
+      {data?.pipelineStreams && <section className="card overflow-hidden p-0" aria-labelledby="fleet-pipeline-title">
+        <div className="border-b border-gray-200 p-4 dark:border-gray-700">
+          <h2 id="fleet-pipeline-title" className="text-base font-semibold">Fleet log pipelines</h2>
+          <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Agent-reported totals, including streams with no searchable logs.</p>
+        </div>
+        {data.pipelineStreams.length === 0 ? <p className="p-4 text-sm text-gray-500 dark:text-gray-400">No Fleet log streams are assigned.</p> : (
+          <div className="overflow-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-gray-50 text-gray-600 dark:bg-robin-gray-800 dark:text-gray-300"><tr>
+                <th scope="col" className="px-4 py-3 font-medium">Service</th>
+                <th scope="col" className="px-4 py-3 font-medium">Source</th>
+                <th scope="col" className="px-4 py-3 font-medium">Last heartbeat</th>
+                {PIPELINE_COUNTERS.map(([label]) => <th key={label} scope="col" className="whitespace-nowrap px-4 py-3 font-medium">{label}</th>)}
+                <th scope="col" className="px-4 py-3 font-medium">Status</th>
+              </tr></thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {data.pipelineStreams.map((stream) => {
+                  const limited = Number(stream.counters?.rateLimitedCurrent ?? stream.counters?.rateLimited ?? 0) > 0;
+                  const lagging = stream.lagCycles >= 3;
+                  const stale = isQuiet(stream.capturedAt);
+                  return <tr key={stream.serviceId}>
+                    <td className="whitespace-nowrap px-4 py-3"><Link className="font-medium hover:text-robin-orange hover:underline" to={`/logs?service=${encodeURIComponent(stream.serviceId)}`}>{stream.serviceType} · {stream.serviceId}</Link></td>
+                    <td className="max-w-64 break-words px-4 py-3">{stream.source || 'Waiting for agent'}</td>
+                    <td className="whitespace-nowrap px-4 py-3">{ago(stream.capturedAt)}</td>
+                    {PIPELINE_COUNTERS.map(([, key]) => <td key={key} className="whitespace-nowrap px-4 py-3 tabular-nums">{pipelineCounter(stream, key)}</td>)}
+                    <td className="min-w-40 px-4 py-3">
+                      {limited || lagging || stale ? <span className="text-amber-700 dark:text-amber-400">
+                        {[limited && 'Rate-limited', lagging && `Lagging for ${stream.lagCycles} cycles`, stale && (stream.capturedAt ? 'Heartbeat stale' : 'Waiting for agent')].filter(Boolean).join(' · ')}
+                      </span> : <span className="text-green-700 dark:text-green-400">Healthy</span>}
+                    </td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {data.pipelineStreamsTruncated && <p role="status" className="border-t border-gray-200 px-4 py-3 text-sm text-amber-700 dark:border-gray-700 dark:text-amber-400">Fleet pipeline results are limited to {data.limit.toLocaleString()} streams.</p>}
+      </section>}
       <section className="card" aria-labelledby="logs-connect-title">
         <div className="card-header"><h2 id="logs-connect-title" className="card-title flex items-center gap-2"><PlugZap className="h-4 w-4 text-robin-orange" aria-hidden="true" />Connect a source</h2></div>
         <div className="card-body grid gap-6 text-sm md:grid-cols-3">

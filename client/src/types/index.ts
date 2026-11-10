@@ -761,6 +761,8 @@ export interface ServiceLogs {
   source: string;
   available: boolean;
   lines: string[];
+  counters?: Record<string, number | string> | null;
+  lagCycles?: number;
   error?: string;
 }
 
@@ -860,12 +862,23 @@ export interface LogsSource {
   lastSeen: string | null;
 }
 
+export interface FleetLogStreamStatus {
+  serviceId: string;
+  serviceType: string;
+  source: string | null;
+  capturedAt: string | null;
+  counters: Record<string, number | string> | null;
+  lagCycles: number;
+}
+
 export interface LogsSourcesResult {
   windowDays: number;
   sources: LogsSource[];
   truncated: boolean;
   limit: number;
   quietAfterSeconds: number;
+  pipelineStreams?: FleetLogStreamStatus[];
+  pipelineStreamsTruncated?: boolean;
 }
 
 export interface LogsConfiguration {

@@ -162,12 +162,15 @@ describe('getServiceLogs', () => {
       source: '/var/log/mail.log',
       lines: ['l1', 'l2', 'l3'],
       capturedAt: new Date('2026-09-07T12:00:00.000Z'),
+      counters: { read: 4, rateLimited: 0, readLagMs: 100 },
+      lagCycles: 0,
     });
     const out = await getServiceLogs('dovecot', 's1', 2);
     expect(out.available).toBe(true);
     expect(out.source).toContain('/var/log/mail.log');
     expect(out.source).toContain('agent');
     expect(out.lines).toEqual(['l2', 'l3']); // last N of the stored buffer
+    expect(out.counters).toMatchObject({ read: 4, readLagMs: 100 });
     expect(execFileImpl).not.toHaveBeenCalled(); // agent-mode never reads local files
   });
 

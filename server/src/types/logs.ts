@@ -30,12 +30,23 @@ export interface LogsSource {
   lastSeen: string | null;
 }
 
+export interface FleetLogStreamStatus {
+  serviceId: string;
+  serviceType: string;
+  source: string | null;
+  capturedAt: string | null;
+  counters: Record<string, number | string> | null;
+  lagCycles: number;
+}
+
 export interface LogsSourcesResult {
   windowDays: number;
   sources: LogsSource[];
   truncated: boolean;
   limit: number;
   quietAfterSeconds: number;
+  pipelineStreams?: FleetLogStreamStatus[];
+  pipelineStreamsTruncated?: boolean;
 }
 
 export const LOGS_ALERT_COMPARATORS = ['>', '>=', '<', '<=', '==', '!='] as const;

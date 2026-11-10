@@ -72,4 +72,16 @@ describe('ServiceLogsPanel', () => {
 
     expect(await screen.findByText(/co-located/)).toBeInTheDocument();
   });
+
+  it('clears the warning when rate limiting has stopped', async () => {
+    logsGet.mockResolvedValue({ data: {
+      serviceType: 'postfix', serviceId: 's1', available: true, source: 'agent', lines: [],
+      counters: { read: 10, excluded: 0, masked: 0, truncated: 0, rateLimited: 3, rateLimitedCurrent: 0, shipped: 7, bytesShipped: 50, readLagMs: 0 },
+    } });
+
+    render(<ServiceLogsPanel serviceType="postfix" serviceId="s1" />);
+
+    expect(await screen.findByText('No recent log lines.')).toBeInTheDocument();
+    expect(screen.queryByText(/agent dropped lines/)).not.toBeInTheDocument();
+  });
 });

@@ -64,6 +64,75 @@ func bodyLines(body map[string]any) string {
 	return strings.Join(parts, ",")
 }
 
+func TestExcludedBacklogContinuesWithinCycle(t *testing.T) {
+	freshLogStates(t)
+	path := filepath.Join(t.TempDir(), "rspamd.log")
+	appendFile(t, path, "initial\n")
+	t.Setenv("ROBIN_AGENT_RSPAMD_LOG_FILE", path)
+	t.Setenv("ROBIN_AGENT_RSPAMD_LOG_EXCLUDE", "drop-me")
+	rec := &logPushRecorder{}
+	srv := rec.server(t)
+	svc := ownedService{ServiceID: "backlog", ServiceType: "rspamd"}
+	c := config{adminURL: srv.URL}
+	pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+	st, err := logStates.service("", svc.ServiceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := st.Counters.Read
+	appendFile(t, path, strings.Repeat("drop-me\n", 12000))
+	pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+	if got := st.Counters.Read - before; got != 12000 {
+		t.Fatalf("read only %d excluded backlog lines", got)
+	}
+}
+
+func TestRateLimitPrefersWarningsAcrossReadChunks(t *testing.T) {
+	freshLogStates(t)
+	path := filepath.Join(t.TempDir(), "rspamd.log")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ROBIN_AGENT_RSPAMD_LOG_FILE", path)
+	t.Setenv("ROBIN_AGENT_RSPAMD_LOG_RATE_PER_SECOND", "200")
+	t.Setenv("ROBIN_AGENT_RSPAMD_LOG_RATE_BURST", "400")
+	rec := &logPushRecorder{}
+	srv := rec.server(t)
+	svc := ownedService{ServiceID: "priority", ServiceType: "rspamd"}
+	c := config{adminURL: srv.URL}
+	pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+	appendFile(t, path, strings.Repeat("DEBUG early\n", 5000)+strings.Repeat("WARN later\n", 400))
+	pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+	var output string
+	for _, body := range rec.bodies[1:] {
+		output += bodyLines(body)
+	}
+	debugKept := strings.Count(output, "DEBUG early")
+	if strings.Count(output, "WARN later") != 400 || debugKept >= 5000 ||
+		!strings.Contains(output, fmt.Sprintf("%d lines dropped by rate limit", 5000-debugKept)) {
+		t.Fatalf("bounded read window did not prioritize warnings: %q", output)
+	}
+}
+
+func TestHeldResetEntryIsAppendedAsHistorical(t *testing.T) {
+	freshLogStates(t)
+	path := filepath.Join(t.TempDir(), "rspamd.log")
+	appendFile(t, path, "2026-11-10T14:15:25Z INFO historical\n")
+	t.Setenv("ROBIN_AGENT_RSPAMD_LOG_FILE", path)
+	rec := &logPushRecorder{}
+	srv := rec.server(t)
+	svc := ownedService{ServiceID: "reset", ServiceType: "rspamd"}
+	c := config{adminURL: srv.URL, statePath: filepath.Join(t.TempDir(), "agent.json")}
+	pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+	logStates = &logStateStore{}
+	appendFile(t, path, "2026-11-10T14:15:26Z INFO live\n")
+	pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+	if len(rec.bodies) != 2 || rec.bodies[1]["reset"] != true || rec.bodies[1]["resetAppend"] != true ||
+		!strings.Contains(bodyLines(rec.bodies[1]), "historical") {
+		t.Fatalf("held reset tail was sent as new history: %+v", rec.bodies)
+	}
+}
+
 func TestReadFileChunkShipsOnlyCompleteNewLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mail.log")
 	if err := os.WriteFile(path, []byte("one\r\ntwo\npart"), 0o644); err != nil {
@@ -156,7 +225,7 @@ func TestReadFileChunkKeepsLongLinesWholeAndWaitsForNewline(t *testing.T) {
 	}
 	appendFile(t, path, "\nnext\n")
 	lines, offset, more, err = readFileChunk(path, 0)
-	if err != nil || len(lines) != 1 || len(lines[0]) != logLineMaxBytes || offset != int64(len(longLine)+1) || !more {
+	if err != nil || len(lines) != 1 || len(lines[0]) != len(longLine) || offset != int64(len(longLine)+1) || !more {
 		t.Fatalf("long line = %d lines @%d more=%v, %v", len(lines), offset, more, err)
 	}
 	lines, _, more, err = readFileChunk(path, offset)
@@ -189,6 +258,9 @@ func TestFollowFileFinishesARotatedFile(t *testing.T) {
 }
 
 func TestFollowFileReadsMultipleRotationsWithIdenticalPrefixes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("identical-prefix rotation detection relies on Unix inode identity")
+	}
 	path := filepath.Join(t.TempDir(), "mail.log")
 	appendFile(t, path, "shared prefix\n")
 	tail, _, err := followFile("key", path, "", nil)
@@ -441,19 +513,21 @@ func TestLogPositionSurvivesARestart(t *testing.T) {
 	appendFile(t, path, "2026-11-04 10:00:00 #1(main) written while stopped\ncontinuation\n")
 	logStates = &logStateStore{} // a restarted agent reloads its positions from disk
 	pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+	time.Sleep(2100 * time.Millisecond)
+	pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
 
-	if len(rec.bodies) != 2 || rec.bodies[1]["reset"] != false {
+	if len(rec.bodies) != 3 || rec.bodies[2]["reset"] != false {
 		t.Fatalf("a restart with a saved position must not reset: %v", rec.bodies)
 	}
-	if got := bodyLines(rec.bodies[1]); got != "2026-11-04 10:00:00 #1(main) written while stopped,continuation" {
+	if got := bodyLines(rec.bodies[2]); got != "2026-11-04 10:00:00 #1(main) written while stopped\ncontinuation" {
 		t.Fatalf("lines after restart = %q", got)
 	}
-	times, _ := rec.bodies[1]["times"].([]any)
-	if len(times) != 2 || times[0] == "" || times[1] != times[0] {
-		t.Fatalf("a continuation line takes the previous line's time: %v", times)
+	times, _ := rec.bodies[2]["times"].([]any)
+	if len(times) != 1 || times[0] == "" {
+		t.Fatalf("a multiline entry keeps the first line's time: %v", times)
 	}
-	if id, _ := rec.bodies[1]["batchId"].(string); len(id) != 32 {
-		t.Fatalf("a batch with lines carries an id: %v", rec.bodies[1]["batchId"])
+	if id, _ := rec.bodies[2]["batchId"].(string); len(id) != 32 {
+		t.Fatalf("a batch with lines carries an id: %v", rec.bodies[2]["batchId"])
 	}
 }
 
@@ -661,6 +735,7 @@ func TestStructurallyCorruptLogStateIsRejected(t *testing.T) {
 		`{"svc":null}`,
 		`{"svc":{"cursor":{"key":"file:test","offset":-1}}}`,
 		`{"svc":{"cursor":{"key":"file:test","fingerprintSize":4,"fingerprint":"bad"}}}`,
+		`{"svc":{"cursor":{"key":"file:test","fingerprintSize":4,"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","containers":{"container":{"seen":-1}}}}}`,
 		`{"svc":{"pending":{"next":{"key":"file:test"}}}}`,
 	} {
 		t.Run(contents, func(t *testing.T) {
@@ -801,12 +876,12 @@ func TestParseLineTime(t *testing.T) {
 
 func TestJournalLineRendersShortISO(t *testing.T) {
 	var entry journalEntry
-	raw := `{"__CURSOR":"s=1","__REALTIME_TIMESTAMP":"1767348000000000","_HOSTNAME":"mx","SYSLOG_IDENTIFIER":"postfix/smtpd","_PID":"12","MESSAGE":[104,105]}`
+	raw := `{"__CURSOR":"s=1","__REALTIME_TIMESTAMP":"1767348000000000","_HOSTNAME":"mx","SYSLOG_IDENTIFIER":"postfix/smtpd","_PID":"12","PRIORITY":"4","MESSAGE":[104,105]}`
 	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
 		t.Fatal(err)
 	}
 	line, at, ok := journalLine(entry)
-	if !ok || !strings.HasSuffix(line, " mx postfix/smtpd[12]: hi") || !at.Equal(time.Unix(1767348000, 0)) {
+	if !ok || !strings.HasSuffix(line, " mx postfix/smtpd[12]: hi PRIORITY=4") || !at.Equal(time.Unix(1767348000, 0)) {
 		t.Fatalf("journalLine = %q, %v, %v", line, at, ok)
 	}
 	if _, _, ok := journalLine(journalEntry{Realtime: "1"}); ok {

@@ -25,10 +25,10 @@ and `log_agent_id` each opt a *single* axis onto an agent while the others stay
 direct. So a service can mix modes: e.g. Rspamd with **direct** metrics (`/stat`)
 and **direct** logs (`/errors`) but its **config** applied by a co-located agent.
 
-robin-admin always owns the parsing and rendering. On every axis the agent is a
-**thin executor**: it runs a command (or fetches an endpoint) and ships the raw
-output, writes files robin-admin already rendered, and tails logs — it never
-parses or renders.
+robin-admin owns service configuration parsing and rendering. The agent is a
+**thin executor** for those axes: it runs commands, ships raw metrics, writes
+files robin-admin rendered, and tails logs. Log lines pass through the agent's
+host-side sanitize, filter, multiline and rate-limit pipeline before shipping.
 
 ### Assigning axes
 

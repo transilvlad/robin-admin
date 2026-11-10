@@ -911,9 +911,16 @@ export async function initializeSchema(): Promise<void> {
           REFERENCES fleet_services(service_id) ON DELETE CASCADE ON UPDATE CASCADE,
         source VARCHAR(255),
         lines_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        pipeline_counters JSONB,
+        lag_cycles INTEGER NOT NULL DEFAULT 0,
         captured_at TIMESTAMPTZ,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
+    `);
+    await client.query(`
+      ALTER TABLE fleet_agent_service_logs
+        ADD COLUMN IF NOT EXISTS pipeline_counters JSONB,
+        ADD COLUMN IF NOT EXISTS lag_cycles INTEGER NOT NULL DEFAULT 0
     `);
 
     await client.query(`

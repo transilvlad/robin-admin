@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getFleetServiceById, type FleetService } from '../db/queries/fleet-services.js';
 import { getAgentServiceLogs, storeAgentServiceLogs } from '../db/queries/fleet-agent-logs.js';
+import type { PoolClient } from 'pg';
 import { getRspamdAuthHeaders } from './metrics-poller.js';
 import { normalizeLogText } from './log-text.js';
 import { type FleetServiceType } from './service-types.js';
@@ -20,6 +21,8 @@ export interface ServiceLogsResult {
   source: string;
   available: boolean;
   lines: string[];
+  counters?: Record<string, number | string> | null;
+  lagCycles?: number;
   error?: string;
 }
 
@@ -224,6 +227,8 @@ async function readAgentPushedLogs(
     source: `${stored.source} (agent, captured ${stored.capturedAt.toISOString()})`,
     available: true,
     lines: stored.lines.slice(-lines),
+    counters: stored.counters,
+    lagCycles: stored.lagCycles,
   };
 }
 
@@ -232,12 +237,26 @@ async function readAgentPushedLogs(
  * agent's first push after start) replace the buffer; later batches carry only
  * new lines and are appended. `source` is a human label of what was followed.
  */
-export async function ingestAgentLogs(serviceId: string, source: string, lines: string[], reset: boolean): Promise<number> {
-  const config = await getConfig();
-  const maxLines = Math.max(1, Math.min(10000, config.logMaxLines || MAX_LINES));
+export async function ingestAgentLogs(
+  serviceId: string,
+  source: string,
+  lines: string[],
+  reset: boolean,
+  counters?: Record<string, number | string>,
+  client?: PoolClient,
+  configuredMaxLines?: number,
+): Promise<number> {
+  const maxLines = Math.max(1, Math.min(10000, (configuredMaxLines ?? (await getConfig()).logMaxLines) || MAX_LINES));
   const clean = lines.filter((l) => typeof l === 'string' && l.length > 0).map(normalizeLogText);
-  const previous = reset ? [] : (await getAgentServiceLogs(serviceId))?.lines ?? [];
-  await storeAgentServiceLogs(serviceId, normalizeLogText(source || 'agent'), [...previous, ...clean].slice(-maxLines));
+  const previous = reset ? [] : (await (client ? getAgentServiceLogs(serviceId, client) : getAgentServiceLogs(serviceId)))?.lines ?? [];
+  const storedLines = [...previous, ...clean].slice(-maxLines);
+  if (client) {
+    await storeAgentServiceLogs(serviceId, normalizeLogText(source || 'agent'), storedLines, counters, client);
+  } else if (counters) {
+    await storeAgentServiceLogs(serviceId, normalizeLogText(source || 'agent'), storedLines, counters);
+  } else {
+    await storeAgentServiceLogs(serviceId, normalizeLogText(source || 'agent'), storedLines);
+  }
   return clean.length;
 }
 

@@ -27,6 +27,7 @@ import {
 import { deleteLogsAlertRuleWithRecovery, previewLogsAlertRule } from '../services/alerts/logs-rules.js';
 import { LOGS_ALERT_COMPARATORS, LOGS_RANGE_PRESETS, type LogsAlertRuleInput, type LogsSavedSearchInput, type LogsSearchFilters } from '../types/logs.js';
 import { countLogs, getLogsSources, getLogsStoreStatus, ingestExternalLogs, LogsBatchTooLargeError, LogsQueryError, LogsStoreUnavailableError, MAX_QUERY_LENGTH, searchLogs, validateUserQuery } from '../services/logs-store.js';
+import { listFleetLogStreamStatuses } from '../db/queries/fleet-agent-logs.js';
 import {
   LogsIngestBodyTooLargeError,
   LogsIngestPayloadError,
@@ -478,7 +479,8 @@ router.get('/sources', async (req: Request, res: Response) => {
     if (!(await checkLogsEnabled(res))) return;
     const windowDays = Number.parseInt(String(req.query.windowDays ?? '7'), 10);
     const result = await getLogsSources(windowDays);
-    res.json({ success: true, data: result });
+    const pipeline = await listFleetLogStreamStatuses(result.limit);
+    res.json({ success: true, data: { ...result, pipelineStreams: pipeline.streams, pipelineStreamsTruncated: pipeline.truncated } });
   } catch (error) {
     if (error instanceof LogsQueryError || error instanceof LogsStoreUnavailableError) {
       return res.status(error.status).json({ success: false, error: error.message });

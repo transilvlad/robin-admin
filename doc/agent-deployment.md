@@ -68,6 +68,17 @@ service tools (`doveadm`, `postqueue`, `postsuper`, `postcat`, `postfix reload`,
 observability-only agent, set `User=` to a low-privilege account with read access
 to the logs/sockets it needs.
 
+For a busy log source, use a systemd drop-in to keep the agent's resource use
+bounded; tune these values for the host rather than relying on binary defaults:
+
+```ini
+[Service]
+MemoryMax=100M
+CPUQuota=5%
+Nice=10
+IOSchedulingClass=idle
+```
+
 ### 2. Docker / Compose sidecar
 
 ```bash
@@ -143,15 +154,58 @@ If robin-admin itself uses a self-signed certificate on an internal network, add
 | `ROBIN_ADMIN_URL` | robin-admin base URL the agent dials out to. |
 | `ROBIN_AGENT_ID` / `ROBIN_ENROLLMENT_TOKEN` | From **Fleet → Agents**; needed only for the first enrollment. |
 | `ROBIN_AGENT_CREDENTIAL` | A pre-provisioned long-lived credential — skips enrollment (for automated/reproducible fleets; see [agent-co-location.md](agent-co-location.md#provisioning-enrollment-vs-a-pre-set-credential)). |
-| `ROBIN_AGENT_STATE` | Credential/state file (default `/var/lib/robin-agent/state.json`). Persist its directory to avoid re-enrolling and retain log positions and unacknowledged batches in `<state>.log-cursors.json`. See [source retention and recovery limits](logs.md#source-retention-and-agent-recovery). |
+| `ROBIN_AGENT_STATE` | Credential/state file (default `/var/lib/robin-agent/state.json`). Persist its directory to retain positions, pending batches, and the separate encryption key in `<state>.log-cursors.json.key`. Protect and back up the cursor and key together. See [source retention and recovery limits](logs.md#source-retention-and-agent-recovery). |
 | `ROBIN_AGENT_PROBE` | Comma list of `type=host:port` to TCP-probe for discovery. |
 | `ROBIN_AGENT_MANAGED_ROOT` | Prefix for written config (default `/`; point at a staging dir to preview). |
 | `ROBIN_AGENT_APPLY_ONLY` | `1` = deliver config but skip validate+reload (staging model). |
 | `ROBIN_AGENT_EXEC_PREFIX` | Comma list of `serviceId=prefix` prepended to a service's commands (e.g. `mail=docker exec mail`, `mx1=ssh mx1`). |
-| `ROBIN_AGENT_<TYPE>_LOG_{UNIT,FILE,DIR,GLOB,CONTAINER,FILTER}` | Override where the agent follows a type's log; `CONTAINER` follows a container's console output via `docker logs`. |
-| `ROBIN_AGENT_LOG_<SERVICE_ID>_{UNIT,FILE,DIR,GLOB,CONTAINER,FILTER}` | The same for one service (id upper-cased, other characters as `_`), for an agent running several services of one type. |
+| `ROBIN_AGENT_<TYPE>_LOG_{UNIT,FILE,DIR,GLOB,CONTAINER,CONTAINER_LABEL,FILTER}` | Override a type's source. `CONTAINER` accepts exact names and `*`/`?` glob patterns separated by `;` (or `,`); `CONTAINER_LABEL` optionally filters by a Docker label selector. json-file logs are read directly when the path is accessible. |
+| `ROBIN_AGENT_LOG_<SERVICE_ID>_{UNIT,FILE,DIR,GLOB,CONTAINER,CONTAINER_LABEL,FILTER}` | The same for one service (id upper-cased, other characters as `_`), taking precedence over the type-level value. `FILTER` remains a simple substring include. |
+| `ROBIN_AGENT_<TYPE>_LOG_{INCLUDE,EXCLUDE,MIN_LEVEL}` / `ROBIN_AGENT_LOG_<SERVICE_ID>_{INCLUDE,EXCLUDE,MIN_LEVEL}` | Semicolon-separated substring patterns, or `re:<Go-regexp>` patterns. Excludes win. `MIN_LEVEL` accepts DEBUG, INFO, WARN/WARNING, ERROR or FATAL; unrecognized lines are kept. |
+| `ROBIN_AGENT_<TYPE>_LOG_{MASK,MASK_PRESETS}` / `ROBIN_AGENT_LOG_<SERVICE_ID>_{MASK,MASK_PRESETS}` | `MASK` is semicolon-separated `re:<pattern>=><replacement>` rules. Credential key/value, bearer-token, and `auth` masking are always enabled; `email` and `tokens` are opt-in. Unknown presets stop collection with a warning. Email masking retains the domain and replaces the local part with a stable short hash. |
+| `ROBIN_AGENT_<TYPE>_LOG_{ENTRY_STARTS_WITH,ENTRY_MAX_LINES,ENTRY_MAX_BYTES}` / matching per-service names | Entry-start regex (default: timestamp), maximum entry lines (default 100), and bytes (default 65536). |
+| `ROBIN_AGENT_<TYPE>_LOG_{RATE_PER_SECOND,RATE_BURST}` / matching per-service names | Optional per-second budget with a burst allowance, applied across each collection window. The default burst is the rate or 1, whichever is larger; an explicit burst must be at least 1. Within each bounded read window, over-budget entries drop DEBUG before INFO, then lower-priority entries before WARN/ERROR, with a synthetic dropped-line summary. |
 | `ROBIN_AGENT_INSECURE` | `1` = skip TLS verification (self-signed dev only). |
 | Installer-only: `ROBIN_AGENT_VERSION`, `ROBIN_AGENT_REPO`, `ROBIN_AGENT_DOWNLOAD_BASE` | Pin a version, change the repo, or mirror assets internally. |
+
+Example configuration for a Postal-like Compose project (generic selectors and
+rules; no Postal-specific agent behavior):
+
+```sh
+ROBIN_AGENT_POSTFIX_LOG_CONTAINER='postal-*'
+ROBIN_AGENT_POSTFIX_LOG_EXCLUDE='DEBUG;invalid line ending'
+ROBIN_AGENT_POSTFIX_LOG_MASK_PRESETS='email;auth'
+ROBIN_AGENT_POSTFIX_LOG_RATE_PER_SECOND=200
+ROBIN_AGENT_POSTFIX_LOG_RATE_BURST=400
+```
+
+Credential, authentication, and bearer-token masking is on without a preset. At the measured
+1.69 million lines/hour fixture, a 200 lines/second ceiling is at most 720,000
+lines/hour (about 57% fewer lines); a purely line-proportional estimate is
+about 100 MB/hour from 235 MB/hour before the DEBUG and invalid-ending
+exclusions. Actual bytes depend on severity and message size, so measure with
+the agent preview against the target service before treating that estimate as
+a capacity commitment.
+
+`robin-agent logs preview --service <id> --type <type> --since 5m --limit 500`
+prints masked entries without shipping them. Preview examines up to 100,000
+recent raw lines and 16 MiB, then applies the requested output limit; its
+counters describe the examined input rather than only the printed entries.
+When changing a Docker selector, the agent starts the newly selected source
+with a recent-tail reset. A legacy multi-container cursor did not record its
+selector, so the agent warns and resets that source once during the upgrade.
+
+The agent benchmark uses the real-shaped fixtures and reports CPU time and
+allocations:
+
+```sh
+cd agent
+go test -run '^$' -bench '^BenchmarkLogPipelinePostalFixtures500LinesPerSecond$' -benchmem
+```
+
+On Linux, wrap the command with `/usr/bin/time -v` to capture process maximum
+RSS during the soak. The target is below 5% of one core and 100 MiB RSS while
+processing 500 lines/second.
 
 ## Command channel
 

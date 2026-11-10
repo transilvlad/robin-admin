@@ -259,6 +259,7 @@ func TestResolveLogSourcePerService(t *testing.T) {
 	t.Setenv("ROBIN_AGENT_POSTFIX_LOG_FILTER", "postfix-mx/")
 	t.Setenv("ROBIN_AGENT_LOG_MX_2_FILE", "/var/log/mx2/mail.log")
 	t.Setenv("ROBIN_AGENT_LOG_MX_3_CONTAINER", "mx3")
+	t.Setenv("ROBIN_AGENT_LOG_MX_4_CONTAINER_LABEL", "com.example.role=mail")
 
 	mx1, _ := resolveLogSource("postfix", "mx-1")
 	if mx1.file != "/var/log/mail.log" || mx1.filter != "postfix-mx/" || mx1.container != "" {
@@ -271,6 +272,10 @@ func TestResolveLogSourcePerService(t *testing.T) {
 	mx3, _ := resolveLogSource("postfix", "mx-3")
 	if mx3.container != "mx3" || mx3.filter != "postfix-mx/" {
 		t.Errorf("mx-3 should follow its container with the type filter, got %+v", mx3)
+	}
+	mx4, _ := resolveLogSource("postfix", "mx-4")
+	if mx4.containerLabel != "com.example.role=mail" || mx4.file != "" || mx4.unit != "" {
+		t.Errorf("mx-4 should select Docker containers by label, got %+v", mx4)
 	}
 }
 

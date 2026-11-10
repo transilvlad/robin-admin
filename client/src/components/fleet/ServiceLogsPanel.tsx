@@ -134,13 +134,50 @@ export function ServiceLogsPanel({ serviceType, serviceId }: { serviceType: Flee
       )}
 
       {!error && logs?.available && (
-        logs.lines.length === 0 ? (
-          <div className="text-sm text-gray-500 dark:text-gray-400">No recent log lines.</div>
-        ) : (
-          <pre ref={logRef} className="h-[calc(100vh-16rem)] min-h-112 overflow-auto rounded-lg bg-gray-950 p-4 text-xs leading-relaxed text-gray-100">
-            {logs.lines.join('\n')}
-          </pre>
-        )
+        <>
+          {logs.counters && (
+            <div className="mb-3 space-y-2">
+              <dl className="grid grid-cols-2 gap-3 rounded-lg bg-gray-50 p-3 text-xs dark:bg-robin-gray-800 sm:grid-cols-4 lg:grid-cols-8">
+                {([
+                  ['Lines read', 'read'],
+                  ['Excluded', 'excluded'],
+                  ['Masked', 'masked'],
+                  ['Truncated', 'truncated'],
+                  ['Rate-limited', 'rateLimited'],
+                  ['Shipped', 'shipped'],
+                  ['Bytes shipped', 'bytesShipped'],
+                  ['Read lag', 'readLagMs'],
+                ] as const).map(([label, key]) => {
+                  const raw = logs.counters?.[key];
+                  const value = typeof raw === 'number' ? raw : Number(raw);
+                  return <div key={key}>
+                    <dt className="text-gray-500 dark:text-gray-400">{label}</dt>
+                    <dd className="mt-0.5 font-medium tabular-nums">
+                      {key === 'readLagMs' ? (value >= 0 ? `${(value / 1000).toFixed(1)}s` : 'Unavailable') : Number.isFinite(value) ? value.toLocaleString() : 'Unavailable'}
+                    </dd>
+                  </div>;
+                })}
+              </dl>
+              {Number(logs.counters.rateLimitedCurrent ?? logs.counters.rateLimited ?? 0) > 0 && (
+                <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-200">
+                  The agent dropped lines to stay within this stream&apos;s configured rate limit.
+                </p>
+              )}
+              {(logs.lagCycles ?? 0) >= 3 && (
+                <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-200">
+                  This stream has reported elevated read lag for {logs.lagCycles} consecutive heartbeats.
+                </p>
+              )}
+            </div>
+          )}
+          {logs.lines.length === 0 ? (
+            <div className="text-sm text-gray-500 dark:text-gray-400">No recent log lines.</div>
+          ) : (
+            <pre ref={logRef} className="h-[calc(100vh-16rem)] min-h-112 overflow-auto rounded-lg bg-gray-950 p-4 text-xs leading-relaxed text-gray-100">
+              {logs.lines.join('\n')}
+            </pre>
+          )}
+        </>
       )}
 
       {!logs && !error && !isLoading && (

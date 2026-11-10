@@ -117,4 +117,27 @@ describe('acceptFleetLogBatch', () => {
     expect(mockPostfix).not.toHaveBeenCalled();
     expect(mockBuffer).toHaveBeenCalledWith('mx-1', batch.source, batch.lines, true);
   });
+
+  it('appends a held reset entry transactionally without adding history or Postfix counts', async () => {
+    await expect(acceptFleetLogBatch({ ...batch, reset: true, resetAppend: true })).resolves.toEqual({ stored: 1, duplicate: false });
+    expect(registerFleetLogBatch).toHaveBeenCalledWith(client, 4, 'b-1');
+    expect(mockBuffer).toHaveBeenCalledWith('mx-1', batch.source, batch.lines, false, undefined, client, undefined);
+    expect(mockEnqueue).not.toHaveBeenCalled();
+    expect(mockPostfix).not.toHaveBeenCalled();
+    expect(statements()).toEqual(['BEGIN', 'COMMIT']);
+  });
+
+  it('does not append a retried reset entry twice', async () => {
+    vi.mocked(registerFleetLogBatch).mockResolvedValue(false);
+    await expect(acceptFleetLogBatch({ ...batch, reset: true, resetAppend: true })).resolves.toEqual({ stored: 0, duplicate: true });
+    expect(mockBuffer).not.toHaveBeenCalled();
+    expect(mockEnqueue).not.toHaveBeenCalled();
+    expect(statements()).toEqual(['BEGIN', 'COMMIT']);
+  });
+
+  it('stores agent pipeline counters with the live tail', async () => {
+    const counters = { read: 10, excluded: 1, masked: 2, truncated: 0, rateLimited: 3, shipped: 4, bytesShipped: 200, readLagMs: 1200 };
+    await acceptFleetLogBatch({ ...batch, counters });
+    expect(mockBuffer).toHaveBeenCalledWith('mx-1', batch.source, batch.lines, false, counters);
+  });
 });

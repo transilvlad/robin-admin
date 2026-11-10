@@ -1071,6 +1071,13 @@ func syncConfig(ctx context.Context, client *http.Client, c config, s *state, ac
 }
 
 func main() {
+	if len(os.Args) >= 3 && os.Args[1] == "logs" && os.Args[2] == "preview" {
+		if err := runLogPreview(os.Args[3:]); err != nil {
+			fmt.Fprintln(os.Stderr, "robin-agent:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	for _, a := range os.Args[1:] {
 		if a == "-version" || a == "--version" || a == "-v" {
 			fmt.Println("robin-agent", agentVersion)

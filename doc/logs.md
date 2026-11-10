@@ -41,8 +41,68 @@ agents, Fleet log tails and Postfix message counters work exactly as before.
   are truncated. External service types are limited to 120 UTF-8 bytes.
 - NUL characters and unpaired Unicode surrogates are replaced with the Unicode
   replacement character before storage, including in Fleet recent tails.
-- Log lines are not redacted. Do not ship logs that contain secrets you would
-  not show to every admin.
+- Fleet-agent log entries are sanitized on the host before they are stored in
+  the agent's pending batch or sent to Robin Admin. Credential-like key/value
+  fields and bearer tokens are masked by default; email, mail-protocol AUTH,
+  and additional token presets are configurable. Direct HTTP/Sentry senders
+  are not redacted, so do not send them secrets you would not show to every
+  admin.
+
+### Fleet agent processing and health
+
+For each agent source, processing runs on the host before batching:
+ANSI removal, multiline assembly, include/exclude and minimum-level rules,
+masking, entry truncation, per-service rate limiting, then batching. Exclude
+rules take precedence over includes. Rules match ANSI-stripped entries; regex
+rules use Go's RE2-compatible `regexp` implementation. A source's `FILTER`
+also constrains its `INCLUDE` rules. Dedicated Docker sources do not inherit
+the default shared-file filter, although an explicitly configured filter still
+applies.
+
+Pending batches are masked. Incomplete entries, including their raw filter input
+and partially masked output, are encrypted with AES-GCM in
+`<state>.log-cursors.json`; its separate random key is
+`<state>.log-cursors.json.key`. Both files are mode 0600. Protect and back up
+the entire state directory: anyone who can read the key and cursor can decrypt
+the held entry. If the key is missing or corrupt, collection stops with a
+warning rather than silently changing the cursor. Restore the matching key from
+backup. Older cursor files containing only a masked held entry cannot be
+re-evaluated against raw rules; the agent discards that entry with a warning
+when filters are configured and otherwise redacts it.
+
+Each Docker container has independent multiline and AUTH state. Input and
+assembled raw entries are bounded at 2 MiB. An oversized file record is
+discarded with a warning and counted as truncated; an oversized command-stream
+record stops collection without advancing its cursor. If a multiline entry
+exceeds the raw bound, it is discarded with a warning rather than shipping an
+entry whose complete text could not be safely filtered and masked. A mask rule
+can span lines; if it overlaps an AUTH redaction, the entire entry is redacted
+rather than exposing part of it.
+An entry held across a change to its mask rules is also fully redacted.
+After an AUTH LOGIN or AUTH PLAIN has been observed, standalone
+base64-looking lines in that stream remain redacted to protect interleaved
+sessions, even if an unrelated line resembles an authentication result.
+To prevent advancing an unread container cursor, a selector with more than
+5,000 active or draining containers is rejected with a warning; split such a
+workload across services or agents.
+The output entry limit is at most 64 KiB. Rate priority is selected across a
+bounded window of up to 16 reads, not across an unlimited future backlog.
+Rate budgets account for the elapsed collection window rather than limiting
+each poll to one burst. When timestamps are missing or outside that window,
+their arrival times are estimated across the window. Batches can therefore be
+sent together rather than paced evenly within each second.
+
+Use the per-service
+`ROBIN_AGENT_LOG_<SERVICE_ID>_...` variables or the equivalent
+`ROBIN_AGENT_<TYPE>_LOG_...` variables documented in
+[agent deployment](agent-deployment.md#environment-reference). The agent
+reports read, excluded, masked, truncated, rate-limited and shipped line
+counters, shipped bytes, and source read lag alongside its live recent tail.
+Fleet service **Recent logs** and **Logs → Sources** display those per-stream
+counters and warn about rate limiting or elevated lag. The Sources page also
+lists assigned streams that have not yet sent searchable lines.
+Rate-limit warnings reflect the latest collection window, while the displayed
+rate-limited counter remains cumulative.
 
 ## Search
 

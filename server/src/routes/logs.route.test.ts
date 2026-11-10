@@ -7,6 +7,7 @@ import router from './logs.js';
 import * as serviceLogs from '../services/service-logs.js';
 import * as configQueries from '../db/queries/config.js';
 import * as logsStore from '../services/logs-store.js';
+import { listFleetLogStreamStatuses } from '../db/queries/fleet-agent-logs.js';
 import { logAudit, AuditActions } from '../middleware/audit.js';
 
 // service-types.js is NOT mocked — the real parseServiceType drives validation.
@@ -15,6 +16,7 @@ vi.mock('../services/service-logs.js', () => ({
 }));
 
 vi.mock('../db/queries/config.js', () => ({ getConfig: vi.fn() }));
+vi.mock('../db/queries/fleet-agent-logs.js', () => ({ listFleetLogStreamStatuses: vi.fn() }));
 vi.mock('../middleware/audit.js', () => ({
   AuditActions: {
     LOGS_SAVED_SEARCH_CREATE: 'logs_saved_search.create',
@@ -101,7 +103,10 @@ afterAll(async () => {
   });
 });
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(listFleetLogStreamStatuses).mockResolvedValue({ streams: [], truncated: false });
+});
 
 describe('logs route', () => {
   it('GET / returns the logs payload for a co-located service', async () => {
@@ -199,10 +204,16 @@ describe('logs search route', () => {
 
     it('lists bounded source inventory', async () => {
       mockGetLogsSources.mockResolvedValue({ windowDays: 30, sources: [], truncated: false, limit: 200, quietAfterSeconds: 900 });
+      vi.mocked(listFleetLogStreamStatuses).mockResolvedValue({
+        streams: [{ serviceId: 'quiet', serviceType: 'postfix', source: null, capturedAt: null, counters: null, lagCycles: 0 }],
+        truncated: false,
+      });
 
       const res = await fetch(`${baseUrl}/sources?windowDays=30`);
       expect(res.status).toBe(200);
       expect(mockGetLogsSources).toHaveBeenCalledWith(30);
+      expect(listFleetLogStreamStatuses).toHaveBeenCalledWith(200);
+      expect((await res.json()).data.pipelineStreams).toEqual([expect.objectContaining({ serviceId: 'quiet' })]);
     });
 
     it('rejects malformed saved-search and alert input instead of broadening the filter', async () => {

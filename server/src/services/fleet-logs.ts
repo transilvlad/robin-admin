@@ -17,6 +17,8 @@ export interface FleetLogBatch {
   times?: unknown[];
   batchId?: string | null;
   reset: boolean;
+  resetAppend?: boolean;
+  counters?: Record<string, number | string>;
 }
 
 export interface FleetLogBatchResult {
@@ -40,8 +42,35 @@ export class FleetLogsBatchTooLargeError extends Error {
  * remains available while that agent is waiting for an acknowledgement.
  */
 export async function acceptFleetLogBatch(batch: FleetLogBatch): Promise<FleetLogBatchResult> {
+  if (batch.reset && batch.resetAppend) {
+    if (!batch.batchId) throw new Error('A reset append requires a batch id');
+    const config = await getConfig();
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      if (batch.batchId && !(await registerFleetLogBatch(client, batch.fleetServiceId, batch.batchId))) {
+        await client.query('COMMIT');
+        return { stored: 0, duplicate: true };
+      }
+      const stored = await ingestAgentLogs(batch.serviceId, batch.source, batch.lines, false, batch.counters, client, config.logMaxLines);
+      await client.query('COMMIT');
+      return { stored, duplicate: false };
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        logger.error('Failed to roll back Fleet reset tail', { error: (rollbackError as Error).message });
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   if (batch.reset) {
-    return { stored: await ingestAgentLogs(batch.serviceId, batch.source, batch.lines, true), duplicate: false };
+    const stored = batch.counters
+      ? await ingestAgentLogs(batch.serviceId, batch.source, batch.lines, true, batch.counters)
+      : await ingestAgentLogs(batch.serviceId, batch.source, batch.lines, true);
+    return { stored, duplicate: false };
   }
   const historyEnabled = Boolean(appConfig.logs.storeUrl) && (await getConfig()).logsEnabled;
   const client = await getClient();
@@ -84,7 +113,9 @@ export async function acceptFleetLogBatch(batch: FleetLogBatch): Promise<FleetLo
   }
   let stored = 0;
   try {
-    stored = await ingestAgentLogs(batch.serviceId, batch.source, batch.lines, false);
+    stored = batch.counters
+      ? await ingestAgentLogs(batch.serviceId, batch.source, batch.lines, false, batch.counters)
+      : await ingestAgentLogs(batch.serviceId, batch.source, batch.lines, false);
   } catch (error) {
     logger.warn('Recent log buffer update failed', { serviceId: batch.serviceId, error: (error as Error).message });
   }

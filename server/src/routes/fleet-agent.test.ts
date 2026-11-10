@@ -307,6 +307,22 @@ describe('agent log batches', () => {
     expect(mockAcceptLogs).not.toHaveBeenCalled();
   });
 
+  it('requires an id and reset mode for an appended historical tail', async () => {
+    expect((await push({ lines: ['tail'], resetAppend: true })).response.status).toBe(400);
+    expect((await push({ lines: ['tail'], batchId: 'b-1', reset: false, resetAppend: true })).response.status).toBe(400);
+    const result = await push({ lines: ['tail'], batchId: 'b-1', reset: true, resetAppend: true });
+    expect(result.response.status).toBe(200);
+    expect(mockAcceptLogs).toHaveBeenCalledWith(expect.objectContaining({ reset: true, resetAppend: true, batchId: 'b-1' }));
+  });
+
+  it('accepts a current rate-limit count while retaining compatibility with older agents', async () => {
+    const counters = { read: 10, excluded: 1, masked: 1, truncated: 0, rateLimited: 3, shipped: 6, bytesShipped: 50, readLagMs: -1 };
+    expect((await push({ lines: [], counters })).response.status).toBe(200);
+    expect((await push({ lines: [], counters: { ...counters, rateLimitedCurrent: 0 } })).response.status).toBe(200);
+    expect(mockAcceptLogs).toHaveBeenLastCalledWith(expect.objectContaining({ counters: { ...counters, rateLimitedCurrent: 0 } }));
+    expect((await push({ lines: [], counters: { ...counters, rateLimitedCurrent: -1 } })).response.status).toBe(400);
+  });
+
   it('fails the push so the agent retries when the batch cannot be accepted', async () => {
     mockAcceptLogs.mockRejectedValueOnce(new Error('database unavailable'));
     expect((await push({ lines: ['a'], batchId: 'b-2', reset: false })).response.status).toBe(500);

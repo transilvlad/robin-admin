@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -167,13 +168,13 @@ func TestFailedLogCaptureKeepsThePosition(t *testing.T) {
 				}
 				cur := logCursor{Key: key, Source: "fixture", Since: time.Now().Add(-time.Minute).UTC(), Journal: "old-cursor"}
 				batch, _, err := collectLogs(context.Background(), svc, &cur)
-				if mode == "fail" {
+				if mode == "fail" || mode == "overflow" {
 					if err == nil {
 						t.Fatalf("a failed read must be reported, got %+v", batch)
 					}
 					return
 				}
-				if err != nil || batch == nil || len(batch.Lines) != 0 || batch.Reset || batch.Next != cur {
+				if err != nil || batch == nil || len(batch.Lines) != 0 || batch.Reset || !reflect.DeepEqual(batch.Next, cur) {
 					t.Fatalf("unreadable output moved the position: %+v, %v", batch, err)
 				}
 			})

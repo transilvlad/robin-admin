@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -32,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -52,18 +54,19 @@ const (
 )
 
 type logSource struct {
-	unit      string
-	file      string
-	dir       string
-	glob      string
-	container string // a container whose console output is the log (`docker logs`)
-	filter    string
+	unit           string
+	file           string
+	dir            string
+	glob           string
+	container      string // exact names/globs separated by semicolons
+	containerLabel string
+	filter         string
 }
 
 var errNoDatedLogFiles = errors.New("no matching log files")
 
 // Per-type default log locations, mirroring robin-admin's FILE_LOG_SOURCES.
-// Override per host with ROBIN_AGENT_<TYPE>_LOG_{UNIT,FILE,DIR,GLOB,CONTAINER,FILTER},
+// Override per host with ROBIN_AGENT_<TYPE>_LOG_{UNIT,FILE,DIR,GLOB,CONTAINER,CONTAINER_LABEL,FILTER},
 // and per service with ROBIN_AGENT_LOG_<SERVICE_ID>_{...} (the service id
 // upper-cased, other characters as `_`) when one agent runs several services
 // of a type — e.g. ROBIN_AGENT_LOG_MX2_FILE=/var/log/mx2/mail.log.
@@ -86,6 +89,7 @@ func resolveLogSource(serviceType, serviceID string) (logSource, bool) {
 	}
 	src := base
 	src.container = ""
+	explicitFilter := false
 	// Least to most specific; each level overrides the one before it.
 	for _, prefix := range []string{
 		"ROBIN_AGENT_" + strings.ToUpper(serviceType) + "_LOG_",
@@ -102,13 +106,26 @@ func resolveLogSource(serviceType, serviceID string) (logSource, bool) {
 		set(&src.dir, "DIR")
 		set(&src.glob, "GLOB")
 		set(&src.container, "CONTAINER")
+		set(&src.containerLabel, "CONTAINER_LABEL")
 		// An explicit dedicated log (file/dir override) is unfiltered unless a
 		// filter was given alongside it — the shared-file filter no longer applies.
 		if get("FILE") != "" || get("DIR") != "" {
 			src.filter = get("FILTER")
+			explicitFilter = src.filter != ""
+		} else if get("CONTAINER") != "" || get("CONTAINER_LABEL") != "" {
+			if get("FILTER") != "" {
+				src.filter, explicitFilter = get("FILTER"), true
+			} else if !explicitFilter {
+				src.filter = ""
+			}
 		} else {
-			set(&src.filter, "FILTER")
+			if get("FILTER") != "" {
+				src.filter, explicitFilter = get("FILTER"), true
+			}
 		}
+	}
+	if src.container != "" || src.containerLabel != "" {
+		src.unit, src.file, src.dir, src.glob = "", "", "", ""
 	}
 	return src, true
 }
@@ -260,35 +277,59 @@ func openLogCandidate(candidate logFileCandidate) (*os.File, error) {
 // logCursor is the read position after the last acknowledged batch. Key
 // identifies the configured source; a different key starts over with a reset.
 type logCursor struct {
-	Key             string    `json:"key"`
-	Source          string    `json:"source"`
-	Path            string    `json:"path,omitempty"`            // file sources: the file being read
-	Offset          int64     `json:"offset,omitempty"`          // file sources: bytes already shipped
-	Fingerprint     string    `json:"fingerprint,omitempty"`     // file sources: SHA-256 of the leading bytes
-	FingerprintSize int64     `json:"fingerprintSize,omitempty"` // file sources: how many leading bytes
-	Device          uint64    `json:"device,omitempty"`          // file sources: filesystem identity
-	Inode           uint64    `json:"inode,omitempty"`
-	Journal         string    `json:"journal,omitempty"`      // journald cursor
-	Since           time.Time `json:"since,omitzero"`         // container and journald: newest time read
-	DockerSeen      int       `json:"dockerSeen,omitempty"`   // lines already read at Since
-	DockerCursor    int       `json:"dockerCursor,omitempty"` // 1 uses inclusive timestamps and DockerSeen
+	Key             string                     `json:"key"`
+	Source          string                     `json:"source"`
+	Path            string                     `json:"path,omitempty"`            // file sources: the file being read
+	Offset          int64                      `json:"offset,omitempty"`          // file sources: bytes already shipped
+	Fingerprint     string                     `json:"fingerprint,omitempty"`     // file sources: SHA-256 of the leading bytes
+	FingerprintSize int64                      `json:"fingerprintSize,omitempty"` // file sources: how many leading bytes
+	Device          uint64                     `json:"device,omitempty"`          // file sources: filesystem identity
+	Inode           uint64                     `json:"inode,omitempty"`
+	Journal         string                     `json:"journal,omitempty"`      // journald cursor
+	Since           time.Time                  `json:"since,omitzero"`         // container and journald: newest time read
+	DockerSeen      int                        `json:"dockerSeen,omitempty"`   // lines already read at Since
+	DockerCursor    int                        `json:"dockerCursor,omitempty"` // 1 uses inclusive timestamps and DockerSeen
+	Containers      map[string]dockerLogCursor `json:"containers,omitempty"`
+}
+
+type dockerLogCursor struct {
+	Name          string     `json:"name"`
+	Since         time.Time  `json:"since"`
+	Seen          int        `json:"seen,omitempty"`
+	DockerCursor  int        `json:"dockerCursor,omitempty"`
+	File          *logCursor `json:"file,omitempty"`
+	Driver        string     `json:"driver,omitempty"`
+	LogPath       string     `json:"logPath,omitempty"`
+	Gone          bool       `json:"gone,omitempty"`
+	ResumeSince   time.Time  `json:"resumeSince,omitzero"`
+	ResumeSeen    int        `json:"resumeSeen,omitempty"`
+	ResumeSkipped int        `json:"resumeSkipped,omitempty"`
+	ResumeActive  bool       `json:"resumeActive,omitempty"`
+	ResumeLegacy  bool       `json:"resumeLegacy,omitempty"`
 }
 
 // logBatch is a batch waiting for robin-admin's acknowledgement, with the
 // position to continue from once it is acknowledged.
 type logBatch struct {
-	ID     string    `json:"id,omitempty"`
-	Source string    `json:"source"`
-	Lines  []string  `json:"lines"`
-	Times  []string  `json:"times"`
-	Reset  bool      `json:"reset"`
-	Next   logCursor `json:"next"`
+	ID           string           `json:"id,omitempty"`
+	Source       string           `json:"source"`
+	Lines        []string         `json:"lines"`
+	Times        []string         `json:"times"`
+	Reset        bool             `json:"reset"`
+	ResetAppend  bool             `json:"resetAppend,omitempty"`
+	Streams      []string         `json:"-"`
+	InputDropped uint64           `json:"-"`
+	Next         logCursor        `json:"next"`
+	Pipeline     logPipelineState `json:"pipeline,omitempty"`
+	Counters     logCounters      `json:"counters,omitempty"`
 }
 
 type logServiceState struct {
-	Cursor       *logCursor  `json:"cursor,omitempty"`
-	Pending      *logBatch   `json:"pending,omitempty"`
-	PendingQueue []*logBatch `json:"pendingQueue,omitempty"`
+	Cursor       *logCursor       `json:"cursor,omitempty"`
+	Pending      *logBatch        `json:"pending,omitempty"`
+	PendingQueue []*logBatch      `json:"pendingQueue,omitempty"`
+	Pipeline     logPipelineState `json:"pipeline,omitempty"`
+	Counters     logCounters      `json:"counters,omitempty"`
 }
 
 // logStateStore keeps each service's position and pending batch in a file
@@ -362,6 +403,22 @@ func (s *logStateStore) load(path string) error {
 			return fmt.Errorf("decode log positions from %s: pending batch queue has no head for %s", path, id)
 		}
 	}
+	var aead cipher.AEAD
+	for _, st := range s.services {
+		if logServiceHasOpenEntry(st) {
+			aead, err = s.logStateCipher(false)
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
+	for id, st := range s.services {
+		s.services[id], err = transformLogService(st, id, aead, false)
+		if err != nil {
+			return fmt.Errorf("decode log positions for %s: %w", id, err)
+		}
+	}
 	s.loaded = true
 	return nil
 }
@@ -374,7 +431,18 @@ func validLogCursor(cur *logCursor) bool {
 	}
 	if cur.FingerprintSize > 0 {
 		fingerprint, err := hex.DecodeString(cur.Fingerprint)
-		return err == nil && len(fingerprint) == sha256.Size
+		if err != nil || len(fingerprint) != sha256.Size {
+			return false
+		}
+	}
+	for id, docker := range cur.Containers {
+		if id == "" || docker.Seen < 0 || docker.ResumeSeen < 0 || docker.ResumeSkipped < 0 ||
+			(docker.DockerCursor != 0 && docker.DockerCursor != 1) {
+			return false
+		}
+		if docker.File != nil && !validLogCursor(docker.File) {
+			return false
+		}
 	}
 	return true
 }
@@ -383,7 +451,25 @@ func (s *logStateStore) save() error {
 	if s.path == "" {
 		return nil
 	}
-	data, err := json.Marshal(s.services)
+	var aead cipher.AEAD
+	var err error
+	for _, st := range s.services {
+		if logServiceHasOpenEntry(st) {
+			aead, err = s.logStateCipher(true)
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
+	protected := make(map[string]*logServiceState, len(s.services))
+	for id, st := range s.services {
+		protected[id], err = transformLogService(st, id, aead, true)
+		if err != nil {
+			return fmt.Errorf("protect log positions for %s: %w", id, err)
+		}
+	}
+	data, err := json.Marshal(protected)
 	if err != nil {
 		return err
 	}
@@ -463,45 +549,69 @@ func pushServiceLogs(ctx context.Context, client *http.Client, c config, s state
 		log.Printf("robin-agent: warning: %v", err)
 		return
 	}
+	reads := 0
 	for range logBatchesPerCycle {
 		more := st.Pending != nil || len(st.PendingQueue) > 0
 		if st.Pending == nil {
-			batch, hasMore, err := collectLogs(ctx, svc, st.Cursor)
+			if reads >= logBatchesPerCycle {
+				return
+			}
+			pipeline, err := loadLogPipelineConfig(svc.ServiceType, svc.ServiceID)
+			if err != nil {
+				log.Printf("robin-agent: warning: could not configure log pipeline for %s: %v", svc.ServiceID, err)
+				return
+			}
+			batches, hasMore, readCount, err := collectPipelineBatches(ctx, svc, st, pipeline, logBatchesPerCycle-reads)
 			if err != nil {
 				log.Printf("robin-agent: warning: could not collect logs for %s: %v", svc.ServiceID, err)
 				return
 			}
-			if batch == nil {
+			reads += readCount
+			if len(batches) == 0 {
 				return
 			}
+			batch := batches[0]
 			more = hasMore
 			if len(batch.Lines) == 0 && !batch.Reset {
 				code, err := sendLogBatch(ctx, client, c, s, svc, batch)
 				switch {
 				case err != nil:
 					log.Printf("robin-agent: warning: could not send log heartbeat for %s: %v", svc.ServiceID, err)
+					return
 				case code < 200 || code >= 300:
 					log.Printf("robin-agent: warning: robin-admin refused a log heartbeat for %s (HTTP %d)", svc.ServiceID, code)
+					return
 				default:
-					if st.Cursor == nil || *st.Cursor != batch.Next {
+					if st.Cursor == nil || !reflect.DeepEqual(*st.Cursor, batch.Next) || !reflect.DeepEqual(st.Pipeline, batch.Pipeline) || st.Counters != batch.Counters {
 						previous := st.Cursor
+						previousPipeline, previousCounters := st.Pipeline, st.Counters
 						st.Cursor = &batch.Next
+						st.Pipeline, st.Counters = batch.Pipeline, batch.Counters
 						if err := logStates.save(); err != nil {
 							st.Cursor = previous
+							st.Pipeline, st.Counters = previousPipeline, previousCounters
 							log.Printf("robin-agent: warning: %v", err)
+							return
 						}
 					}
 				}
+				if more {
+					continue
+				}
 				return
 			}
-			batch.ID, err = newLogBatchID()
-			if err != nil {
-				log.Printf("robin-agent: warning: could not create a log batch id for %s: %v", svc.ServiceID, err)
-				return
+			for _, pending := range batches {
+				pending.ID, err = newLogBatchID()
+				if err != nil {
+					log.Printf("robin-agent: warning: could not create a log batch id for %s: %v", svc.ServiceID, err)
+					return
+				}
 			}
 			st.Pending = batch
+			st.PendingQueue = append([]*logBatch(nil), batches[1:]...)
 			if err := logStates.save(); err != nil {
 				st.Pending = nil
+				st.PendingQueue = nil
 				log.Printf("robin-agent: warning: %v", err)
 				return
 			}
@@ -542,27 +652,125 @@ func pushServiceLogs(ctx context.Context, client *http.Client, c config, s state
 			return // keep the batch and resend it next cycle
 		}
 		previousCursor, previousPending, previousQueue := st.Cursor, st.Pending, st.PendingQueue
+		previousPipeline, previousCounters := st.Pipeline, st.Counters
 		if len(st.PendingQueue) > 0 {
 			st.Pending = st.PendingQueue[0]
 			st.PendingQueue = append([]*logBatch(nil), st.PendingQueue[1:]...)
 		} else {
 			next := batch.Next
 			st.Cursor, st.Pending = &next, nil
+			st.Pipeline, st.Counters = batch.Pipeline, batch.Counters
 		}
 		if err := logStates.save(); err != nil {
 			st.Cursor, st.Pending, st.PendingQueue = previousCursor, previousPending, previousQueue
+			st.Pipeline, st.Counters = previousPipeline, previousCounters
 			log.Printf("robin-agent: warning: %v", err)
 			return
 		}
-		if !more {
+		if st.Pending == nil && (!more || reads >= logBatchesPerCycle) {
 			return
 		}
 	}
 }
 
+// Rate-limited sources are read in a bounded window before choosing which
+// entries to keep, so a later warning can displace an earlier debug entry.
+func collectPipelineBatches(ctx context.Context, svc ownedService, st *logServiceState, cfg logPipelineConfig, readBudget int) ([]*logBatch, bool, int, error) {
+	cursor := st.Cursor
+	pipeline, counters := st.Pipeline, st.Counters
+	previousRateLimited := counters.RateLimited
+	var entries []logEntry
+	var first, last *logBatch
+	var more bool
+	newestLag := int64(-1)
+	now := time.Now()
+	reads := 0
+	for reads < readBudget {
+		batch, hasMore, err := collectLogs(ctx, svc, cursor)
+		if err != nil {
+			return nil, false, reads, err
+		}
+		if batch == nil {
+			break
+		}
+		reads++
+		if first == nil {
+			first = batch
+			if batch.Reset && st.Cursor != nil {
+				pipeline = logPipelineState{}
+			}
+		}
+		counters.Read += batch.InputDropped
+		counters.Truncated += batch.InputDropped
+		part, nextPipeline, nextCounters := processLogPipeline(batch.Lines, batch.Times, batch.Streams, batch.Reset, cfg, pipeline, counters, now)
+		entries, pipeline, counters = append(entries, part...), nextPipeline, nextCounters
+		if counters.ReadLagMS >= 0 && (newestLag < 0 || counters.ReadLagMS < newestLag) {
+			newestLag = counters.ReadLagMS
+		}
+		if batch.Next.Containers != nil {
+			for id, stream := range pipeline.Streams {
+				if _, exists := batch.Next.Containers[id]; !exists && !stream.HeldOpen {
+					delete(pipeline.Streams, id)
+				}
+			}
+		}
+		last, cursor, more = batch, &batch.Next, hasMore
+		if cfg.rate <= 0 || first.Reset || !more {
+			break
+		}
+	}
+	if first == nil {
+		return nil, false, reads, nil
+	}
+	counters.ReadLagMS = newestLag
+	if cfg.rate > 0 {
+		entries, pipeline, counters = limitLogEntries(entries, cfg, pipeline, counters, now)
+	}
+	counters.RateLimitedCurrent = counters.RateLimited - previousRateLimited
+	_, _, counters = shippedLogEntries(entries, counters)
+	base := logBatch{Source: first.Source, Next: last.Next, Pipeline: pipeline, Counters: counters}
+	if first.Reset {
+		base.Reset = true
+	}
+	var batches []*logBatch
+	appendEntries := func(historical bool) {
+		var current *logBatch
+		bytes := 0
+		for _, entry := range entries {
+			if !first.Reset && entry.historical != historical {
+				continue
+			}
+			if current == nil || len(current.Lines) >= logBatchMaxLines || bytes+len(entry.line) > logBatchMaxBytes && len(current.Lines) > 0 {
+				copy := base
+				copy.Reset = first.Reset || historical
+				copy.ResetAppend = !first.Reset && historical || first.Reset && len(batches) > 0
+				current = &copy
+				batches = append(batches, current)
+				bytes = 0
+			}
+			current.Lines = append(current.Lines, entry.line)
+			current.Times = append(current.Times, entry.time)
+			bytes += len(entry.line)
+		}
+	}
+	if first.Reset {
+		appendEntries(true)
+	} else {
+		appendEntries(true)
+		appendEntries(false)
+	}
+	if len(batches) == 0 {
+		batches = append(batches, &base)
+	}
+	return batches, more, reads, nil
+}
+
 func splitLogBatch(batch *logBatch) (*logBatch, *logBatch) {
 	middle := len(batch.Lines) / 2
 	first, remainder := *batch, *batch
+	if batch.Reset {
+		remainder.ResetAppend = true
+	}
 	first.Lines = append([]string(nil), batch.Lines[:middle]...)
 	remainder.Lines = append([]string(nil), batch.Lines[middle:]...)
 	if len(batch.Times) >= middle {
@@ -581,6 +789,10 @@ func sendLogBatch(ctx context.Context, client *http.Client, c config, s state, s
 		times = []string{}
 	}
 	body := map[string]any{"source": batch.Source, "lines": lines, "times": times, "reset": batch.Reset}
+	if batch.ResetAppend {
+		body["resetAppend"] = true
+	}
+	body["counters"] = batch.Counters
 	if batch.ID != "" {
 		body["batchId"] = batch.ID
 	}
@@ -594,6 +806,10 @@ func sendLogBatch(ctx context.Context, client *http.Client, c config, s state, s
 // lines are already waiting. A nil batch without an error means the service
 // has no log source on this host.
 func collectLogs(parent context.Context, svc ownedService, cur *logCursor) (*logBatch, bool, error) {
+	return collectLogsWithTail(parent, svc, cur, logTailLines, logTailMaxBytes)
+}
+
+func collectLogsWithTail(parent context.Context, svc ownedService, cur *logCursor, tailLines, tailBytes int) (*logBatch, bool, error) {
 	ctx, cancel := context.WithTimeout(parent, logCollectTimeout)
 	defer cancel()
 	src, known := resolveLogSource(svc.ServiceType, svc.ServiceID)
@@ -611,7 +827,7 @@ func collectLogs(parent context.Context, svc ownedService, cur *logCursor) (*log
 		// A followed file that is briefly missing (mid-rotation) is waited for
 		// rather than switching to another source.
 		if _, err := os.Stat(src.file); err == nil || forKey(key) != nil {
-			return followFile(key, src.file, src.filter, forKey(key))
+			return followFileWithTail(key, src.file, "", forKey(key), logBatchMaxBytes, logBatchMaxLines, tailLines, tailBytes)
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return nil, false, err
 		}
@@ -621,21 +837,31 @@ func collectLogs(parent context.Context, svc ownedService, cur *logCursor) (*log
 		if candidates, err := snapshotLogCandidates(func() ([]string, error) {
 			return datedLogFiles(src.dir, src.glob)
 		}); err == nil {
-			return followFileCandidates(key, candidates[len(candidates)-1].path, src.filter, forKey(key), candidates, openLogCandidate)
+			return followFileCandidatesWithLimits(key, candidates[len(candidates)-1].path, "", forKey(key), candidates, openLogCandidate, logBatchMaxBytes, logBatchMaxLines, tailLines, tailBytes)
 		} else if forKey(key) != nil || !errors.Is(err, errNoDatedLogFiles) {
 			return nil, false, err
 		}
 	}
-	if src.container != "" {
-		key := "docker:" + src.container + "|" + src.filter
-		return followContainer(ctx, key, src.container, src.filter, forKey(key))
+	if src.container != "" || src.containerLabel != "" {
+		key := "docker:containers|" + src.container + "|" + src.containerLabel
+		dockerCursor := forKey(key)
+		if cur != nil && cur.Key == "docker:containers" {
+			log.Printf("robin-agent: warning: previous Docker cursor did not record its selector; restarting this source from its recent tail")
+		}
+		if cur != nil && strings.HasPrefix(cur.Source, "docker logs ") &&
+			len(parseContainerSelectors(src.container)) == 1 &&
+			parseContainerSelectors(src.container)[0] == strings.TrimPrefix(cur.Source, "docker logs ") &&
+			src.containerLabel == "" {
+			dockerCursor = cur
+		}
+		return followContainerSetWithTail(ctx, key, src.container, src.containerLabel, dockerCursor, tailLines, tailBytes)
 	}
 	if src.unit != "" {
 		if _, err := exec.LookPath("journalctl"); err != nil {
 			return nil, false, nil
 		}
 		key := "journald:" + src.unit + "|" + src.filter
-		return followJournal(ctx, key, src.unit, src.filter, forKey(key))
+		return followJournalWithTail(ctx, key, src.unit, "", forKey(key), tailLines, tailBytes)
 	}
 	return nil, false, nil
 }
@@ -644,14 +870,26 @@ func collectLogs(parent context.Context, svc ownedService, cur *logCursor) (*log
 
 // followFile continues through the remaining numbered rotations in order.
 func followFile(key, active, filter string, cur *logCursor) (*logBatch, bool, error) {
+	return followFileWithLimits(key, active, filter, cur, logBatchMaxBytes, logBatchMaxLines)
+}
+
+func followFileWithLimits(key, active, filter string, cur *logCursor, maxBytes, maxLines int) (*logBatch, bool, error) {
+	return followFileWithTail(key, active, filter, cur, maxBytes, maxLines, logTailLines, logTailMaxBytes)
+}
+
+func followFileWithTail(key, active, filter string, cur *logCursor, maxBytes, maxLines, tailLines, tailBytes int) (*logBatch, bool, error) {
 	candidates, err := snapshotLogCandidates(func() ([]string, error) { return numberedLogFiles(active) })
 	if err != nil {
 		return nil, false, err
 	}
-	return followFileCandidates(key, active, filter, cur, candidates, openLogCandidate)
+	return followFileCandidatesWithLimits(key, active, filter, cur, candidates, openLogCandidate, maxBytes, maxLines, tailLines, tailBytes)
 }
 
 func followFileCandidates(key, active, filter string, cur *logCursor, candidates []logFileCandidate, openCandidate func(logFileCandidate) (*os.File, error)) (*logBatch, bool, error) {
+	return followFileCandidatesWithLimits(key, active, filter, cur, candidates, openCandidate, logBatchMaxBytes, logBatchMaxLines, logTailLines, logTailMaxBytes)
+}
+
+func followFileCandidatesWithLimits(key, active, filter string, cur *logCursor, candidates []logFileCandidate, openCandidate func(logFileCandidate) (*os.File, error), maxBytes, maxLines, tailLines, tailBytes int) (*logBatch, bool, error) {
 	if cur == nil {
 		var activeCandidate *logFileCandidate
 		for i := range candidates {
@@ -668,7 +906,7 @@ func followFileCandidates(key, active, filter string, cur *logCursor, candidates
 			return nil, false, err
 		}
 		defer f.Close()
-		lines, end, err := tailFile(f, logTailLines, filter)
+		lines, end, err := tailFileLimit(f, tailLines, filter, tailBytes)
 		if err != nil {
 			return nil, false, err
 		}
@@ -753,7 +991,7 @@ func followFileCandidates(key, active, filter string, cur *logCursor, candidates
 	if err != nil {
 		return nil, false, err
 	}
-	raw, offset, more, err := readFileChunkFromFile(f, next.Offset)
+	raw, offset, more, dropped, err := readFileChunkFromFileLimit(f, next.Offset, maxBytes, maxLines)
 	if err != nil {
 		return nil, false, err
 	}
@@ -787,7 +1025,7 @@ func followFileCandidates(key, active, filter string, cur *logCursor, candidates
 		}
 	}
 	lines, times := filterLines(raw, lineTimes(raw, time.Now()), filter)
-	return &logBatch{Source: source, Lines: lines, Times: times, Next: next}, more, nil
+	return &logBatch{Source: source, Lines: lines, Times: times, Next: next, InputDropped: dropped}, more, nil
 }
 
 func sameLogFile(f *os.File, cur *logCursor, ignoreIdentity bool) (bool, error) {
@@ -846,11 +1084,15 @@ func fileFingerprint(f *os.File, n int64) (string, int64, error) {
 // of a file and the offset just past the last complete line. If the read
 // started mid-line, the leading partial line is dropped.
 func tailFile(f *os.File, n int, filter string) ([]string, int64, error) {
+	return tailFileLimit(f, n, filter, logTailMaxBytes)
+}
+
+func tailFileLimit(f *os.File, n int, filter string, maxBytes int) ([]string, int64, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, 0, err
 	}
-	start := max(0, fi.Size()-logTailMaxBytes)
+	start := max(0, fi.Size()-int64(max(1, maxBytes)))
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
 		return nil, 0, err
 	}
@@ -885,29 +1127,35 @@ func readFileChunk(path string, offset int64) (lines []string, next int64, more 
 }
 
 func readFileChunkFromFile(f *os.File, offset int64) (lines []string, next int64, more bool, err error) {
+	lines, next, more, _, err = readFileChunkFromFileLimit(f, offset, logBatchMaxBytes, logBatchMaxLines)
+	return
+}
+
+func readFileChunkFromFileLimit(f *os.File, offset int64, maxBytes, maxLines int) (lines []string, next int64, more bool, dropped uint64, err error) {
 	fi, err := f.Stat()
 	if err != nil {
-		return nil, offset, false, err
+		return nil, offset, false, 0, err
 	}
+	maxBytes, maxLines = max(1, maxBytes), max(1, maxLines)
 	size := fi.Size()
 	if size < offset {
 		offset = 0
 	}
-	want := min(size-offset, logBatchMaxBytes)
+	want := min(size-offset, int64(maxBytes))
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, offset, false, err
+		return nil, offset, false, 0, err
 	}
 	data := make([]byte, want)
 	if _, err := io.ReadFull(f, data); err != nil {
-		return nil, offset, false, err
+		return nil, offset, false, 0, err
 	}
 	end := bytes.LastIndexByte(data, '\n')
 	switch {
 	case end >= 0:
 		data = data[:end+1]
-	case want == logBatchMaxBytes:
+	case want == int64(maxBytes):
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			return nil, offset, false, err
+			return nil, offset, false, 0, err
 		}
 		reader := bufio.NewReaderSize(f, logLineMaxBytes)
 		var line []byte
@@ -915,42 +1163,41 @@ func readFileChunkFromFile(f *os.File, offset int64) (lines []string, next int64
 		for {
 			part, readErr := reader.ReadSlice('\n')
 			consumed += int64(len(part))
-			if room := logLineMaxBytes - len(line); room > 0 {
+			if room := logRawEntryMaxBytes + 1 - len(line); room > 0 {
 				line = append(line, part[:min(len(part), room)]...)
 			}
 			if errors.Is(readErr, bufio.ErrBufferFull) {
 				continue
 			}
 			if errors.Is(readErr, io.EOF) {
-				return nil, offset, false, nil
+				return nil, offset, false, 0, nil
 			}
 			if readErr != nil {
-				return nil, offset, false, readErr
+				return nil, offset, false, 0, readErr
 			}
 			next = offset + consumed
-			return []string{string(bytes.TrimRight(line, "\r\n"))}, next, next < size, nil
+			if len(line) > logRawEntryMaxBytes {
+				log.Printf("robin-agent: warning: discarded a log line exceeding the bounded input limit")
+				return nil, next, next < size, 1, nil
+			}
+			return []string{string(bytes.TrimRight(line, "\r\n"))}, next, next < size, 0, nil
 		}
 	default:
-		return nil, offset, false, nil // no complete line yet
+		return nil, offset, false, 0, nil // no complete line yet
 	}
 	limited := false
 	for i, count := 0, 0; i < len(data); i++ {
 		if data[i] == '\n' {
 			count++
-			if count == logBatchMaxLines {
+			if count == maxLines {
 				data, limited = data[:i+1], true
 				break
 			}
 		}
 	}
 	lines = splitLines(bytes.TrimSuffix(data, []byte("\n")))
-	for i, line := range lines {
-		if len(line) > logLineMaxBytes {
-			lines[i] = line[:logLineMaxBytes]
-		}
-	}
 	next = offset + int64(len(data))
-	return lines, next, next < size && (limited || want == logBatchMaxBytes), nil
+	return lines, next, next < size && (limited || want == int64(maxBytes)), 0, nil
 }
 
 func splitLines(data []byte) []string {
@@ -1054,7 +1301,7 @@ func lineTimes(lines []string, now time.Time) []string {
 
 // streamLines runs argv and passes each output line to visit until visit
 // returns false or the output ends. Stopping early ends the process and is not
-// an error. Lines longer than logLineMaxBytes are cut.
+// an error. Oversized input is rejected rather than filtered or decoded partially.
 func streamLines(parent context.Context, argv []string, combined bool, visit func(line []byte) bool) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -1082,7 +1329,12 @@ func streamLines(parent context.Context, argv []string, combined bool, visit fun
 	buffered := bufio.NewReaderSize(reader, 64<<10)
 	stopped := false
 	for {
-		line, readErr := readBoundedLine(buffered, logLineMaxBytes)
+		line, readErr := readBoundedLine(buffered, logRawEntryMaxBytes+1)
+		if len(line) > logRawEntryMaxBytes {
+			cancel()
+			_ = process.Wait()
+			return errors.New("log stream line exceeds the bounded input limit")
+		}
 		if len(line) > 0 || readErr == nil {
 			if !visit(line) {
 				stopped = true
@@ -1125,8 +1377,31 @@ func readBoundedLine(r *bufio.Reader, limit int) ([]byte, error) {
 // the console rather than a file) with docker's inclusive timestamps. The
 // ordinal distinguishes multiple lines with the same timestamp.
 func containerRead(ctx context.Context, container string, since time.Time, seen int, legacy bool, limited bool, extra ...string) (lines []string, times []time.Time, lastCount int, more bool, err error) {
-	argv := append(append([]string{"docker", "logs", "--timestamps"}, extra...), container)
 	read, skipped := 0, 0
+	maxBytes, maxLines := logBatchMaxBytes, logBatchMaxLines
+	recent := false
+	dockerArgs := make([]string, 0, len(extra))
+	for _, arg := range extra {
+		if arg == "robin-agent-recent" {
+			recent = true
+			continue
+		}
+		if value, ok := strings.CutPrefix(arg, "robin-agent-budget="); ok {
+			if parsed, parseErr := strconv.Atoi(value); parseErr == nil && parsed > 0 {
+				maxBytes = parsed
+			}
+			continue
+		}
+		if value, ok := strings.CutPrefix(arg, "robin-agent-lines="); ok {
+			if parsed, parseErr := strconv.Atoi(value); parseErr == nil && parsed > 0 {
+				maxLines = parsed
+			}
+			continue
+		}
+		dockerArgs = append(dockerArgs, arg)
+	}
+	argv := append(append([]string{dockerBinary(), "logs", "--timestamps"}, dockerArgs...), container)
+	var sizes []int
 	err = streamLines(ctx, argv, true, func(raw []byte) bool {
 		stamp, text, ok := strings.Cut(string(raw), " ")
 		ts, perr := time.Parse(time.RFC3339Nano, stamp)
@@ -1147,7 +1422,16 @@ func containerRead(ctx context.Context, container string, since time.Time, seen 
 		}
 		lines, times = append(lines, text), append(times, ts)
 		read += len(raw) + 1
-		if limited && (len(lines) >= logBatchMaxLines || read >= logBatchMaxBytes) {
+		if recent {
+			sizes = append(sizes, len(raw)+1)
+			for len(lines) > maxLines || read > maxBytes && len(lines) > 1 {
+				read -= sizes[0]
+				lines[0] = ""
+				lines, times, sizes = lines[1:], times[1:], sizes[1:]
+			}
+			return true
+		}
+		if limited && (len(lines) >= maxLines || read >= maxBytes) {
 			more = true
 			return false
 		}
@@ -1205,6 +1489,7 @@ type journalEntry struct {
 	Identifier json.RawMessage `json:"SYSLOG_IDENTIFIER"`
 	Command    json.RawMessage `json:"_COMM"`
 	PID        json.RawMessage `json:"_PID"`
+	Priority   json.RawMessage `json:"PRIORITY"`
 	Message    json.RawMessage `json:"MESSAGE"`
 }
 
@@ -1244,6 +1529,11 @@ func journalLine(entry journalEntry) (string, time.Time, bool) {
 		ident += "[" + pid + "]"
 	}
 	line := t.Format("2006-01-02T15:04:05-0700") + " " + journalField(entry.Hostname) + " " + ident + ": " + journalField(entry.Message)
+	if priority := journalField(entry.Priority); priority != "" {
+		if value, err := strconv.Atoi(priority); err == nil && value >= 0 && value <= 7 {
+			line += " PRIORITY=" + priority
+		}
+	}
 	return line, t, true
 }
 
@@ -1251,11 +1541,30 @@ func journalLine(entry journalEntry) (string, time.Time, bool) {
 // time, or its last n entries), returning the rendered lines, their times, the
 // last entry's cursor and whether a batch limit cut the read short.
 func journaldRead(ctx context.Context, unit, filter string, limited bool, position ...string) (lines []string, times []time.Time, cursor string, more bool, err error) {
-	argv := append([]string{"journalctl", "-u", unit, "--no-pager", "-o", "json"}, position...)
+	recent, maxBytes, maxLines := false, logBatchMaxBytes, logBatchMaxLines
+	args := make([]string, 0, len(position))
+	for _, arg := range position {
+		if value, ok := strings.CutPrefix(arg, "robin-agent-recent-lines="); ok {
+			maxLines, err = strconv.Atoi(value)
+			if err != nil || maxLines < 1 {
+				return nil, nil, "", false, errors.New("invalid journal tail line limit")
+			}
+			recent = true
+		} else if value, ok := strings.CutPrefix(arg, "robin-agent-budget="); ok {
+			maxBytes, err = strconv.Atoi(value)
+			if err != nil || maxBytes < 1 {
+				return nil, nil, "", false, errors.New("invalid journal tail byte limit")
+			}
+		} else {
+			args = append(args, arg)
+		}
+	}
+	argv := append([]string{"journalctl", "-u", unit, "--no-pager", "-o", "json"}, args...)
 	if filter != "" {
 		argv = append(argv, "--grep", filter)
 	}
 	read := 0
+	var sizes []int
 	err = streamLines(ctx, argv, false, func(raw []byte) bool {
 		var entry journalEntry
 		if json.Unmarshal(raw, &entry) != nil {
@@ -1267,6 +1576,15 @@ func journaldRead(ctx context.Context, unit, filter string, limited bool, positi
 		}
 		lines, times, cursor = append(lines, line), append(times, t), entry.Cursor
 		read += len(line) + 1
+		if recent {
+			sizes = append(sizes, len(line)+1)
+			for len(lines) > maxLines || read > maxBytes && len(lines) > 1 {
+				read -= sizes[0]
+				lines[0] = ""
+				lines, times, sizes = lines[1:], times[1:], sizes[1:]
+			}
+			return true
+		}
 		if limited && (len(lines) >= logBatchMaxLines || read >= logBatchMaxBytes) {
 			more = true
 			return false
@@ -1280,9 +1598,14 @@ func journaldRead(ctx context.Context, unit, filter string, limited bool, positi
 }
 
 func followJournal(ctx context.Context, key, unit, filter string, cur *logCursor) (*logBatch, bool, error) {
+	return followJournalWithTail(ctx, key, unit, filter, cur, logTailLines, logTailMaxBytes)
+}
+
+func followJournalWithTail(ctx context.Context, key, unit, filter string, cur *logCursor, tailLines, tailBytes int) (*logBatch, bool, error) {
 	source := "journalctl -u " + unit
 	if cur == nil {
-		lines, times, cursor, _, err := journaldRead(ctx, unit, filter, false, "-n", strconv.Itoa(logTailLines))
+		lines, times, cursor, _, err := journaldRead(ctx, unit, filter, false, "-n", strconv.Itoa(tailLines),
+			"robin-agent-recent-lines="+strconv.Itoa(tailLines), "robin-agent-budget="+strconv.Itoa(tailBytes))
 		if err != nil {
 			return nil, false, err
 		}
