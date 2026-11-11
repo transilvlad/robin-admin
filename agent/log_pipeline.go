@@ -35,18 +35,19 @@ type logMaskRule struct {
 }
 
 type logPipelineConfig struct {
-	sourceFilter string
-	include      []logPattern
-	exclude      []logPattern
-	masks        []logMaskRule
-	emailMask    bool
-	authMask     bool
-	minimumLevel int
-	entryStart   *regexp.Regexp
-	entryLines   int
-	entryBytes   int
-	rate         float64
-	burst        float64
+	sourceFilter    string
+	include         []logPattern
+	exclude         []logPattern
+	masks           []logMaskRule
+	customMaskCount int
+	emailMask       bool
+	authMask        bool
+	minimumLevel    int
+	entryStart      *regexp.Regexp
+	entryLines      int
+	entryBytes      int
+	rate            float64
+	burst           float64
 }
 
 type logStreamState struct {
@@ -62,6 +63,7 @@ type logStreamState struct {
 	HeldOverflow      bool      `json:"heldOverflow,omitempty"`
 	HeldReset         bool      `json:"heldReset,omitempty"`
 	HeldMaskConfig    string    `json:"heldMaskConfig,omitempty"`
+	HeldRateWindow    uint64    `json:"heldRateWindow,omitempty"`
 	LoginRemaining    int       `json:"loginRemaining,omitempty"`
 	LoginChallenged   bool      `json:"loginChallenged,omitempty"`
 	LoginInFlight     int       `json:"loginInFlight,omitempty"`
@@ -75,6 +77,27 @@ type logPipelineState struct {
 	LastRefill       time.Time                 `json:"lastRefill,omitzero"`
 	LastDropSummary  time.Time                 `json:"lastDropSummary,omitzero"`
 	PendingRateDrops uint64                    `json:"pendingRateDrops,omitempty"`
+	RateWindowSeq    uint64                    `json:"rateWindowSeq,omitempty"`
+	RateWindows      []logRateWindow           `json:"rateWindows,omitempty"`
+	rateWindow       uint64
+}
+
+type logRateWindow struct {
+	ID           uint64                `json:"id"`
+	End          time.Time             `json:"end"`
+	FilterConfig string                `json:"filterConfig"`
+	MaskConfig   string                `json:"maskConfig"`
+	Entries      []pendingLogRateEntry `json:"entries,omitempty"`
+}
+
+type pendingLogRateEntry struct {
+	Line        string `json:"line"`
+	Time        string `json:"time,omitempty"`
+	RawLines    int    `json:"rawLines"`
+	MaskedLines uint64 `json:"maskedLines,omitempty"`
+	RateRank    int    `json:"rateRank,omitempty"`
+	HasRateRank bool   `json:"hasRateRank,omitempty"`
+	Historical  bool   `json:"historical,omitempty"`
 }
 
 type logCounters struct {
@@ -94,12 +117,13 @@ var (
 	ansiEscapePattern        = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))`)
 	emailPattern             = regexp.MustCompile(`(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b`)
 	authorizationPattern     = regexp.MustCompile(`(?i)(\bAuthorization\s*[:=]\s*).*`)
-	credentialPattern        = regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|client[_-]?secret)\s*([=:])\s*("(?:\\.|[^"\\])*"|'[^']*'|[^\s,;}\]]+)`)
-	credentialJSONPattern    = regexp.MustCompile(`(?i)("(?:authorization|proxy[_-]?authorization|password|passwd|pwd|secret|token|api[_-]?key|client[_-]?secret)"\s*:\s*)("(?:\\.|[^"\\])*"|[^\s,}\]]+)`)
+	credentialPattern        = regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|client[_-]?secret)\s*([=:])\s*("(?:\\.|[^"\\])*(?:\\)?(?:"|$)|'(?:\\.|[^'\\])*(?:\\)?(?:'|$)|[^\s,;}\]]+)`)
+	credentialJSONPattern    = regexp.MustCompile(`(?i)("(?:authorization|proxy[_-]?authorization|password|passwd|pwd|secret|token|api[_-]?key|client[_-]?secret)"\s*:\s*)("(?:\\.|[^"\\])*(?:\\)?(?:"|$)|[^\s,}\]]+)`)
 	bearerPattern            = regexp.MustCompile(`(?i)\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*`)
 	authPlainPattern         = regexp.MustCompile(`(?i)(\b(?:AUTH|AUTHENTICATE)\s+PLAIN\s+)[A-Za-z0-9+/_-]+={0,2}([^A-Za-z0-9+/_=-]|$)`)
 	authPlainCommandPattern  = regexp.MustCompile(`(?i)\b(?:AUTH|AUTHENTICATE)\s+PLAIN\b`)
-	imapLoginPattern         = regexp.MustCompile(`(?i)(\bLOGIN\s+)(?:"[^"]*"|\S+)(\s+)(?:"[^"]*"|\S+)`)
+	imapLoginPattern         = regexp.MustCompile(`(?i)(\bLOGIN\s+)(?:"(?:\\.|[^"\\])*"|[^"\s]\S*)(\s+)(?:"(?:\\.|[^"\\])*(?:\\)?(?:"|$)|[^"\s]\S*)`)
+	imapIncompletePattern    = regexp.MustCompile(`(?i)(\bLOGIN\s+)(?:"(?:\\.|[^"\\])*(?:\\)?$|[^"\s]\S*\s*$)`)
 	authLoginPattern         = regexp.MustCompile(`(?i)\b(?:AUTH|AUTHENTICATE)\s+LOGIN\b`)
 	authLoginInitialPattern  = regexp.MustCompile(`(?i)(\b(?:AUTH|AUTHENTICATE)\s+LOGIN\s+)[A-Za-z0-9+/_-]+={0,2}([^A-Za-z0-9+/_=-]|$)`)
 	authChallengePattern     = regexp.MustCompile(`(?:^|\s)334(?:[ -]|$)`)
@@ -139,6 +163,7 @@ func loadLogPipelineConfig(serviceType, serviceID string) (logPipelineConfig, er
 	if cfg.masks, err = parseLogMasks(value("MASK")); err != nil {
 		return cfg, fmt.Errorf("invalid log mask rule: %w", err)
 	}
+	cfg.customMaskCount = len(cfg.masks)
 	presets := splitLogConfigList(value("MASK_PRESETS"))
 	for _, preset := range presets {
 		switch strings.ToLower(preset) {
@@ -169,6 +194,7 @@ func loadLogPipelineConfig(serviceType, serviceID string) (logPipelineConfig, er
 	if cfg.authMask {
 		cfg.masks = append(cfg.masks,
 			logMaskRule{pattern: authPlainPattern, replacement: "${1}[REDACTED]${2}"},
+			logMaskRule{pattern: imapIncompletePattern, replacement: "${1}[REDACTED]"},
 			logMaskRule{pattern: imapLoginPattern, replacement: "${1}[REDACTED]${2}[REDACTED]"},
 		)
 	}
@@ -335,12 +361,17 @@ func lineLogLevel(line string) int {
 func stripANSI(line string) string { return ansiEscapePattern.ReplaceAllString(line, "") }
 
 type logEntry struct {
-	line       string
-	raw        string
-	time       string
-	historical bool
-	truncated  bool
-	overflow   bool
+	line        string
+	raw         string
+	time        string
+	rawLines    int
+	rateRank    int
+	hasRateRank bool
+	rateWindow  uint64
+	maskedLines uint64
+	historical  bool
+	truncated   bool
+	overflow    bool
 }
 
 func applyLogPipeline(lines, times []string, cfg logPipelineConfig, state logPipelineState, counters logCounters, now time.Time) ([]string, []string, logPipelineState, logCounters) {
@@ -359,8 +390,14 @@ func applyLogPipeline(lines, times []string, cfg logPipelineConfig, state logPip
 const logRawEntryMaxBytes = 2 << 20
 
 func processLogPipeline(lines, times, streams []string, reset bool, cfg logPipelineConfig, state logPipelineState, counters logCounters, now time.Time) ([]logEntry, logPipelineState, logCounters) {
+	return processLogPipelineWithHistory(lines, times, streams, nil, reset, cfg, state, counters, now, false, nil)
+}
+
+func processLogPipelineWithHistory(lines, times, streams []string, historical []bool, reset bool, cfg logPipelineConfig, state logPipelineState, counters logCounters, now time.Time, hasMore bool, pendingStreams map[string]bool) ([]logEntry, logPipelineState, logCounters) {
 	maskConfig := logMaskFingerprint(cfg)
-	counters.Read += uint64(len(lines))
+	for _, line := range lines {
+		counters.Read += uint64(logLineCount(line))
+	}
 	newestLag := int64(-1)
 	for _, value := range times {
 		if at, err := time.Parse(time.RFC3339Nano, value); err == nil {
@@ -390,7 +427,9 @@ func processLogPipeline(lines, times, streams []string, reset bool, cfg logPipel
 		}
 		entries = append(entries, logEntry{
 			line: line, raw: stream.HeldRaw, time: stream.HeldTime,
-			historical: stream.HeldReset, truncated: stream.HeldTruncated, overflow: stream.HeldOverflow,
+			rawLines: stream.HeldLines, historical: stream.HeldReset,
+			truncated: stream.HeldTruncated, overflow: stream.HeldOverflow,
+			rateWindow: stream.HeldRateWindow,
 		})
 		loginRemaining, loginChallenged := stream.LoginRemaining, stream.LoginChallenged
 		loginInFlight, loginObserved := stream.LoginInFlight, stream.LoginObserved
@@ -407,7 +446,7 @@ func processLogPipeline(lines, times, streams []string, reset bool, cfg logPipel
 		// evaluated against raw include/exclude rules after an upgrade.
 		if cfg.sourceFilter != "" || len(cfg.include) > 0 || len(cfg.exclude) > 0 {
 			log.Printf("robin-agent: warning: discarded a legacy held log entry whose raw filter input was not retained")
-			counters.Excluded++
+			counters.Excluded += uint64(logLineCount(stream.HeldLine))
 			loginRemaining, loginChallenged := stream.LoginRemaining, stream.LoginChallenged
 			loginInFlight, loginObserved := stream.LoginInFlight, stream.LoginObserved
 			*stream = logStreamState{
@@ -420,11 +459,18 @@ func processLogPipeline(lines, times, streams []string, reset bool, cfg logPipel
 		stream.HeldLines = strings.Count(stream.HeldLine, "\n") + 1
 	}
 	migrate(&state.logStreamState)
+	if state.HeldOpen && state.HeldRateWindow == 0 {
+		state.HeldRateWindow = state.rateWindow
+	}
 	for key, stream := range state.Streams {
 		migrate(&stream)
+		if stream.HeldOpen && stream.HeldRateWindow == 0 {
+			stream.HeldRateWindow = state.rateWindow
+		}
 		state.Streams[key] = stream
 	}
 	for i, raw := range lines {
+		isHistorical := reset || i < len(historical) && historical[i]
 		key := ""
 		if i < len(streams) {
 			key = streams[i]
@@ -456,14 +502,18 @@ func processLogPipeline(lines, times, streams []string, reset bool, cfg logPipel
 		if !stream.HeldOpen {
 			if starts {
 				stream.HeldOpen, stream.HeldLine, stream.HeldRaw = true, safe, raw
-				stream.HeldTime, stream.HeldSince, stream.HeldLines = at, now, 1
-				stream.HeldReset = reset
+				stream.HeldTime, stream.HeldSince, stream.HeldLines = at, now, logLineCount(raw)
+				stream.HeldReset = isHistorical
 				stream.HeldMaskConfig = maskConfig
+				stream.HeldRateWindow = state.rateWindow
 			} else {
-				entries = append(entries, logEntry{line: safe, raw: raw, time: at, historical: reset})
+				entries = append(entries, logEntry{
+					line: safe, raw: raw, time: at, rawLines: logLineCount(raw),
+					historical: isHistorical, rateWindow: state.rateWindow,
+				})
 			}
 		} else {
-			stream.HeldLines++
+			stream.HeldLines += logLineCount(raw)
 			stream.HeldSince = now
 			if stream.HeldTime == "" {
 				stream.HeldTime = at
@@ -493,7 +543,14 @@ func processLogPipeline(lines, times, streams []string, reset bool, cfg logPipel
 			state.Streams[key] = stream
 		}
 	}
-	if state.HeldOpen && now.Sub(state.HeldSince) >= 2*time.Second {
+	// Unread records or incomplete Docker lines may still contain continuations.
+	pending := func(key string) bool {
+		if pendingStreams == nil {
+			return hasMore
+		}
+		return pendingStreams[key]
+	}
+	if !pending("") && state.HeldOpen && now.Sub(state.HeldSince) >= 2*time.Second {
 		flush(&state.logStreamState)
 	}
 	keys := make([]string, 0, len(state.Streams))
@@ -503,7 +560,7 @@ func processLogPipeline(lines, times, streams []string, reset bool, cfg logPipel
 	sort.Strings(keys)
 	for _, key := range keys {
 		stream := state.Streams[key]
-		if stream.HeldOpen && now.Sub(stream.HeldSince) >= 2*time.Second {
+		if !pending(key) && stream.HeldOpen && now.Sub(stream.HeldSince) >= 2*time.Second {
 			flush(&stream)
 		}
 		if !stream.HeldOpen && stream.LoginRemaining == 0 && !stream.LoginObserved {
@@ -518,6 +575,7 @@ func processLogPipeline(lines, times, streams []string, reset bool, cfg logPipel
 		excluded := entry.overflow
 		if excluded {
 			log.Printf("robin-agent: warning: discarded an oversized log entry that could not be safely filtered and masked")
+			counters.Truncated++
 		}
 		for _, rule := range cfg.exclude {
 			if rule.matches(entry.raw) {
@@ -543,11 +601,23 @@ func processLogPipeline(lines, times, streams []string, reset bool, cfg logPipel
 			}
 		}
 		if excluded {
-			counters.Excluded++
+			counters.Excluded += uint64(max(1, entry.rawLines))
 			continue
 		}
-		entry.line, _ = maskLogEntry(entry.raw, entry.line, cfg.masks)
-		counters.Masked += maskedLogLineCount(entry.raw, entry.line)
+		safe := entry.line
+		entry.line, _ = maskLogEntry(entry.raw, safe, cfg.masks)
+		if cfg.customMaskCount > 0 {
+			// A custom replacement must not hide a credential from built-in masks.
+			protected, _ := maskLogEntry(entry.raw, safe, cfg.masks[cfg.customMaskCount:])
+			if protected != safe {
+				protected, _ = maskLogEntry(protected, protected, cfg.masks[:cfg.customMaskCount])
+				if entry.line != protected {
+					entry.line = "[REDACTED]"
+				}
+			}
+		}
+		entry.maskedLines = maskedLogLineCount(entry.raw, entry.line)
+		counters.Masked += entry.maskedLines
 		if line, truncated := limitLogEntryLines(entry.line, cfg.entryLines); truncated {
 			entry.line = line
 			entry.truncated = true
@@ -558,6 +628,9 @@ func processLogPipeline(lines, times, streams []string, reset bool, cfg logPipel
 		}
 		if entry.truncated || entry.overflow {
 			counters.Truncated++
+		}
+		if cfg.rate > 0 && entry.raw != entry.line {
+			entry.rateRank, entry.hasRateRank = severityRank(entry.raw), true
 		}
 		entry.raw = ""
 		if entry.line != "" {
@@ -574,10 +647,14 @@ func shippedLogEntries(filtered []logEntry, counters logCounters) ([]string, []s
 	for _, entry := range filtered {
 		outLines = append(outLines, entry.line)
 		outTimes = append(outTimes, entry.time)
-		counters.Shipped++
+		counters.Shipped += uint64(logLineCount(entry.line))
 		counters.BytesShipped += uint64(len(entry.line))
 	}
 	return outLines, outTimes, counters
+}
+
+func logLineCount(line string) int {
+	return strings.Count(line, "\n") + 1
 }
 
 func maskAuthLine(line string, enabled bool, state logStreamState) (string, bool, logStreamState) {
@@ -638,6 +715,24 @@ func logMaskFingerprint(cfg logPipelineConfig) string {
 	for _, rule := range cfg.masks {
 		pattern := rule.pattern.String()
 		fmt.Fprintf(&data, "%d:%s%d:%s", len(pattern), pattern, len(rule.replacement), rule.replacement)
+	}
+	sum := sha256.Sum256([]byte(data.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+func logFilterFingerprint(cfg logPipelineConfig) string {
+	var data strings.Builder
+	fmt.Fprintf(&data, "%d:%s;%d;", len(cfg.sourceFilter), cfg.sourceFilter, cfg.minimumLevel)
+	for _, patterns := range [][]logPattern{cfg.include, cfg.exclude} {
+		fmt.Fprintf(&data, "%d;", len(patterns))
+		for _, pattern := range patterns {
+			if pattern.regex != nil {
+				text := pattern.regex.String()
+				fmt.Fprintf(&data, "r%d:%s", len(text), text)
+			} else {
+				fmt.Fprintf(&data, "s%d:%s", len(pattern.text), pattern.text)
+			}
+		}
 	}
 	sum := sha256.Sum256([]byte(data.String()))
 	return hex.EncodeToString(sum[:])
@@ -706,7 +801,7 @@ func logMaskMayMatch(pattern *regexp.Regexp, lower string, ascii bool) bool {
 		return strings.Contains(lower, "@")
 	case authPlainPattern:
 		return strings.Contains(lower, "auth") && strings.Contains(lower, "plain")
-	case imapLoginPattern:
+	case imapLoginPattern, imapIncompletePattern:
 		return strings.Contains(lower, "login")
 	default:
 		return true
@@ -766,40 +861,183 @@ func isAuthLoginPayload(line string) bool {
 	return false
 }
 
+// Keep completed candidates with the window in which their multiline entry
+// began. Selection waits for that window's held entries, including after restart.
+func finishLogRateWindows(entries []logEntry, cfg logPipelineConfig, state logPipelineState, counters logCounters, now time.Time) ([]logEntry, logPipelineState, logCounters) {
+	filterConfig, maskConfig := logFilterFingerprint(cfg), logMaskFingerprint(cfg)
+	windows := append([]logRateWindow(nil), state.RateWindows...)
+	bufferedBytes, bufferedEntries := 0, 0
+	for i := range windows {
+		windows[i].Entries = append([]pendingLogRateEntry(nil), windows[i].Entries...)
+		for _, entry := range windows[i].Entries {
+			bufferedBytes += len(entry.Line)
+			bufferedEntries++
+		}
+	}
+	windows = append(windows, logRateWindow{
+		ID: state.rateWindow, End: now, MaskConfig: maskConfig,
+		FilterConfig: filterConfig,
+	})
+	windowIndex := make(map[uint64]int, len(windows))
+	for i := range windows {
+		windowIndex[windows[i].ID] = i
+	}
+	var overflow uint64
+	for _, entry := range entries {
+		id := entry.rateWindow
+		if id == 0 {
+			id = state.rateWindow
+		}
+		if bufferedEntries >= 80000 || bufferedBytes+len(entry.line) > 16<<20 {
+			overflow += uint64(logLineCount(entry.line))
+			continue
+		}
+		i, ok := windowIndex[id]
+		if !ok {
+			i = len(windows) - 1
+		}
+		windows[i].Entries = append(windows[i].Entries, pendingLogRateEntry{
+			Line: entry.line, Time: entry.time, RawLines: entry.rawLines,
+			RateRank: entry.rateRank, HasRateRank: entry.hasRateRank, Historical: entry.historical,
+		})
+		bufferedBytes += len(entry.line)
+		bufferedEntries++
+	}
+	if overflow > 0 {
+		log.Printf("robin-agent: warning: dropped %d log lines because deferred rate windows reached their buffer limit", overflow)
+		counters.RateLimited += overflow
+		state.PendingRateDrops += overflow
+	}
+	open := make(map[uint64]bool)
+	if cfg.rate > 0 && state.HeldOpen {
+		open[state.HeldRateWindow] = true
+	}
+	for _, stream := range state.Streams {
+		if cfg.rate > 0 && stream.HeldOpen {
+			open[stream.HeldRateWindow] = true
+		}
+	}
+	nonempty := windows[:0]
+	for _, window := range windows {
+		if len(window.Entries) > 0 || open[window.ID] {
+			nonempty = append(nonempty, window)
+		}
+	}
+	windows = nonempty
+	var out []logEntry
+	processed := 0
+	for _, window := range windows {
+		if open[window.ID] {
+			break
+		}
+		var candidates []logEntry
+		for _, entry := range window.Entries {
+			if window.FilterConfig != filterConfig {
+				counters.Excluded += uint64(max(1, entry.RawLines))
+				continue
+			}
+			line := entry.Line
+			if window.MaskConfig != maskConfig {
+				line = "[REDACTED]"
+			}
+			candidates = append(candidates, logEntry{
+				line: line, time: entry.Time, rawLines: entry.RawLines,
+				rateRank: entry.RateRank, hasRateRank: entry.HasRateRank, historical: entry.Historical,
+			})
+		}
+		var selected []logEntry
+		if cfg.rate > 0 {
+			selected, state, counters = limitLogEntries(candidates, cfg, state, counters, window.End)
+		} else {
+			selected = candidates
+			state.Tokens, state.LastRefill = 0, time.Time{}
+		}
+		out = append(out, selected...)
+		processed++
+	}
+	state.RateWindows = append([]logRateWindow(nil), windows[processed:]...)
+	if cfg.rate > 0 && len(windows) == 0 {
+		out, state, counters = limitLogEntries(nil, cfg, state, counters, now)
+	}
+	return out, state, counters
+}
+
 func limitLogEntries(entries []logEntry, cfg logPipelineConfig, state logPipelineState, counters logCounters, now time.Time) ([]logEntry, logPipelineState, logCounters) {
-	available, afterLast := logRateWindowBudget(entries, cfg, state, now)
-	state.LastRefill = now
-	keep := len(entries)
-	if available < float64(keep) {
-		keep = max(0, int(available))
+	start := state.LastRefill
+	tokens := max(0, minFloat(cfg.burst, state.Tokens))
+	if start.IsZero() {
+		start, tokens = now, cfg.burst
+	} else if !start.Before(now) {
+		start = now
+	} else if windowStart := now.Add(-30 * time.Second); start.Before(windowStart) {
+		tokens = minFloat(cfg.burst, tokens+windowStart.Sub(start).Seconds()*cfg.rate)
+		start = windowStart
+	}
+	events := make([]logRateEvent, len(entries))
+	estimate := false
+	totalLines := 0
+	for i, entry := range entries {
+		at, err := time.Parse(time.RFC3339Nano, entry.time)
+		if err != nil || at.Before(start) || at.After(now) {
+			estimate = true
+		}
+		cost := logLineCount(entry.line)
+		totalLines += cost
+		events[i] = logRateEvent{index: i, at: at, cost: cost}
+	}
+	if estimate {
+		window := now.Sub(start)
+		for i := range events {
+			events[i].at = start.Add(window * time.Duration(i+1) / time.Duration(len(events)))
+		}
+	} else {
+		sort.SliceStable(events, func(i, j int) bool { return events[i].at.Before(events[j].at) })
+	}
+	last := start
+	for i := range events {
+		events[i].refill = minFloat(cfg.burst, events[i].at.Sub(last).Seconds()*cfg.rate)
+		last = events[i].at
+	}
+	remaining := tokens
+	allFit := true
+	for _, event := range events {
+		remaining = minFloat(cfg.burst, remaining+event.refill)
+		if remaining < float64(event.cost) {
+			allFit = false
+			break
+		}
+		remaining -= float64(event.cost)
 	}
 	out := entries
-	dropped := uint64(len(entries) - keep)
-	if dropped > 0 {
-		allowed := make([]bool, len(entries))
-		if keep > 0 {
-			ranks := make([]int, len(entries))
-			for i, entry := range entries {
-				ranks[i] = severityRank(entry.line)
-			}
-			remaining := keep
-			for rank := 4; rank >= -1 && remaining > 0; rank-- {
-				for i := len(entries) - 1; i >= 0 && remaining > 0; i-- {
-					if ranks[i] == rank {
-						allowed[i] = true
-						remaining--
-					}
-				}
+	var dropped uint64
+	if !allFit {
+		for i := range events {
+			entry := entries[events[i].index]
+			if entry.hasRateRank {
+				events[i].rank = entry.rateRank
+			} else {
+				events[i].rank = severityRank(entry.line)
 			}
 		}
-		out = make([]logEntry, 0, keep+1)
+		allowed := selectLogRateEvents(events, minFloat(cfg.burst, float64(totalLines)), tokens)
+		out = make([]logEntry, 0, len(entries)+1)
 		for i, entry := range entries {
 			if allowed[i] {
 				out = append(out, entry)
+			} else {
+				dropped += uint64(logLineCount(entry.line))
+			}
+		}
+		remaining = tokens
+		for _, event := range events {
+			remaining = minFloat(cfg.burst, remaining+event.refill)
+			if allowed[event.index] {
+				remaining = max(0, remaining-float64(event.cost))
 			}
 		}
 	}
-	state.Tokens = minFloat(cfg.burst, available-float64(keep)+afterLast*cfg.rate)
+	state.Tokens = minFloat(cfg.burst, remaining+now.Sub(last).Seconds()*cfg.rate)
+	state.LastRefill = now
 	if dropped > 0 {
 		counters.RateLimited += dropped
 		state.PendingRateDrops += dropped
@@ -817,41 +1055,178 @@ func limitLogEntries(entries []logEntry, cfg logPipelineConfig, state logPipelin
 	return out, state, counters
 }
 
-// Agents collect periodically, so a single read may represent many seconds of
-// input. Spend tokens earned across that window rather than capping the entire
-// read at the instantaneous burst, while still capping credit earned in idle time.
-func logRateWindowBudget(entries []logEntry, cfg logPipelineConfig, state logPipelineState, now time.Time) (float64, float64) {
-	if state.LastRefill.IsZero() {
-		return cfg.burst, 0
+type logRateEvent struct {
+	index  int
+	at     time.Time
+	refill float64
+	rank   int
+	cost   int
+}
+
+type logRateScore [6]uint32
+
+func logRateScoreGreater(a, b *logRateScore) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
 	}
-	elapsed := now.Sub(state.LastRefill)
-	if elapsed <= 0 {
-		return state.Tokens, 0
+	return false
+}
+
+func logRateScoreWithEventGreater(a, b *logRateScore, slot int, cost uint32) bool {
+	for i := range a {
+		value := a[i]
+		if i == slot {
+			value += cost
+		}
+		if value != b[i] {
+			return value > b[i]
+		}
 	}
-	if len(entries) == 0 {
-		return minFloat(cfg.burst, state.Tokens+elapsed.Seconds()*cfg.rate), 0
+	return false
+}
+
+type logRateChoice struct {
+	index, previous uint32
+}
+
+type logRateState struct {
+	finish float64
+	score  logRateScore
+	origin uint32
+	choice uint32
+}
+
+type logRateCheckpoint struct {
+	clock  float64
+	states []logRateState
+}
+
+// Each state describes a token bucket's outstanding work and its retained
+// severity counts. A state with both a later finish and no higher score can
+// never improve any subsequent choice and is removed from the frontier.
+func advanceLogRateFrontier(states, next []logRateState, event logRateEvent, clock, burst float64, choices *[]logRateChoice) ([]logRateState, float64) {
+	clock += event.refill
+	if states[len(states)-1].finish <= clock {
+		states = states[len(states)-1:]
+		states[0].finish, clock = 0, 0
+	} else if idle := sort.Search(len(states), func(i int) bool { return states[i].finish > clock }); idle > 0 {
+		states = states[idle-1:]
+		states[0].finish = clock
 	}
-	start := state.LastRefill
-	if latestStart := now.Add(-30 * time.Second); start.Before(latestStart) {
-		start = latestStart
+	eligible := sort.Search(len(states), func(i int) bool {
+		return states[i].finish+float64(event.cost) > clock+burst+1e-9
+	})
+	next = next[:0]
+	cost, slot, scoreCost := float64(event.cost), 4-event.rank, uint32(event.cost)
+	for i, j := 0, 0; i < len(states) || j < eligible; {
+		var index int
+		take := false
+		switch {
+		case j == eligible:
+			index = i
+			i++
+		case i == len(states):
+			index, take = j, true
+			j++
+		default:
+			finish := states[j].finish + cost
+			switch {
+			case states[i].finish < finish:
+				index = i
+				i++
+			case states[i].finish > finish:
+				index, take = j, true
+				j++
+			default:
+				if logRateScoreWithEventGreater(&states[j].score, &states[i].score, slot, scoreCost) {
+					index, take = j, true
+				} else {
+					index = i
+				}
+				i++
+				j++
+			}
+		}
+		if take {
+			if len(next) > 0 && !logRateScoreWithEventGreater(&states[index].score, &next[len(next)-1].score, slot, scoreCost) {
+				continue
+			}
+			candidate := states[index]
+			candidate.finish += cost
+			candidate.score[slot] += scoreCost
+			if choices != nil {
+				*choices = append(*choices, logRateChoice{index: uint32(event.index), previous: candidate.choice})
+				candidate.choice = uint32(len(*choices))
+			}
+			next = append(next, candidate)
+		} else if len(next) == 0 || logRateScoreGreater(&states[index].score, &next[len(next)-1].score) {
+			next = append(next, states[index])
+		}
 	}
-	tokens := minFloat(cfg.burst, state.Tokens+start.Sub(state.LastRefill).Seconds()*cfg.rate)
-	first, last := now, start
-	for _, entry := range entries {
-		at, err := time.Parse(time.RFC3339Nano, entry.time)
-		if err != nil || at.Before(start) || at.After(now) {
-			first, last = start, now
+	return next, clock
+}
+
+func selectLogRateEvents(events []logRateEvent, burst, tokens float64) []bool {
+	allowed := make([]bool, len(events))
+	uniform := events[0].cost == 1
+	for _, event := range events[1:] {
+		if event.rank != events[0].rank || event.cost != 1 {
+			uniform = false
 			break
 		}
-		if at.Before(first) {
-			first = at
+	}
+	if uniform {
+		for _, event := range events {
+			tokens = minFloat(burst, tokens+event.refill)
+			if tokens >= 1-1e-9 {
+				allowed[event.index] = true
+				tokens = max(0, tokens-1)
+			}
 		}
-		if at.After(last) {
-			last = at
+		return allowed
+	}
+
+	const checkpointStride = 128
+	states := []logRateState{{finish: burst - tokens}}
+	var buffer []logRateState
+	clock := 0.0
+	checkpoints := []logRateCheckpoint{{states: append([]logRateState(nil), states...)}}
+	for i, event := range events {
+		next, nextClock := advanceLogRateFrontier(states, buffer, event, clock, burst, nil)
+		states, buffer, clock = next, states[:0], nextClock
+		if (i+1)%checkpointStride == 0 && i+1 < len(events) {
+			checkpoints = append(checkpoints, logRateCheckpoint{
+				clock: clock, states: append([]logRateState(nil), states...),
+			})
 		}
 	}
-	tokens = minFloat(cfg.burst, tokens+first.Sub(start).Seconds()*cfg.rate)
-	return tokens + last.Sub(first).Seconds()*cfg.rate, now.Sub(last).Seconds()
+
+	// Replaying bounded chunks keeps selection history small even for a
+	// long, rate-limited collection window.
+	selected := len(states) - 1
+	var choices []logRateChoice
+	for chunk := len(checkpoints) - 1; chunk >= 0; chunk-- {
+		states = append(states[:0], checkpoints[chunk].states...)
+		for i := range states {
+			states[i].origin, states[i].choice = uint32(i), 0
+		}
+		choices = choices[:0]
+		clock = checkpoints[chunk].clock
+		start, end := chunk*checkpointStride, min((chunk+1)*checkpointStride, len(events))
+		for _, event := range events[start:end] {
+			next, nextClock := advanceLogRateFrontier(states, buffer, event, clock, burst, &choices)
+			states, buffer, clock = next, states[:0], nextClock
+		}
+		for index := states[selected].choice; index != 0; {
+			choice := choices[index-1]
+			allowed[choice.index] = true
+			index = choice.previous
+		}
+		selected = int(states[selected].origin)
+	}
+	return allowed
 }
 
 func severityRank(line string) int {

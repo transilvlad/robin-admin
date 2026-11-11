@@ -114,6 +114,59 @@ func TestRateLimitPrefersWarningsAcrossReadChunks(t *testing.T) {
 	}
 }
 
+func TestRateLimitWaitsForHeldEntryBeforeSelectingWindow(t *testing.T) {
+	for _, excluded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("excluded=%t", excluded), func(t *testing.T) {
+			freshLogStates(t)
+			dir := t.TempDir()
+			path := filepath.Join(dir, "rspamd.log")
+			if err := os.WriteFile(path, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("ROBIN_AGENT_RSPAMD_LOG_FILE", path)
+			t.Setenv("ROBIN_AGENT_RSPAMD_LOG_ENTRY_STARTS_WITH", "^START")
+			t.Setenv("ROBIN_AGENT_RSPAMD_LOG_RATE_PER_SECOND", "0.001")
+			t.Setenv("ROBIN_AGENT_RSPAMD_LOG_RATE_BURST", "1")
+			if excluded {
+				t.Setenv("ROBIN_AGENT_RSPAMD_LOG_EXCLUDE", "discard continuation")
+			}
+			rec := &logPushRecorder{}
+			srv := rec.server(t)
+			svc := ownedService{ServiceID: "held-priority", ServiceType: "rspamd"}
+			c := config{adminURL: srv.URL, statePath: filepath.Join(dir, "agent.json")}
+			pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+			appendFile(t, path, "START DEBUG low\nSTART ERROR high\n")
+			pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+			for _, body := range rec.bodies {
+				if strings.Contains(bodyLines(body), "DEBUG low") {
+					t.Fatal("lower-severity entry was shipped before the held entry could be filtered")
+				}
+			}
+
+			// Restart while the complete candidate and open entry are pending.
+			logStates = &logStateStore{}
+			if excluded {
+				appendFile(t, path, "  discard continuation\n")
+			}
+			appendFile(t, path, "START INFO next\n")
+			pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+			var output string
+			for _, body := range rec.bodies {
+				output += bodyLines(body) + "\n"
+			}
+			if excluded {
+				if !strings.Contains(output, "DEBUG low") || strings.Contains(output, "ERROR high") ||
+					strings.Contains(output, "dropped by rate limit") {
+					t.Fatalf("excluded held entry displaced a valid lower-severity entry: %q", output)
+				}
+			} else if strings.Contains(output, "DEBUG low") || !strings.Contains(output, "ERROR high") ||
+				!strings.Contains(output, "1 lines dropped by rate limit") {
+				t.Fatalf("held error did not displace the lower-severity entry: %q", output)
+			}
+		})
+	}
+}
+
 func TestHeldResetEntryIsAppendedAsHistorical(t *testing.T) {
 	freshLogStates(t)
 	path := filepath.Join(t.TempDir(), "rspamd.log")
@@ -150,6 +203,174 @@ func TestReadFileChunkShipsOnlyCompleteNewLines(t *testing.T) {
 	_ = os.WriteFile(path, []byte("new\n"), 0o644)
 	if lines, _, _, _ = readFileChunk(path, offset); strings.Join(lines, ",") != "new" {
 		t.Fatalf("after truncation = %q", lines)
+	}
+}
+
+func TestIncompleteInitialTailIsDiscardedAcrossRestartAndRotation(t *testing.T) {
+	for _, rotate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rotate=%t", rotate), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "mail.log")
+			appendFile(t, path, "password=review-secret-prefix")
+			first, _, err := followFileWithTail("file:test", path, "", nil, 4, 10, 10, 16)
+			if err != nil || !first.Next.SkipPartial || first.InputDropped != 1 {
+				t.Fatalf("initial incomplete tail was not marked for discard: %+v, %v", first, err)
+			}
+			store := &logStateStore{}
+			statePath := filepath.Join(dir, "agent.json")
+			st, err := store.service(statePath, "mail")
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.Cursor = &first.Next
+			if err := store.save(); err != nil {
+				t.Fatal(err)
+			}
+			if rotate {
+				if err := os.Rename(path, path+".1"); err != nil {
+					t.Fatal(err)
+				}
+				appendFile(t, path, "uncertain-suffix\nsafe\n")
+			} else {
+				appendFile(t, path, "-suffix\nsafe\n")
+			}
+			st, err = (&logStateStore{}).service(statePath, "mail")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cursor := st.Cursor
+			var lines []string
+			for i := 0; i < 30; i++ {
+				batch, more, err := followFileWithTail("file:test", path, "", cursor, 4, 10, 10, 16)
+				if err != nil {
+					t.Fatal(err)
+				}
+				lines = append(lines, batch.Lines...)
+				cursor = &batch.Next
+				if !more {
+					break
+				}
+			}
+			if cursor.SkipPartial || strings.Join(lines, ",") != "safe" {
+				t.Fatalf("initial fragment escaped or following line was lost: %q cursor=%+v", lines, cursor)
+			}
+		})
+	}
+}
+
+func TestFileRotationDiscardsIncompleteLineAndPossibleContinuation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mail.log")
+	appendFile(t, path, "initial\n")
+	initial, _, err := followFile("file:test", path, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, path, "password=private-")
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, path, "secret\nsafe\n")
+	rotated, more, err := followFile("file:test", path, "", &initial.Next)
+	if err != nil || !more || rotated.InputDropped != 1 || !rotated.Next.SkipPartial {
+		t.Fatalf("incomplete line was not marked for discard across rotation: %+v, more=%t, %v", rotated, more, err)
+	}
+	resumed, _, err := followFile("file:test", path, "", &rotated.Next)
+	if err != nil || resumed.InputDropped != 0 || resumed.Next.SkipPartial ||
+		strings.Join(resumed.Lines, ",") != "safe" {
+		t.Fatalf("rotated line suffix escaped or the following line was lost: %+v, %v", resumed, err)
+	}
+}
+
+func TestMissingFileDiscardsPossibleLineContinuation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mail.log")
+	appendFile(t, path, "initial\n")
+	initial, _, err := followFile("file:test", path, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, path, "secret\nsafe\n")
+	resumed, _, err := followFile("file:test", path, "", &initial.Next)
+	if err != nil || resumed.InputDropped != 1 || resumed.Next.SkipPartial ||
+		strings.Join(resumed.Lines, ",") != "safe" {
+		t.Fatalf("missing file exposed an uncertain line boundary: %+v, %v", resumed, err)
+	}
+}
+
+func TestInitialTailDistinguishesCompleteAndPartialBoundaries(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     string
+		tailBytes   int
+		wantLines   string
+		wantDropped uint64
+	}{
+		{"complete", "prefix\nkeep\nmore\n", len("keep\nmore\n"), "keep,more", 0},
+		{"partial", "prefix-secret\nkeep\n", len("secret\nkeep\n"), "keep", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "mail.log")
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			batch, _, err := followFileWithTail("file:test", path, "", nil, 100, 10, 10, tt.tailBytes)
+			if err != nil || strings.Join(batch.Lines, ",") != tt.wantLines || batch.InputDropped != tt.wantDropped {
+				t.Fatalf("incorrect initial boundary: %+v, %v", batch, err)
+			}
+		})
+	}
+}
+
+func TestFollowFileDiscardsOversizedIncompleteLineIncrementally(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mail.log")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	initial, _, err := followFile("file:test", path, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, path, strings.Repeat("x", logRawEntryMaxBytes+2*logBatchMaxBytes))
+	batch, more, err := followFile("file:test", path, "", &initial.Next)
+	if err != nil || len(batch.Lines) != 0 || batch.InputDropped != 1 ||
+		!batch.Next.SkipPartial || batch.Next.Offset == 0 || !more {
+		t.Fatalf("oversized unfinished line was not bounded and discarded: %+v more=%t, %v", batch, more, err)
+	}
+	statePath := filepath.Join(dir, "agent.json")
+	store := &logStateStore{}
+	st, err := store.service(statePath, "mail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Cursor = &batch.Next
+	if err := store.save(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = (&logStateStore{}).service(statePath, "mail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor := st.Cursor
+	for more {
+		batch, more, err = followFile("file:test", path, "", cursor)
+		if err != nil || len(batch.Lines) != 0 || batch.InputDropped != 0 {
+			t.Fatalf("discarded line was counted again or leaked: %+v, %v", batch, err)
+		}
+		cursor = &batch.Next
+	}
+	if !cursor.SkipPartial {
+		t.Fatal("discard must continue until the terminating newline")
+	}
+	appendFile(t, path, "private-suffix\nsafe\n")
+	batch, _, err = followFile("file:test", path, "", cursor)
+	if err != nil || batch.Next.SkipPartial || strings.Join(batch.Lines, ",") != "safe" || batch.InputDropped != 0 {
+		t.Fatalf("line suffix escaped or next complete line was lost: %+v, %v", batch, err)
 	}
 }
 
@@ -410,6 +631,7 @@ func TestFollowFileReplaysAvailableFilesWhenFingerprintIsAmbiguous(t *testing.T)
 	appendFile(t, path, "shared prefix\nnew\n")
 	cur := tail.Next
 	var lines []string
+	var dropped uint64
 	for more := true; more; {
 		var batch *logBatch
 		batch, more, err = followFile("key", path, "", &cur)
@@ -417,10 +639,11 @@ func TestFollowFileReplaysAvailableFilesWhenFingerprintIsAmbiguous(t *testing.T)
 			t.Fatal(err)
 		}
 		lines = append(lines, batch.Lines...)
+		dropped += batch.InputDropped
 		cur = batch.Next
 	}
-	if got := strings.Join(lines, ","); got != "shared prefix,middle,shared prefix,new" {
-		t.Fatalf("ambiguous candidates were skipped: %q", got)
+	if got := strings.Join(lines, ","); got != "middle,shared prefix,new" || dropped != 1 {
+		t.Fatalf("ambiguous replay did not discard its uncertain boundary: %q, dropped=%d", got, dropped)
 	}
 }
 
@@ -428,9 +651,9 @@ func TestFollowFileRestartsAReplacedFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mail.log")
 	appendFile(t, path, "old line one\nold line two\n")
 	tail, _, _ := followFile("key", path, "", nil)
-	_ = os.WriteFile(path, []byte("new content that is longer than before\n"), 0o644)
+	_ = os.WriteFile(path, []byte("uncertain boundary\nnew content that is longer than before\n"), 0o644)
 	batch, _, err := followFile("key", path, "", &tail.Next)
-	if err != nil || strings.Join(batch.Lines, ",") != "new content that is longer than before" {
+	if err != nil || batch.InputDropped != 1 || strings.Join(batch.Lines, ",") != "new content that is longer than before" {
 		t.Fatalf("replaced file = %+v, %v", batch, err)
 	}
 }
@@ -562,6 +785,70 @@ func TestUnacknowledgedLogBatchIsResent(t *testing.T) {
 	}
 	if bodyLines(next) != "second" || next["batchId"] == resent["batchId"] {
 		t.Fatalf("reading continues after the acknowledgement: %v", next)
+	}
+}
+
+func TestLegacyPendingBatchesAreRedactedDurablyBeforeRetry(t *testing.T) {
+	freshLogStates(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rspamd.log")
+	appendFile(t, path, "already read\n")
+	t.Setenv("ROBIN_AGENT_RSPAMD_LOG_FILE", path)
+	position := map[string]any{
+		"key": "file:" + path + "|", "source": path, "path": path, "offset": len("already read\n"),
+	}
+	old := map[string]any{"legacy": map[string]any{
+		"cursor": map[string]any{"key": "file:" + path + "|", "source": path, "path": path},
+		"pending": map[string]any{
+			"id": "legacy-first", "source": path, "lines": []string{"password=review-secret"},
+			"times": []string{""}, "next": position,
+		},
+		"pendingQueue": []any{map[string]any{
+			"id": "legacy-second", "source": path, "lines": []string{"other-sensitive-value"},
+			"times": []string{""}, "next": position,
+		}},
+	}}
+	data, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(logStatePath(statePath), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := &logPushRecorder{status: func(n int) int {
+		if n == 1 || n == 3 {
+			return http.StatusServiceUnavailable
+		}
+		return http.StatusOK
+	}}
+	srv := rec.server(t)
+	svc := ownedService{ServiceID: "legacy", ServiceType: "rspamd"}
+	c := config{adminURL: srv.URL, statePath: statePath}
+	pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+	persisted, err := os.ReadFile(logStatePath(statePath))
+	if err != nil || strings.Contains(string(persisted), "review-secret") || strings.Contains(string(persisted), "other-sensitive-value") {
+		t.Fatalf("legacy queue was not sanitized on disk before retry: %s, %v", persisted, err)
+	}
+	logStates = &logStateStore{}
+	pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+	st, err := logStates.service(statePath, svc.ServiceID)
+	if err != nil || st.Cursor.Offset != 0 || st.Pending == nil || st.Pending.ID != "legacy-second" {
+		t.Fatalf("cursor advanced before the legacy queue was acknowledged: %+v, %v", st, err)
+	}
+	logStates = &logStateStore{}
+	pushServiceLogs(context.Background(), srv.Client(), c, state{}, svc)
+	if len(rec.bodies) < 4 {
+		t.Fatalf("legacy queue was not retried: %+v", rec.bodies)
+	}
+	for i, id := range []string{"legacy-first", "legacy-first", "legacy-second", "legacy-second"} {
+		if rec.bodies[i]["batchId"] != id || bodyLines(rec.bodies[i]) != "[REDACTED] legacy pending log line" {
+			t.Fatalf("legacy retry changed id or exposed content: %+v", rec.bodies)
+		}
+	}
+	st, err = logStates.service(statePath, svc.ServiceID)
+	if err != nil || st.Pending != nil || st.Cursor.Offset != int64(len("already read\n")) {
+		t.Fatalf("acknowledged legacy queue did not advance: %+v, %v", st, err)
 	}
 }
 

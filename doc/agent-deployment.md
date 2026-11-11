@@ -159,12 +159,12 @@ If robin-admin itself uses a self-signed certificate on an internal network, add
 | `ROBIN_AGENT_MANAGED_ROOT` | Prefix for written config (default `/`; point at a staging dir to preview). |
 | `ROBIN_AGENT_APPLY_ONLY` | `1` = deliver config but skip validate+reload (staging model). |
 | `ROBIN_AGENT_EXEC_PREFIX` | Comma list of `serviceId=prefix` prepended to a service's commands (e.g. `mail=docker exec mail`, `mx1=ssh mx1`). |
-| `ROBIN_AGENT_<TYPE>_LOG_{UNIT,FILE,DIR,GLOB,CONTAINER,CONTAINER_LABEL,FILTER}` | Override a type's source. `CONTAINER` accepts exact names and `*`/`?` glob patterns separated by `;` (or `,`); `CONTAINER_LABEL` optionally filters by a Docker label selector. json-file logs are read directly when the path is accessible. |
+| `ROBIN_AGENT_<TYPE>_LOG_{UNIT,FILE,DIR,GLOB,CONTAINER,CONTAINER_LABEL,FILTER}` | Override a type's source. `CONTAINER` accepts exact names and `*`/`?` glob patterns separated by `;` (or `,`); `CONTAINER_LABEL` optionally filters by a Docker label selector. json-file logs are read directly when the path is accessible. See [Docker fragment safeguards](logs.md#fleet-agent-processing-and-health) for redaction and recovery limits. |
 | `ROBIN_AGENT_LOG_<SERVICE_ID>_{UNIT,FILE,DIR,GLOB,CONTAINER,CONTAINER_LABEL,FILTER}` | The same for one service (id upper-cased, other characters as `_`), taking precedence over the type-level value. `FILTER` remains a simple substring include. |
 | `ROBIN_AGENT_<TYPE>_LOG_{INCLUDE,EXCLUDE,MIN_LEVEL}` / `ROBIN_AGENT_LOG_<SERVICE_ID>_{INCLUDE,EXCLUDE,MIN_LEVEL}` | Semicolon-separated substring patterns, or `re:<Go-regexp>` patterns. Excludes win. `MIN_LEVEL` accepts DEBUG, INFO, WARN/WARNING, ERROR or FATAL; unrecognized lines are kept. |
 | `ROBIN_AGENT_<TYPE>_LOG_{MASK,MASK_PRESETS}` / `ROBIN_AGENT_LOG_<SERVICE_ID>_{MASK,MASK_PRESETS}` | `MASK` is semicolon-separated `re:<pattern>=><replacement>` rules. Credential key/value, bearer-token, and `auth` masking are always enabled; `email` and `tokens` are opt-in. Unknown presets stop collection with a warning. Email masking retains the domain and replaces the local part with a stable short hash. |
 | `ROBIN_AGENT_<TYPE>_LOG_{ENTRY_STARTS_WITH,ENTRY_MAX_LINES,ENTRY_MAX_BYTES}` / matching per-service names | Entry-start regex (default: timestamp), maximum entry lines (default 100), and bytes (default 65536). |
-| `ROBIN_AGENT_<TYPE>_LOG_{RATE_PER_SECOND,RATE_BURST}` / matching per-service names | Optional per-second budget with a burst allowance, applied across each collection window. The default burst is the rate or 1, whichever is larger; an explicit burst must be at least 1. Within each bounded read window, over-budget entries drop DEBUG before INFO, then lower-priority entries before WARN/ERROR, with a synthetic dropped-line summary. |
+| `ROBIN_AGENT_<TYPE>_LOG_{RATE_PER_SECOND,RATE_BURST}` / matching per-service names | Optional per-second token bucket with a burst allowance, applied across each collection window. Idle credit is capped at the burst. The default burst is the rate or 1, whichever is larger; an explicit burst must be at least 1. Multiline entries spend one token per line and are never split; set the burst at least as high as the longest entry. Within each bounded read window, feasible higher-severity lines take priority over lower-severity lines, with a synthetic dropped-line summary. |
 | `ROBIN_AGENT_INSECURE` | `1` = skip TLS verification (self-signed dev only). |
 | Installer-only: `ROBIN_AGENT_VERSION`, `ROBIN_AGENT_REPO`, `ROBIN_AGENT_DOWNLOAD_BASE` | Pin a version, change the repo, or mirror assets internally. |
 
@@ -185,7 +185,9 @@ lines/hour (about 57% fewer lines); a purely line-proportional estimate is
 about 100 MB/hour from 235 MB/hour before the DEBUG and invalid-ending
 exclusions. Actual bytes depend on severity and message size, so measure with
 the agent preview against the target service before treating that estimate as
-a capacity commitment.
+a capacity commitment. For the four sample lines (two DEBUG, one invalid-ending
+WARN, and one ERROR), the exclusions retain one of four: a 75% line reduction
+before rate limiting.
 
 `robin-agent logs preview --service <id> --type <type> --since 5m --limit 500`
 prints masked entries without shipping them. Preview examines up to 100,000
@@ -200,7 +202,7 @@ allocations:
 
 ```sh
 cd agent
-go test -run '^$' -bench '^BenchmarkLogPipelinePostalFixtures500LinesPerSecond$' -benchmem
+go test -run '^$' -bench '^BenchmarkLog(PipelinePostalFixtures500LinesPerSecond|RateLimitOverBudget)$' -benchmem
 ```
 
 On Linux, wrap the command with `/usr/bin/time -v` to capture process maximum

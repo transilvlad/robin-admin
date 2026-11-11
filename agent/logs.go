@@ -281,6 +281,7 @@ type logCursor struct {
 	Source          string                     `json:"source"`
 	Path            string                     `json:"path,omitempty"`            // file sources: the file being read
 	Offset          int64                      `json:"offset,omitempty"`          // file sources: bytes already shipped
+	SkipPartial     bool                       `json:"skipPartial,omitempty"`     // discard an incomplete line whose prefix was not read
 	Fingerprint     string                     `json:"fingerprint,omitempty"`     // file sources: SHA-256 of the leading bytes
 	FingerprintSize int64                      `json:"fingerprintSize,omitempty"` // file sources: how many leading bytes
 	Device          uint64                     `json:"device,omitempty"`          // file sources: filesystem identity
@@ -293,35 +294,62 @@ type logCursor struct {
 }
 
 type dockerLogCursor struct {
-	Name          string     `json:"name"`
-	Since         time.Time  `json:"since"`
-	Seen          int        `json:"seen,omitempty"`
-	DockerCursor  int        `json:"dockerCursor,omitempty"`
-	File          *logCursor `json:"file,omitempty"`
-	Driver        string     `json:"driver,omitempty"`
-	LogPath       string     `json:"logPath,omitempty"`
-	Gone          bool       `json:"gone,omitempty"`
-	ResumeSince   time.Time  `json:"resumeSince,omitzero"`
-	ResumeSeen    int        `json:"resumeSeen,omitempty"`
-	ResumeSkipped int        `json:"resumeSkipped,omitempty"`
-	ResumeActive  bool       `json:"resumeActive,omitempty"`
-	ResumeLegacy  bool       `json:"resumeLegacy,omitempty"`
+	Name            string                        `json:"name"`
+	Since           time.Time                     `json:"since"`
+	Seen            int                           `json:"seen,omitempty"`
+	DockerCursor    int                           `json:"dockerCursor,omitempty"`
+	File            *logCursor                    `json:"file,omitempty"`
+	Driver          string                        `json:"driver,omitempty"`
+	LogPath         string                        `json:"logPath,omitempty"`
+	Gone            bool                          `json:"gone,omitempty"`
+	ResumeSince     time.Time                     `json:"resumeSince,omitzero"`
+	ResumeSeen      int                           `json:"resumeSeen,omitempty"`
+	ResumeSkipped   int                           `json:"resumeSkipped,omitempty"`
+	ResumeActive    bool                          `json:"resumeActive,omitempty"`
+	ResumeLegacy    bool                          `json:"resumeLegacy,omitempty"`
+	FragmentVersion int                           `json:"fragmentVersion,omitempty"`
+	Partials        map[string]dockerLogPartial   `json:"partials,omitempty"`
+	Streams         map[string]dockerStreamCursor `json:"streams,omitempty"`
+}
+
+type dockerStreamCursor struct {
+	Since         time.Time `json:"since,omitzero"`
+	Seen          int       `json:"seen,omitempty"`
+	Boundary      bool      `json:"boundary,omitempty"`
+	Discard       bool      `json:"discard,omitempty"`
+	ResumeSince   time.Time `json:"resumeSince,omitzero"`
+	ResumeSeen    int       `json:"resumeSeen,omitempty"`
+	ResumeSkipped int       `json:"resumeSkipped,omitempty"`
+}
+
+type dockerLogPartial struct {
+	Text       string    `json:"-"`
+	Encrypted  string    `json:"encrypted,omitempty"`
+	Time       time.Time `json:"time,omitzero"`
+	Historical bool      `json:"historical,omitempty"`
+	Discarding bool      `json:"discarding,omitempty"`
+	Boundary   bool      `json:"boundary,omitempty"`
 }
 
 // logBatch is a batch waiting for robin-admin's acknowledgement, with the
 // position to continue from once it is acknowledged.
 type logBatch struct {
-	ID           string           `json:"id,omitempty"`
-	Source       string           `json:"source"`
-	Lines        []string         `json:"lines"`
-	Times        []string         `json:"times"`
-	Reset        bool             `json:"reset"`
-	ResetAppend  bool             `json:"resetAppend,omitempty"`
-	Streams      []string         `json:"-"`
-	InputDropped uint64           `json:"-"`
-	Next         logCursor        `json:"next"`
-	Pipeline     logPipelineState `json:"pipeline,omitempty"`
-	Counters     logCounters      `json:"counters,omitempty"`
+	ID             string           `json:"id,omitempty"`
+	Source         string           `json:"source"`
+	Lines          []string         `json:"lines"`
+	Times          []string         `json:"times"`
+	Reset          bool             `json:"reset"`
+	ResetAppend    bool             `json:"resetAppend,omitempty"`
+	Sanitized      bool             `json:"sanitized,omitempty"`
+	Streams        []string         `json:"-"`
+	Historical     []bool           `json:"-"`
+	PendingStreams map[string]bool  `json:"-"`
+	Discontinuity  bool             `json:"-"`
+	InputDropped   uint64           `json:"-"`
+	InputMasked    uint64           `json:"-"`
+	Next           logCursor        `json:"next"`
+	Pipeline       logPipelineState `json:"pipeline,omitempty"`
+	Counters       logCounters      `json:"counters,omitempty"`
 }
 
 type logServiceState struct {
@@ -405,7 +433,7 @@ func (s *logStateStore) load(path string) error {
 	}
 	var aead cipher.AEAD
 	for _, st := range s.services {
-		if logServiceHasOpenEntry(st) {
+		if logServiceNeedsCipher(st) {
 			aead, err = s.logStateCipher(false)
 			if err != nil {
 				return err
@@ -417,6 +445,31 @@ func (s *logStateStore) load(path string) error {
 		s.services[id], err = transformLogService(st, id, aead, false)
 		if err != nil {
 			return fmt.Errorf("decode log positions for %s: %w", id, err)
+		}
+	}
+	migrated := make(map[string]int)
+	for id, st := range s.services {
+		batches := append([]*logBatch{st.Pending}, st.PendingQueue...)
+		for _, batch := range batches {
+			if batch == nil || batch.Sanitized {
+				continue
+			}
+			masked := 0
+			for i := range batch.Lines {
+				masked += logLineCount(batch.Lines[i])
+				batch.Lines[i] = "[REDACTED] legacy pending log line"
+			}
+			batch.Counters.Masked += uint64(masked)
+			batch.Sanitized = true
+			migrated[id] += masked
+		}
+	}
+	if len(migrated) > 0 {
+		if err := s.save(); err != nil {
+			return fmt.Errorf("persist sanitized legacy log batches: %w", err)
+		}
+		for id, count := range migrated {
+			log.Printf("robin-agent: warning: redacted %d legacy pending log line(s) for %s before retry", count, id)
 		}
 	}
 	s.loaded = true
@@ -437,8 +490,22 @@ func validLogCursor(cur *logCursor) bool {
 	}
 	for id, docker := range cur.Containers {
 		if id == "" || docker.Seen < 0 || docker.ResumeSeen < 0 || docker.ResumeSkipped < 0 ||
-			(docker.DockerCursor != 0 && docker.DockerCursor != 1) {
+			(docker.DockerCursor != 0 && docker.DockerCursor != 1) ||
+			(docker.FragmentVersion != 0 && docker.FragmentVersion != 1) {
 			return false
+		}
+		for stream, partial := range docker.Partials {
+			if (stream != "stdout" && stream != "stderr") ||
+				(!partial.Discarding && partial.Time.IsZero()) ||
+				(partial.Boundary && !partial.Discarding) {
+				return false
+			}
+		}
+		for stream, position := range docker.Streams {
+			if (stream != "stdout" && stream != "stderr") ||
+				position.Seen < 0 || position.ResumeSeen < 0 || position.ResumeSkipped < 0 {
+				return false
+			}
 		}
 		if docker.File != nil && !validLogCursor(docker.File) {
 			return false
@@ -454,7 +521,7 @@ func (s *logStateStore) save() error {
 	var aead cipher.AEAD
 	var err error
 	for _, st := range s.services {
-		if logServiceHasOpenEntry(st) {
+		if logServiceNeedsCipher(st) {
 			aead, err = s.logStateCipher(true)
 			if err != nil {
 				return err
@@ -677,16 +744,20 @@ func pushServiceLogs(ctx context.Context, client *http.Client, c config, s state
 // entries to keep, so a later warning can displace an earlier debug entry.
 func collectPipelineBatches(ctx context.Context, svc ownedService, st *logServiceState, cfg logPipelineConfig, readBudget int) ([]*logBatch, bool, int, error) {
 	cursor := st.Cursor
+	discovery := &dockerDiscovery{}
 	pipeline, counters := st.Pipeline, st.Counters
+	if cfg.rate > 0 || len(pipeline.RateWindows) > 0 {
+		pipeline.RateWindowSeq++
+		pipeline.rateWindow = pipeline.RateWindowSeq
+	}
 	previousRateLimited := counters.RateLimited
 	var entries []logEntry
 	var first, last *logBatch
 	var more bool
-	newestLag := int64(-1)
-	now := time.Now()
+	var newestRead time.Time
 	reads := 0
 	for reads < readBudget {
-		batch, hasMore, err := collectLogs(ctx, svc, cursor)
+		batch, hasMore, err := collectLogsWithTail(ctx, svc, cursor, logTailLines, logTailMaxBytes, discovery)
 		if err != nil {
 			return nil, false, reads, err
 		}
@@ -702,10 +773,15 @@ func collectPipelineBatches(ctx context.Context, svc ownedService, st *logServic
 		}
 		counters.Read += batch.InputDropped
 		counters.Truncated += batch.InputDropped
-		part, nextPipeline, nextCounters := processLogPipeline(batch.Lines, batch.Times, batch.Streams, batch.Reset, cfg, pipeline, counters, now)
+		counters.Masked += batch.InputMasked
+		readAt := time.Now()
+		part, nextPipeline, nextCounters := processLogPipelineWithHistory(batch.Lines, batch.Times, batch.Streams, batch.Historical, batch.Reset, cfg, pipeline, counters, readAt, hasMore, batch.PendingStreams)
 		entries, pipeline, counters = append(entries, part...), nextPipeline, nextCounters
-		if counters.ReadLagMS >= 0 && (newestLag < 0 || counters.ReadLagMS < newestLag) {
-			newestLag = counters.ReadLagMS
+		if counters.ReadLagMS >= 0 {
+			at := readAt.Add(-time.Duration(counters.ReadLagMS) * time.Millisecond)
+			if at.After(newestRead) {
+				newestRead = at
+			}
 		}
 		if batch.Next.Containers != nil {
 			for id, stream := range pipeline.Streams {
@@ -722,13 +798,18 @@ func collectPipelineBatches(ctx context.Context, svc ownedService, st *logServic
 	if first == nil {
 		return nil, false, reads, nil
 	}
-	counters.ReadLagMS = newestLag
-	if cfg.rate > 0 {
-		entries, pipeline, counters = limitLogEntries(entries, cfg, pipeline, counters, now)
+	now := time.Now()
+	if cfg.rate > 0 || len(pipeline.RateWindows) > 0 {
+		entries, pipeline, counters = finishLogRateWindows(entries, cfg, pipeline, counters, now)
+	}
+	counters.UpdatedAt = time.Now()
+	counters.ReadLagMS = -1
+	if !newestRead.IsZero() {
+		counters.ReadLagMS = max(0, counters.UpdatedAt.Sub(newestRead).Milliseconds())
 	}
 	counters.RateLimitedCurrent = counters.RateLimited - previousRateLimited
 	_, _, counters = shippedLogEntries(entries, counters)
-	base := logBatch{Source: first.Source, Next: last.Next, Pipeline: pipeline, Counters: counters}
+	base := logBatch{Source: first.Source, Next: last.Next, Pipeline: pipeline, Counters: counters, Sanitized: true}
 	if first.Reset {
 		base.Reset = true
 	}
@@ -781,6 +862,9 @@ func splitLogBatch(batch *logBatch) (*logBatch, *logBatch) {
 }
 
 func sendLogBatch(ctx context.Context, client *http.Client, c config, s state, svc ownedService, batch *logBatch) (int, error) {
+	if !batch.Sanitized {
+		return 0, errors.New("refusing to send an unsanitized log batch")
+	}
 	lines, times := batch.Lines, batch.Times
 	if lines == nil {
 		lines = []string{} // a quiet cycle must encode as [], not null
@@ -806,10 +890,10 @@ func sendLogBatch(ctx context.Context, client *http.Client, c config, s state, s
 // lines are already waiting. A nil batch without an error means the service
 // has no log source on this host.
 func collectLogs(parent context.Context, svc ownedService, cur *logCursor) (*logBatch, bool, error) {
-	return collectLogsWithTail(parent, svc, cur, logTailLines, logTailMaxBytes)
+	return collectLogsWithTail(parent, svc, cur, logTailLines, logTailMaxBytes, nil)
 }
 
-func collectLogsWithTail(parent context.Context, svc ownedService, cur *logCursor, tailLines, tailBytes int) (*logBatch, bool, error) {
+func collectLogsWithTail(parent context.Context, svc ownedService, cur *logCursor, tailLines, tailBytes int, discovery *dockerDiscovery) (*logBatch, bool, error) {
 	ctx, cancel := context.WithTimeout(parent, logCollectTimeout)
 	defer cancel()
 	src, known := resolveLogSource(svc.ServiceType, svc.ServiceID)
@@ -854,7 +938,7 @@ func collectLogsWithTail(parent context.Context, svc ownedService, cur *logCurso
 			src.containerLabel == "" {
 			dockerCursor = cur
 		}
-		return followContainerSetWithTail(ctx, key, src.container, src.containerLabel, dockerCursor, tailLines, tailBytes)
+		return followContainerSetWithTail(ctx, key, src.container, src.containerLabel, dockerCursor, tailLines, tailBytes, discovery)
 	}
 	if src.unit != "" {
 		if _, err := exec.LookPath("journalctl"); err != nil {
@@ -906,15 +990,18 @@ func followFileCandidatesWithLimits(key, active, filter string, cur *logCursor, 
 			return nil, false, err
 		}
 		defer f.Close()
-		lines, end, err := tailFileLimit(f, tailLines, filter, tailBytes)
+		lines, end, skipPartial, dropped, err := tailFileLimit(f, tailLines, filter, tailBytes)
 		if err != nil {
 			return nil, false, err
 		}
-		next := logCursor{Key: key, Source: active, Path: active, Offset: end}
+		next := logCursor{Key: key, Source: active, Path: active, Offset: end, SkipPartial: skipPartial}
 		if err := setFileIdentity(&next, f); err != nil {
 			return nil, false, err
 		}
-		return &logBatch{Source: active, Lines: lines, Times: lineTimes(lines, time.Now()), Reset: true, Next: next}, false, nil
+		if dropped > 0 {
+			log.Printf("robin-agent: warning: discarding an incomplete initial log line whose prefix is outside the tail limit")
+		}
+		return &logBatch{Source: active, Lines: lines, Times: lineTimes(lines, time.Now()), Reset: true, Next: next, InputDropped: dropped}, false, nil
 	}
 	if len(candidates) == 0 {
 		return nil, false, fmt.Errorf("no readable log file for %s", active)
@@ -973,16 +1060,21 @@ func followFileCandidatesWithLimits(key, active, filter string, cur *logCursor, 
 		}
 	}
 	next := *cur
+	discontinuity := f == nil
+	var dropped uint64
 	if f == nil {
 		// Once the followed file has been deleted, compressed, or truncated,
 		// its unread bytes cannot be reconstructed.
-		log.Printf("robin-agent: warning: followed log %s is no longer identifiable; unread lines may be lost and available files may be replayed", cur.Path)
+		log.Printf("robin-agent: warning: followed log %s is no longer identifiable; unread lines may be lost, available files may be replayed, and the first line will be discarded", cur.Path)
 		index = 0
 		f, err = openCandidate(candidates[index])
 		if err != nil {
 			return nil, false, err
 		}
-		next = logCursor{Key: key}
+		if !next.SkipPartial {
+			dropped++
+		}
+		next = logCursor{Key: key, SkipPartial: true}
 	}
 	defer f.Close()
 	next.Path, next.Source = candidates[index].path, candidates[index].path
@@ -991,11 +1083,29 @@ func followFileCandidatesWithLimits(key, active, filter string, cur *logCursor, 
 	if err != nil {
 		return nil, false, err
 	}
-	raw, offset, more, dropped, err := readFileChunkFromFileLimit(f, next.Offset, maxBytes, maxLines)
-	if err != nil {
-		return nil, false, err
+	var raw []string
+	var more bool
+	if next.SkipPartial {
+		offset, complete, hasMore, skipErr := skipPartialLogLine(f, next.Offset, maxBytes)
+		if skipErr != nil {
+			return nil, false, skipErr
+		}
+		consumed := offset - next.Offset
+		next.Offset, next.SkipPartial, more = offset, !complete, hasMore
+		maxBytes -= int(consumed)
 	}
-	next.Offset = offset
+	if !next.SkipPartial && maxBytes > 0 {
+		var offset int64
+		var skipPartial bool
+		var readDropped uint64
+		raw, offset, more, readDropped, skipPartial, err = readFileChunkFromFileLimit(f, next.Offset, maxBytes, maxLines)
+		if err != nil {
+			return nil, false, err
+		}
+		dropped += readDropped
+		next.Offset = offset
+		next.SkipPartial = skipPartial
+	}
 	if err := setFileIdentity(&next, f); err != nil {
 		return nil, false, err
 	}
@@ -1007,15 +1117,19 @@ func followFileCandidatesWithLimits(key, active, filter string, cur *logCursor, 
 		if after.Size() > before.Size() {
 			more = true
 		} else {
-			if after.Size() > next.Offset {
-				log.Printf("robin-agent: warning: incomplete trailing log line in %s was skipped during rotation", source)
+			skipPartial := next.SkipPartial || after.Size() > next.Offset
+			if skipPartial {
+				if !next.SkipPartial {
+					dropped++
+				}
+				log.Printf("robin-agent: warning: discarding an incomplete log line and its possible continuation during rotation of %s", source)
 			}
 			candidate := candidates[index+1]
 			nextFile, err := openCandidate(candidate)
 			if err != nil {
 				return nil, false, err
 			}
-			next = logCursor{Key: key, Source: candidate.path, Path: candidate.path}
+			next = logCursor{Key: key, Source: candidate.path, Path: candidate.path, SkipPartial: skipPartial}
 			err = setFileIdentity(&next, nextFile)
 			_ = nextFile.Close()
 			if err != nil {
@@ -1025,7 +1139,7 @@ func followFileCandidatesWithLimits(key, active, filter string, cur *logCursor, 
 		}
 	}
 	lines, times := filterLines(raw, lineTimes(raw, time.Now()), filter)
-	return &logBatch{Source: source, Lines: lines, Times: times, Next: next, InputDropped: dropped}, more, nil
+	return &logBatch{Source: source, Lines: lines, Times: times, Next: next, Discontinuity: discontinuity, InputDropped: dropped}, more, nil
 }
 
 func sameLogFile(f *os.File, cur *logCursor, ignoreIdentity bool) (bool, error) {
@@ -1084,39 +1198,70 @@ func fileFingerprint(f *os.File, n int64) (string, int64, error) {
 // of a file and the offset just past the last complete line. If the read
 // started mid-line, the leading partial line is dropped.
 func tailFile(f *os.File, n int, filter string) ([]string, int64, error) {
-	return tailFileLimit(f, n, filter, logTailMaxBytes)
+	lines, end, _, _, err := tailFileLimit(f, n, filter, logTailMaxBytes)
+	return lines, end, err
 }
 
-func tailFileLimit(f *os.File, n int, filter string, maxBytes int) ([]string, int64, error) {
+func tailFileLimit(f *os.File, n int, filter string, maxBytes int) ([]string, int64, bool, uint64, error) {
 	fi, err := f.Stat()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, 0, err
 	}
 	start := max(0, fi.Size()-int64(max(1, maxBytes)))
+	partial := false
+	if start > 0 {
+		var before [1]byte
+		if _, err := f.ReadAt(before[:], start-1); err != nil {
+			return nil, 0, false, 0, err
+		}
+		partial = before[0] != '\n'
+	}
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return nil, 0, err
+		return nil, 0, false, 0, err
 	}
 	data, err := io.ReadAll(io.LimitReader(f, fi.Size()-start))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, 0, err
+	}
+	var dropped uint64
+	if partial {
+		dropped = 1
 	}
 	end := bytes.LastIndexByte(data, '\n')
 	if end < 0 {
-		return nil, start, nil
+		return nil, start, partial, dropped, nil
 	}
 	lines := splitLines(data[:end])
-	if start > 0 && len(lines) > 0 {
+	if partial && len(lines) > 0 {
 		lines = lines[1:]
 	}
 	lines, _ = filterLines(lines, nil, filter)
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
-	return lines, start + int64(end) + 1, nil
+	return lines, start + int64(end) + 1, false, dropped, nil
+}
+
+func skipPartialLogLine(f *os.File, offset int64, maxBytes int) (int64, bool, bool, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return offset, false, false, err
+	}
+	size := min(max(0, fi.Size()-offset), int64(max(1, maxBytes)))
+	data := make([]byte, size)
+	if _, err := f.ReadAt(data, offset); err != nil && err != io.EOF {
+		return offset, false, false, err
+	}
+	if end := bytes.IndexByte(data, '\n'); end >= 0 {
+		next := offset + int64(end) + 1
+		return next, true, next < fi.Size(), nil
+	}
+	next := offset + int64(len(data))
+	return next, false, next < fi.Size(), nil
 }
 
 // readFileChunk returns complete lines and the position after them without
-// advancing over unread backlog. A long line is truncated but consumed whole.
+// advancing over unread backlog.
 func readFileChunk(path string, offset int64) (lines []string, next int64, more bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1127,14 +1272,14 @@ func readFileChunk(path string, offset int64) (lines []string, next int64, more 
 }
 
 func readFileChunkFromFile(f *os.File, offset int64) (lines []string, next int64, more bool, err error) {
-	lines, next, more, _, err = readFileChunkFromFileLimit(f, offset, logBatchMaxBytes, logBatchMaxLines)
+	lines, next, more, _, _, err = readFileChunkFromFileLimit(f, offset, logBatchMaxBytes, logBatchMaxLines)
 	return
 }
 
-func readFileChunkFromFileLimit(f *os.File, offset int64, maxBytes, maxLines int) (lines []string, next int64, more bool, dropped uint64, err error) {
+func readFileChunkFromFileLimit(f *os.File, offset int64, maxBytes, maxLines int) (lines []string, next int64, more bool, dropped uint64, skipPartial bool, err error) {
 	fi, err := f.Stat()
 	if err != nil {
-		return nil, offset, false, 0, err
+		return nil, offset, false, 0, false, err
 	}
 	maxBytes, maxLines = max(1, maxBytes), max(1, maxLines)
 	size := fi.Size()
@@ -1143,11 +1288,11 @@ func readFileChunkFromFileLimit(f *os.File, offset int64, maxBytes, maxLines int
 	}
 	want := min(size-offset, int64(maxBytes))
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, offset, false, 0, err
+		return nil, offset, false, 0, false, err
 	}
 	data := make([]byte, want)
 	if _, err := io.ReadFull(f, data); err != nil {
-		return nil, offset, false, 0, err
+		return nil, offset, false, 0, false, err
 	}
 	end := bytes.LastIndexByte(data, '\n')
 	switch {
@@ -1155,9 +1300,9 @@ func readFileChunkFromFileLimit(f *os.File, offset int64, maxBytes, maxLines int
 		data = data[:end+1]
 	case want == int64(maxBytes):
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			return nil, offset, false, 0, err
+			return nil, offset, false, 0, false, err
 		}
-		reader := bufio.NewReaderSize(f, logLineMaxBytes)
+		reader := bufio.NewReaderSize(io.LimitReader(f, size-offset), logLineMaxBytes)
 		var line []byte
 		var consumed int64
 		for {
@@ -1166,24 +1311,28 @@ func readFileChunkFromFileLimit(f *os.File, offset int64, maxBytes, maxLines int
 			if room := logRawEntryMaxBytes + 1 - len(line); room > 0 {
 				line = append(line, part[:min(len(part), room)]...)
 			}
+			if len(line) > logRawEntryMaxBytes {
+				if readErr != nil && !errors.Is(readErr, bufio.ErrBufferFull) && !errors.Is(readErr, io.EOF) {
+					return nil, offset, false, 0, false, readErr
+				}
+				log.Printf("robin-agent: warning: discarded a log line exceeding the bounded input limit")
+				next = offset + consumed
+				return nil, next, next < size, 1, readErr != nil, nil
+			}
 			if errors.Is(readErr, bufio.ErrBufferFull) {
 				continue
 			}
 			if errors.Is(readErr, io.EOF) {
-				return nil, offset, false, 0, nil
+				return nil, offset, false, 0, false, nil
 			}
 			if readErr != nil {
-				return nil, offset, false, 0, readErr
+				return nil, offset, false, 0, false, readErr
 			}
 			next = offset + consumed
-			if len(line) > logRawEntryMaxBytes {
-				log.Printf("robin-agent: warning: discarded a log line exceeding the bounded input limit")
-				return nil, next, next < size, 1, nil
-			}
-			return []string{string(bytes.TrimRight(line, "\r\n"))}, next, next < size, 0, nil
+			return []string{string(bytes.TrimRight(line, "\r\n"))}, next, next < size, 0, false, nil
 		}
 	default:
-		return nil, offset, false, 0, nil // no complete line yet
+		return nil, offset, false, 0, false, nil // no complete line yet
 	}
 	limited := false
 	for i, count := 0, 0; i < len(data); i++ {
@@ -1197,7 +1346,7 @@ func readFileChunkFromFileLimit(f *os.File, offset int64, maxBytes, maxLines int
 	}
 	lines = splitLines(bytes.TrimSuffix(data, []byte("\n")))
 	next = offset + int64(len(data))
-	return lines, next, next < size && (limited || want == int64(maxBytes)), 0, nil
+	return lines, next, next < size && (limited || want == int64(maxBytes)), 0, false, nil
 }
 
 func splitLines(data []byte) []string {

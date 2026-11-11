@@ -2,13 +2,84 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestDeferredLogRateWindowConfigurationChanges(t *testing.T) {
+	for _, change := range []string{"mask", "filter", "disable"} {
+		t.Run(change, func(t *testing.T) {
+			cfg := logPipelineConfig{rate: 1, burst: 2, minimumLevel: -1}
+			now := time.Now()
+			state := logPipelineState{
+				logStreamState: logStreamState{HeldOpen: true, HeldRateWindow: 1},
+				rateWindow:     1,
+			}
+			out, state, counters := finishLogRateWindows([]logEntry{{line: "DEBUG deferred", rawLines: 1}}, cfg, state, logCounters{}, now)
+			if len(out) != 0 || len(state.RateWindows) != 1 {
+				t.Fatalf("entry was not deferred: %+v %+v", out, state)
+			}
+			state.rateWindow = 2
+			if change != "disable" {
+				state.HeldOpen = false
+			}
+			switch change {
+			case "mask":
+				cfg.authMask = true
+			case "filter":
+				cfg.exclude = []logPattern{{text: "deferred"}}
+			case "disable":
+				cfg.rate = 0
+			}
+			out, state, counters = finishLogRateWindows(nil, cfg, state, counters, now.Add(time.Second))
+			if len(state.RateWindows) != 0 {
+				t.Fatal("completed or disabled window was not drained")
+			}
+			switch change {
+			case "mask":
+				if len(out) != 1 || out[0].line != "[REDACTED]" {
+					t.Fatalf("changed mask exposed stale output: %+v", out)
+				}
+			case "filter":
+				if len(out) != 0 || counters.Excluded != 1 {
+					t.Fatalf("changed filter retained stale output: %+v %+v", out, counters)
+				}
+			case "disable":
+				state.rateWindow = 3
+				out, _, _ = finishLogRateWindows([]logEntry{{line: "ERROR completed", rateWindow: 1}}, cfg, state, counters, now.Add(2*time.Second))
+				if len(out) != 1 || out[0].line != "ERROR completed" {
+					t.Fatalf("entry from a drained window was lost: %+v", out)
+				}
+			}
+		})
+	}
+}
+
+func TestDeferredLogRateWindowBufferIsBounded(t *testing.T) {
+	cfg := logPipelineConfig{rate: 1, burst: 2, minimumLevel: -1}
+	state := logPipelineState{
+		logStreamState: logStreamState{HeldOpen: true, HeldRateWindow: 1},
+		rateWindow:     1,
+	}
+	line := strings.Repeat("x", 64<<10)
+	entries := make([]logEntry, 257)
+	for i := range entries {
+		entries[i] = logEntry{line: line, rawLines: 1}
+	}
+	out, state, counters := finishLogRateWindows(entries, cfg, state, logCounters{}, time.Now())
+	if len(out) != 0 || len(state.RateWindows) != 1 || len(state.RateWindows[0].Entries) != 256 ||
+		counters.RateLimited != 1 || state.PendingRateDrops != 1 {
+		t.Fatalf("deferred buffer cap did not account for overflow: windows=%d counters=%+v", len(state.RateWindows), counters)
+	}
+}
 
 func TestLogPipelineStripsANSIAndExcludeOverridesInclude(t *testing.T) {
 	cfg := logPipelineConfig{
@@ -82,6 +153,51 @@ func TestLogPipelineMasksAuthCredentialsByDefault(t *testing.T) {
 	}
 	if !strings.Contains(output, "AUTH PLAIN [REDACTED]") || !strings.Contains(output, "LOGIN [REDACTED] [REDACTED]") {
 		t.Fatalf("default authentication masking was not applied: %s", output)
+	}
+}
+
+func TestIMAPLoginMasksEscapedQuotedCredentials(t *testing.T) {
+	cfg, err := loadLogPipelineConfig("rspamd", "imap-quotes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := []string{
+		`a LOGIN alice unquoted-secret`,
+		`b LOGIN "alice smith" "quoted secret"`,
+		`c LOGIN "ali\"ce" "prefix\"escaped-secret"`,
+		`d LOGIN "ali\\ce" "prefix\\backslash-secret"`,
+	}
+	lines, _, _, _ := applyLogPipeline(input, nil, cfg, logPipelineState{}, logCounters{}, time.Now())
+	if len(lines) != len(input) {
+		t.Fatalf("unexpected IMAP output: %q", lines)
+	}
+	for _, line := range lines {
+		if !strings.Contains(line, "LOGIN [REDACTED] [REDACTED]") || strings.Contains(line, "secret") {
+			t.Fatalf("IMAP credentials were not fully masked: %q", line)
+		}
+	}
+}
+
+func TestCredentialMasksHandleIncompleteAndEscapedQuotedValues(t *testing.T) {
+	cfg, err := loadLogPipelineConfig("rspamd", "incomplete-quotes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := []string{
+		`password="prefix hidden-one`,
+		`password='prefix hidden-two`,
+		`password='prefix\' hidden-three'`,
+		`{"password":"prefix hidden-four}`,
+		`a LOGIN "alice first hidden-five`,
+		`b LOGIN alice "prefix hidden-six`,
+		`c LOGIN hidden-seven`,
+	}
+	lines, _, _, _ := applyLogPipeline(input, nil, cfg, logPipelineState{}, logCounters{}, time.Now())
+	text := strings.Join(lines, "\n")
+	for _, secret := range []string{"hidden-one", "hidden-two", "hidden-three", "hidden-four", "hidden-five", "hidden-six", "hidden-seven"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("incomplete or escaped credential leaked %q: %q", secret, lines)
+		}
 	}
 }
 
@@ -178,7 +294,7 @@ func TestMultilineCapDoesNotBypassRawExclusion(t *testing.T) {
 		"  last continuation",
 		"2026-11-10T14:15:26Z INFO next",
 	}, nil, cfg, logPipelineState{}, logCounters{}, time.Now())
-	if len(lines) != 0 || counters.Excluded != 1 {
+	if len(lines) != 0 || counters.Excluded != 4 {
 		t.Fatalf("capped excluded entry or continuation escaped: %q %+v", lines, counters)
 	}
 }
@@ -296,7 +412,7 @@ func TestOversizedMultilineEntryIsDiscardedWithoutFilters(t *testing.T) {
 		"2026-11-10T14:15:25Z INFO " + strings.Repeat("x", logRawEntryMaxBytes),
 		"2026-11-10T14:15:26Z INFO next",
 	}, nil, cfg, logPipelineState{}, logCounters{}, time.Now())
-	if len(lines) != 0 || counters.Excluded != 1 {
+	if len(lines) != 0 || counters.Excluded != 1 || counters.Truncated != 1 {
 		t.Fatalf("oversized entry was not safely discarded: %q %+v", lines, counters)
 	}
 }
@@ -344,6 +460,30 @@ func TestDefaultMasksHandleUnicodeAndEarlierReplacements(t *testing.T) {
 	if len(lines) != 2 || strings.Contains(strings.Join(lines, "\n"), "unicode-secret") ||
 		lines[1] != "password=[REDACTED]" || counters.Masked != 2 {
 		t.Fatalf("default masking missed or double-counted a credential: %q %+v", lines, counters)
+	}
+}
+
+func TestCustomMasksCannotBypassBuiltInCredentialMasking(t *testing.T) {
+	tests := []struct {
+		name, rule, input, secret string
+	}{
+		{"credential", `password=>renamed`, "password=private-value", "private-value"},
+		{"authorization", `Authorization=>Header`, "Authorization: Basic private-value", "private-value"},
+		{"smtp auth", `AUTH=>COMMAND`, "AUTH PLAIN cHJpdmF0ZS12YWx1ZQ==", "cHJpdmF0ZS12YWx1ZQ=="},
+		{"imap login", `LOGIN=>CONNECT`, "a LOGIN alice private-value", "private-value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ROBIN_AGENT_RSPAMD_LOG_MASK", tt.rule)
+			cfg, err := loadLogPipelineConfig("rspamd", "mask-order")
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines, _, _, _ := applyLogPipeline([]string{tt.input}, nil, cfg, logPipelineState{}, logCounters{}, time.Now())
+			if len(lines) != 1 || strings.Contains(lines[0], tt.secret) {
+				t.Fatalf("custom mask bypassed built-in credential masking: %q", lines)
+			}
+		})
 	}
 }
 
@@ -521,6 +661,31 @@ func TestLogPipelineMergesEntryAcrossBatchBoundary(t *testing.T) {
 	}
 }
 
+func TestLogPipelineKeepsHeldEntryWhileBacklogRemains(t *testing.T) {
+	cfg := logPipelineConfig{
+		minimumLevel: -1,
+		entryStart:   regexp.MustCompile(`^START`),
+		entryLines:   10,
+		entryBytes:   4096,
+	}
+	now := time.Now()
+	_, state, counters := processLogPipelineWithHistory(
+		[]string{"START ERROR failed"}, nil, []string{"worker"}, nil, false,
+		cfg, logPipelineState{}, logCounters{}, now, true, nil)
+	entries, state, counters := processLogPipelineWithHistory(
+		[]string{"INFO other"}, nil, []string{"other"}, nil, false,
+		cfg, state, counters, now.Add(3*time.Second), true, nil)
+	if len(entries) != 1 || entries[0].line != "INFO other" || !state.Streams["worker"].HeldOpen {
+		t.Fatalf("an entry timed out while unread records remained: %+v", entries)
+	}
+	entries, _, _ = processLogPipelineWithHistory(
+		[]string{"  at worker.rb:42", "START INFO recovered"}, nil,
+		[]string{"worker", "worker"}, nil, false, cfg, state, counters, now.Add(4*time.Second), false, nil)
+	if len(entries) != 1 || entries[0].line != "START ERROR failed\n  at worker.rb:42" {
+		t.Fatalf("continuation was split from its held entry: %+v", entries)
+	}
+}
+
 func TestLogPipelineRateLimitKeepsHighestSeverityAndSummarizes(t *testing.T) {
 	cfg := logPipelineConfig{
 		rate:         2,
@@ -539,6 +704,54 @@ func TestLogPipelineRateLimitKeepsHighestSeverityAndSummarizes(t *testing.T) {
 	if len(lines) != 3 || lines[0] != "ERROR e" || lines[1] != "FATAL f" ||
 		!strings.Contains(lines[2], "3 lines dropped by rate limit") || counters.RateLimited != 3 {
 		t.Fatalf("rate limiter did not prefer severity and summarize: lines=%q counters=%+v", lines, counters)
+	}
+}
+
+func TestRateLimitUsesSeverityBeforeMaskingAndTruncation(t *testing.T) {
+	tests := []struct {
+		name       string
+		lines      []string
+		mask       *logMaskRule
+		entryBytes int
+		want       string
+	}{
+		{
+			name:  "mask hides error",
+			lines: []string{"DEBUG low", "ERROR high"},
+			mask:  &logMaskRule{pattern: regexp.MustCompile(`ERROR`), replacement: "REDACTED"},
+			want:  "REDACTED high",
+		},
+		{
+			name:  "mask introduces error",
+			lines: []string{"DEBUG low", "WARN high"},
+			mask:  &logMaskRule{pattern: regexp.MustCompile(`DEBUG`), replacement: "ERROR"},
+			want:  "WARN high",
+		},
+		{
+			name:       "truncation hides error",
+			lines:      []string{"DEBUG low", "long-prefix ERROR high"},
+			entryBytes: 12,
+			want:       "long-prefix ",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := logPipelineConfig{
+				rate: 1, burst: 1, minimumLevel: -1,
+				entryStart: regexp.MustCompile(`^START`),
+				entryLines: 10, entryBytes: 4096,
+			}
+			if tt.mask != nil {
+				cfg.masks, cfg.customMaskCount = []logMaskRule{*tt.mask}, 1
+			}
+			if tt.entryBytes > 0 {
+				cfg.entryBytes = tt.entryBytes
+			}
+			lines, _, _, counters := applyLogPipeline(tt.lines, nil, cfg, logPipelineState{}, logCounters{}, time.Now())
+			if len(lines) != 2 || lines[0] != tt.want || counters.RateLimited != 1 {
+				t.Fatalf("rate priority did not use the original severity: lines=%q counters=%+v", lines, counters)
+			}
+		})
 	}
 }
 
@@ -589,6 +802,322 @@ func TestRateLimitAccountsForTheCollectionWindow(t *testing.T) {
 	if len(got) != len(lines) || counters.RateLimited != 0 {
 		t.Fatalf("untimestamped sustained traffic was limited to one burst: %d / %d, %+v", len(got), len(lines), counters)
 	}
+}
+
+func TestRateLimitCapsCreditAfterIdleAndPreservesPriority(t *testing.T) {
+	cfg := logPipelineConfig{
+		rate: 200, burst: 400, minimumLevel: -1,
+		entryStart: regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`),
+		entryLines: 10, entryBytes: 4096,
+	}
+	start := time.Now().UTC().Truncate(time.Second)
+	now := start.Add(30 * time.Second)
+	lines := []string{"DEBUG before idle"}
+	times := []string{start.Format(time.RFC3339Nano)}
+	for range 400 {
+		lines, times = append(lines, "WARN spike"), append(times, now.Format(time.RFC3339Nano))
+	}
+	for range 600 {
+		lines, times = append(lines, "DEBUG spike"), append(times, now.Format(time.RFC3339Nano))
+	}
+	got, _, state, counters := applyLogPipeline(lines, times, cfg,
+		logPipelineState{Tokens: 400, LastRefill: start}, logCounters{}, now)
+	output := strings.Join(got, "\n")
+	if len(got) != 402 || counters.RateLimited != 600 ||
+		strings.Count(output, "WARN spike") != 400 ||
+		strings.Count(output, "DEBUG before idle") != 1 ||
+		strings.Contains(output, "DEBUG spike") ||
+		!strings.Contains(output, "600 lines dropped by rate limit") {
+		t.Fatalf("idle credit exceeded the burst or displaced warnings: %d lines, %+v", len(got), counters)
+	}
+	got, _, state, counters = applyLogPipeline([]string{"WARN immediate"}, []string{now.Format(time.RFC3339Nano)},
+		cfg, state, counters, now)
+	if len(got) != 0 || counters.RateLimited != 601 {
+		t.Fatalf("subsequent call reused spent tokens: %q %+v", got, counters)
+	}
+	later := now.Add(time.Second)
+	got, _, _, counters = applyLogPipeline([]string{"WARN recovered"}, []string{later.Format(time.RFC3339Nano)},
+		cfg, state, counters, later)
+	if !strings.Contains(strings.Join(got, "\n"), "WARN recovered") || counters.RateLimited != 601 {
+		t.Fatalf("rate limiter did not refill after the spike: %q %+v", got, counters)
+	}
+}
+
+func TestRateLimitHandlesFractionalRefills(t *testing.T) {
+	cfg := logPipelineConfig{rate: 0.5, burst: 2}
+	start := time.Now().UTC().Truncate(time.Second)
+	entries := []logEntry{
+		{line: "INFO first", time: start.Format(time.RFC3339Nano)},
+		{line: "INFO too soon", time: start.Add(time.Second).Format(time.RFC3339Nano)},
+		{line: "WARN second", time: start.Add(2 * time.Second).Format(time.RFC3339Nano)},
+		{line: "WARN third", time: start.Add(4 * time.Second).Format(time.RFC3339Nano)},
+	}
+	out, state, counters := limitLogEntries(entries, cfg,
+		logPipelineState{Tokens: 1, LastRefill: start}, logCounters{}, start.Add(4*time.Second))
+	if len(out) != 4 || counters.RateLimited != 1 || state.Tokens != 0 ||
+		!strings.HasPrefix(out[0].line, "INFO ") || out[1].line != "WARN second" || out[2].line != "WARN third" {
+		t.Fatalf("fractional token bucket selected invalid entries: %+v %+v %+v", out, state, counters)
+	}
+}
+
+func TestRateLimitCountsMultilineEntriesWithoutSplittingThem(t *testing.T) {
+	cfg := logPipelineConfig{rate: 1, burst: 2}
+	now := time.Now().UTC().Truncate(time.Second)
+	entries := []logEntry{
+		{line: "INFO lower priority", time: now.Format(time.RFC3339Nano)},
+		{line: "WARN stack trace\n  at worker.rb:42", time: now.Format(time.RFC3339Nano)},
+	}
+	out, state, counters := limitLogEntries(entries, cfg, logPipelineState{}, logCounters{}, now)
+	if len(out) != 2 || out[0].line != entries[1].line || state.Tokens != 0 ||
+		counters.RateLimited != 1 || !strings.Contains(out[1].line, "1 lines dropped by rate limit") {
+		t.Fatalf("multiline entries did not consume their full line budget: %+v %+v %+v", out, state, counters)
+	}
+	_, _, shipped := shippedLogEntries(out, counters)
+	if shipped.Shipped != 3 {
+		t.Fatalf("multiline output was not counted as physical lines: %+v", shipped)
+	}
+
+	entries[1].line += "\n  at caller.rb:8"
+	out, _, counters = limitLogEntries(entries, cfg, logPipelineState{}, logCounters{}, now)
+	if len(out) != 2 || out[0].line != entries[0].line || counters.RateLimited != 3 ||
+		!strings.Contains(out[1].line, "3 lines dropped by rate limit") {
+		t.Fatalf("oversized multiline entry was split or miscounted: %+v %+v", out, counters)
+	}
+}
+
+func TestRateLimitHandlesLargeBurstWithoutInventingTokens(t *testing.T) {
+	cfg := logPipelineConfig{rate: 0.5, burst: 1e20}
+	start := time.Now().UTC().Truncate(time.Second)
+	entries := []logEntry{
+		{line: "WARN before refill", time: start.Format(time.RFC3339Nano)},
+		{line: "DEBUG before refill", time: start.Add(time.Second).Format(time.RFC3339Nano)},
+	}
+	out, state, counters := limitLogEntries(entries, cfg,
+		logPipelineState{Tokens: 0, LastRefill: start}, logCounters{}, start.Add(time.Second))
+	if len(out) != 1 || !strings.Contains(out[0].line, "2 lines dropped by rate limit") ||
+		state.Tokens != 0.5 || counters.RateLimited != 2 {
+		t.Fatalf("large burst created tokens that had not refilled: %+v %+v %+v", out, state, counters)
+	}
+}
+
+func TestLogPipelineCountsExcludedMultilineEntries(t *testing.T) {
+	cfg := logPipelineConfig{
+		exclude:      []logPattern{{text: "drop"}},
+		minimumLevel: -1,
+		entryStart:   regexp.MustCompile(`^START`),
+		entryLines:   10,
+		entryBytes:   4096,
+	}
+	_, _, _, counters := applyLogPipeline(
+		[]string{"START drop", "  trace", "START keep"}, nil,
+		cfg, logPipelineState{}, logCounters{}, time.Now())
+	if counters.Read != 3 || counters.Excluded != 2 {
+		t.Fatalf("excluded multiline entry was not counted by line: %+v", counters)
+	}
+}
+
+func TestRateLimitPreservesLowerPriorityWhenHigherPriorityCanMove(t *testing.T) {
+	cfg := logPipelineConfig{rate: 0.25, burst: 2}
+	start := time.Now().UTC().Truncate(time.Second)
+	offsets := []int{0, 2, 4, 5, 5, 5, 8, 9, 10}
+	levels := []string{"INFO", "WARN", "INFO", "INFO", "WARN", "WARN", "INFO", "DEBUG", "DEBUG"}
+	entries := make([]logEntry, len(offsets))
+	for i, offset := range offsets {
+		entries[i] = logEntry{
+			line: fmt.Sprintf("%s item-%d", levels[i], i),
+			time: start.Add(time.Duration(offset) * time.Second).Format(time.RFC3339Nano),
+		}
+	}
+	out, _, counters := limitLogEntries(entries, cfg,
+		logPipelineState{Tokens: 1, LastRefill: start}, logCounters{}, start.Add(10*time.Second))
+	var warnings, infos, debug int
+	for _, entry := range out {
+		switch {
+		case strings.HasPrefix(entry.line, "WARN "):
+			warnings++
+		case strings.HasPrefix(entry.line, "INFO "):
+			infos++
+		case strings.HasPrefix(entry.line, "DEBUG "):
+			debug++
+		}
+	}
+	if warnings != 2 || infos != 1 || debug != 0 || counters.RateLimited != 6 {
+		t.Fatalf("severity priority lost a feasible INFO entry: %+v, %+v", out, counters)
+	}
+}
+
+func TestRateLimitMaximizesSeverityPriority(t *testing.T) {
+	random := rand.New(rand.NewSource(108))
+	start := time.Now().UTC().Truncate(time.Second)
+	levels := []string{"DEBUG", "INFO", "WARN", "ERROR"}
+	for scenario := 0; scenario < 250; scenario++ {
+		cfg := logPipelineConfig{
+			rate:  []float64{0.25, 0.5, 1, 2.5}[random.Intn(4)],
+			burst: []float64{1, 1.5, 2, 3}[random.Intn(4)],
+		}
+		initial := float64(random.Intn(int(cfg.burst*4)+1)) / 4
+		offsets := make([]int, 9)
+		for i := range offsets {
+			offsets[i] = random.Intn(41)
+		}
+		sort.Ints(offsets)
+		entries := make([]logEntry, len(offsets))
+		for i, offset := range offsets {
+			entries[i] = logEntry{
+				line: fmt.Sprintf("%s item-%d%s", levels[random.Intn(len(levels))], i, strings.Repeat("\n  trace", random.Intn(3))),
+				time: start.Add(time.Duration(offset) * 250 * time.Millisecond).Format(time.RFC3339Nano),
+			}
+		}
+		type counts [6]int
+		compare := func(a, b counts) int {
+			for i := range a {
+				if a[i] != b[i] {
+					return a[i] - b[i]
+				}
+			}
+			return 0
+		}
+		var best counts
+		for mask := 0; mask < 1<<len(entries); mask++ {
+			tokens, last, possible := initial, start, true
+			var score counts
+			for i, entry := range entries {
+				at, err := time.Parse(time.RFC3339Nano, entry.time)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tokens = minFloat(cfg.burst, tokens+at.Sub(last).Seconds()*cfg.rate)
+				last = at
+				if mask&(1<<i) != 0 {
+					cost := logLineCount(entry.line)
+					if tokens < float64(cost)-1e-9 {
+						possible = false
+						break
+					}
+					tokens -= float64(cost)
+					score[4-severityRank(entry.line)] += cost
+				}
+			}
+			if possible && compare(score, best) > 0 {
+				best = score
+			}
+		}
+		out, _, _ := limitLogEntries(entries, cfg,
+			logPipelineState{Tokens: initial, LastRefill: start}, logCounters{}, start.Add(10*time.Second))
+		var got counts
+		for _, entry := range out {
+			if strings.Contains(entry.line, " item-") {
+				got[4-severityRank(entry.line)] += logLineCount(entry.line)
+			}
+		}
+		if got != best {
+			t.Fatalf("scenario %d did not maximize priority: got %v, want %v; entries=%+v, initial=%v, cfg=%+v",
+				scenario, got, best, entries, initial, cfg)
+		}
+	}
+}
+
+func TestRateLimitReconstructsSelectionsAcrossCheckpoints(t *testing.T) {
+	cfg := logPipelineConfig{rate: 2.5, burst: 2}
+	start := time.Now().UTC().Truncate(time.Second)
+	offsets := []time.Duration{0, 200, 400, 500, 500, 500, 800, 900, 1000}
+	levels := []string{"INFO", "WARN", "INFO", "INFO", "WARN", "WARN", "INFO", "DEBUG", "DEBUG"}
+	var entries []logEntry
+	for group := range 15 {
+		for i, offset := range offsets {
+			entries = append(entries, logEntry{
+				line: fmt.Sprintf("%s item-%d-%d", levels[i], group, i),
+				time: start.Add(time.Duration(group)*2*time.Second + offset*time.Millisecond).Format(time.RFC3339Nano),
+			})
+		}
+	}
+	out, _, counters := limitLogEntries(entries, cfg,
+		logPipelineState{Tokens: 2, LastRefill: start}, logCounters{}, start.Add(29*time.Second))
+	var warnings, infos, debug int
+	for _, entry := range out {
+		switch {
+		case strings.HasPrefix(entry.line, "WARN "):
+			warnings++
+		case strings.HasPrefix(entry.line, "INFO "):
+			infos++
+		case strings.HasPrefix(entry.line, "DEBUG "):
+			debug++
+		}
+	}
+	if warnings != 30 || infos != 30 || debug != 0 || counters.RateLimited != 75 {
+		t.Fatalf("checkpoint reconstruction changed the optimal selection: warn=%d info=%d debug=%d, %+v",
+			warnings, infos, debug, counters)
+	}
+}
+
+func TestRateLimitSelectedEntriesObeyTokenBucket(t *testing.T) {
+	random := rand.New(rand.NewSource(42))
+	start := time.Now().UTC().Truncate(time.Second)
+	now := start.Add(30 * time.Second)
+	for scenario := 0; scenario < 200; scenario++ {
+		cfg := logPipelineConfig{
+			rate:  []float64{0.25, 0.5, 1, 2.5}[random.Intn(4)],
+			burst: float64(1 + random.Intn(4)),
+		}
+		initial := float64(random.Intn(int(cfg.burst*4)+1)) / 4
+		offsets := make([]int, 20)
+		for i := range offsets {
+			offsets[i] = random.Intn(30001)
+		}
+		sort.Ints(offsets)
+		entries := make([]logEntry, len(offsets))
+		for i, offset := range offsets {
+			level := []string{"DEBUG", "INFO", "WARN", "ERROR"}[random.Intn(4)]
+			entries[i] = logEntry{
+				line: fmt.Sprintf("%s item-%d", level, i),
+				time: start.Add(time.Duration(offset) * time.Millisecond).Format(time.RFC3339Nano),
+			}
+		}
+		out, state, _ := limitLogEntries(entries, cfg, logPipelineState{Tokens: initial, LastRefill: start}, logCounters{}, now)
+		kept := make(map[string]bool, len(out))
+		for _, entry := range out {
+			kept[entry.line] = true
+		}
+		tokens, last := initial, start
+		for _, entry := range entries {
+			at, err := time.Parse(time.RFC3339Nano, entry.time)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tokens = minFloat(cfg.burst, tokens+at.Sub(last).Seconds()*cfg.rate)
+			last = at
+			if kept[entry.line] {
+				if tokens < 1-1e-8 {
+					t.Fatalf("scenario %d exceeded its burst at %s: %v tokens", scenario, entry.line, tokens)
+				}
+				tokens--
+			}
+		}
+		tokens = minFloat(cfg.burst, tokens+now.Sub(last).Seconds()*cfg.rate)
+		if math.Abs(tokens-state.Tokens) > 1e-7 {
+			t.Fatalf("scenario %d retained %v tokens, expected %v", scenario, state.Tokens, tokens)
+		}
+	}
+}
+
+func BenchmarkLogRateLimitOverBudget(b *testing.B) {
+	start := time.Date(2026, 11, 10, 14, 15, 25, 0, time.UTC)
+	entries := make([]logEntry, 15000)
+	levels := []string{"DEBUG", "INFO", "WARN", "ERROR"}
+	for i := range entries {
+		entries[i] = logEntry{
+			line: levels[i%len(levels)] + " fixture",
+			time: start.Add(time.Duration(i) * 2 * time.Millisecond).Format(time.RFC3339Nano),
+		}
+	}
+	cfg := logPipelineConfig{rate: 200, burst: 400}
+	initial := logPipelineState{Tokens: 400, LastRefill: start}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		limitLogEntries(entries, cfg, initial, logCounters{}, start.Add(30*time.Second))
+	}
+	b.ReportMetric(500, "lines/s")
 }
 
 func BenchmarkLogPipelinePostalFixtures500LinesPerSecond(b *testing.B) {

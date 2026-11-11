@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -14,10 +15,13 @@ import (
 )
 
 type dockerLogLine struct {
-	id   string
-	name string
-	line string
-	at   time.Time
+	id         string
+	name       string
+	stream     string
+	line       string
+	at         time.Time
+	historical bool
+	redacted   bool
 }
 
 type dockerInspectInfo struct {
@@ -26,11 +30,22 @@ type dockerInspectInfo struct {
 	LogPath string
 	Driver  string
 	Created time.Time
+	Options map[string]string
+}
+
+// Reuse a Docker discovery snapshot only within a bounded collection window.
+type dockerDiscovery struct {
+	selector   string
+	label      string
+	containers [][2]string
+	info       map[string]dockerInspectInfo
+	ready      bool
 }
 
 type dockerJSONLogLine struct {
-	Log  string `json:"log"`
-	Time string `json:"time"`
+	Log    string `json:"log"`
+	Time   string `json:"time"`
+	Stream string `json:"stream"`
 }
 
 func dockerBinary() string {
@@ -80,23 +95,84 @@ func matchesContainerSelector(name string, selectors []string) bool {
 func inspectDockerContainer(ctx context.Context, id string) (dockerInspectInfo, error) {
 	output, err := captureProcess(ctx, []string{
 		dockerBinary(), "inspect", "--format",
-		"{{.Id}}\t{{.Name}}\t{{.LogPath}}\t{{.HostConfig.LogConfig.Type}}\t{{.Created}}", id,
+		"{{.Id}}\t{{.Name}}\t{{.LogPath}}\t{{.HostConfig.LogConfig.Type}}\t{{.Created}}\t{{json .HostConfig.LogConfig.Config}}", id,
 	}, false)
 	if err != nil {
 		return dockerInspectInfo{}, fmt.Errorf("docker inspect %s: %w", id, err)
 	}
-	fields := strings.SplitN(strings.TrimSpace(string(output)), "\t", 5)
-	if len(fields) != 5 {
+	fields := strings.SplitN(strings.TrimSpace(string(output)), "\t", 6)
+	if len(fields) != 6 {
 		return dockerInspectInfo{}, fmt.Errorf("docker inspect %s returned incomplete metadata", id)
 	}
 	created, err := time.Parse(time.RFC3339Nano, fields[4])
 	if err != nil {
 		return dockerInspectInfo{}, fmt.Errorf("parse Docker creation time for %s: %w", id, err)
 	}
+	var options map[string]string
+	if err := json.Unmarshal([]byte(fields[5]), &options); err != nil {
+		return dockerInspectInfo{}, fmt.Errorf("parse Docker log options for %s: %w", id, err)
+	}
 	return dockerInspectInfo{
 		ID: fields[0], Name: strings.TrimPrefix(fields[1], "/"),
-		LogPath: fields[2], Driver: fields[3], Created: created,
+		LogPath: fields[2], Driver: fields[3], Created: created, Options: options,
 	}, nil
+}
+
+func (discovery *dockerDiscovery) list(ctx context.Context, selector string, selectors []string, label string) ([][2]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if discovery != nil && discovery.ready && discovery.selector == selector && discovery.label == label {
+		return discovery.containers, nil
+	}
+	containers, err := listDockerContainers(ctx, selectors, label)
+	if err != nil {
+		return nil, err
+	}
+	if discovery != nil {
+		*discovery = dockerDiscovery{
+			selector: selector, label: label, containers: containers,
+			info: make(map[string]dockerInspectInfo, len(containers)), ready: true,
+		}
+	}
+	return containers, nil
+}
+
+func (discovery *dockerDiscovery) inspect(ctx context.Context, id string) (dockerInspectInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return dockerInspectInfo{}, err
+	}
+	if discovery != nil {
+		if info, ok := discovery.info[id]; ok {
+			return info, nil
+		}
+	}
+	info, err := inspectDockerContainer(ctx, id)
+	if err == nil && discovery != nil {
+		discovery.info[id] = info
+	}
+	return info, err
+}
+
+func completeDockerJSONHistory(info dockerInspectInfo, paths []string) bool {
+	if len(paths) == 0 || paths[len(paths)-1] != info.LogPath {
+		return false
+	}
+	maxSize := info.Options["max-size"]
+	if maxSize == "" || maxSize == "-1" {
+		return len(paths) == 1
+	}
+	maxFiles, err := strconv.Atoi(info.Options["max-file"])
+	if err != nil || maxFiles < 2 || len(paths) >= maxFiles ||
+		!strings.EqualFold(info.Options["compress"], "false") && info.Options["compress"] != "" {
+		return false
+	}
+	for i, number := len(paths)-2, 1; i >= 0; i, number = i-1, number+1 {
+		if paths[i] != info.LogPath+"."+strconv.Itoa(number) {
+			return false
+		}
+	}
+	return true
 }
 
 func parseContainerSelectors(value string) []string {
@@ -105,22 +181,19 @@ func parseContainerSelectors(value string) []string {
 }
 
 func followContainerSet(ctx context.Context, key, selectorText, label string, cur *logCursor) (*logBatch, bool, error) {
-	return followContainerSetWithTail(ctx, key, selectorText, label, cur, logTailLines, logTailMaxBytes)
+	return followContainerSetWithTail(ctx, key, selectorText, label, cur, logTailLines, logTailMaxBytes, nil)
 }
 
-func followContainerSetWithTail(ctx context.Context, key, selectorText, label string, cur *logCursor, tailLines, tailBytes int) (*logBatch, bool, error) {
+func followContainerSetWithTail(ctx context.Context, key, selectorText, label string, cur *logCursor, tailLines, tailBytes int, discovery *dockerDiscovery) (*logBatch, bool, error) {
 	selectors := parseContainerSelectors(selectorText)
 	for _, selector := range selectors {
 		if _, err := filepath.Match(selector, "validation"); err != nil {
 			return nil, false, fmt.Errorf("invalid Docker container pattern %q: %w", selector, err)
 		}
 	}
-	containers, err := listDockerContainers(ctx, selectors, label)
+	containers, err := discovery.list(ctx, selectorText, selectors, label)
 	if err != nil {
 		return nil, false, err
-	}
-	if len(containers) == 0 && cur == nil {
-		return nil, false, nil
 	}
 	started := time.Now()
 	reset := cur == nil
@@ -146,6 +219,7 @@ func followContainerSetWithTail(ctx context.Context, key, selectorText, label st
 		present[container[0]] = true
 	}
 	more := false
+	pendingStreams := make(map[string]bool)
 	var inputDropped uint64
 	streams := len(containers)
 	for id := range next.Containers {
@@ -166,7 +240,7 @@ func followContainerSetWithTail(ctx context.Context, key, selectorText, label st
 		id, name := container[0], container[1]
 		position, exists := next.Containers[id]
 		initialTail := false
-		info, inspectErr := inspectDockerContainer(ctx, id)
+		info, inspectErr := discovery.inspect(ctx, id)
 		if inspectErr != nil {
 			return nil, false, inspectErr
 		}
@@ -188,8 +262,11 @@ func followContainerSetWithTail(ctx context.Context, key, selectorText, label st
 			}
 		}
 		position.Name, position.Driver, position.LogPath = name, info.Driver, info.LogPath
-		var batchLines []string
-		var batchTimes []time.Time
+		if exists && len(position.Streams) == 0 && !position.Since.IsZero() {
+			log.Printf("robin-agent: warning: upgrading Docker cursor for %s without per-stream positions; equal-timestamp lines may be skipped", name)
+		}
+		position.Streams = cloneDockerStreamCursors(position.Streams, position.Since, position.Seen)
+		var batchLines []dockerLogLine
 		var batchMore bool
 		directJSON := false
 		if info.Driver == "json-file" && info.LogPath != "" {
@@ -198,14 +275,38 @@ func followContainerSetWithTail(ctx context.Context, key, selectorText, label st
 			}
 		}
 		if directJSON {
+			var paths []string
+			if position.File == nil {
+				paths, err = numberedLogFiles(info.LogPath)
+				if err != nil {
+					return nil, false, fmt.Errorf("list Docker log files for %s: %w", name, err)
+				}
+				if len(paths) == 0 {
+					return nil, false, fmt.Errorf("no readable Docker log file for %s", name)
+				}
+				if !initialTail && !exists && !reset && !legacyCursor && completeDockerJSONHistory(info, paths) {
+					for stream, cursor := range position.Streams {
+						cursor.Boundary = false
+						position.Streams[stream] = cursor
+					}
+				}
+			}
+			if position.FragmentVersion == 0 {
+				position.Partials = unknownDockerStreamBoundaries(position.Partials, position.Streams)
+				position.FragmentVersion = 1
+			}
 			fileCursor := position.File
 			if fileCursor == nil && !initialTail {
 				fileCursor = &logCursor{
-					Key: "docker-json-file:" + id, Source: info.LogPath, Path: info.LogPath,
+					Key: "docker-json-file:" + id, Source: paths[0], Path: paths[0],
 				}
 				position.ResumeSince, position.ResumeSeen = position.Since, position.Seen
 				position.ResumeSkipped, position.ResumeActive = 0, !position.Since.IsZero()
 				position.ResumeLegacy = position.DockerCursor == 0
+				for stream, cursor := range position.Streams {
+					cursor.ResumeSince, cursor.ResumeSeen, cursor.ResumeSkipped = cursor.Since, cursor.Seen, 0
+					position.Streams[stream] = cursor
+				}
 			}
 			fileBatch, fileMore, err := followFileWithTail(
 				"docker-json-file:"+id, info.LogPath, "", fileCursor, budget, lineBudget, tailLines, budget,
@@ -214,30 +315,50 @@ func followContainerSetWithTail(ctx context.Context, key, selectorText, label st
 				position.File = &fileBatch.Next
 				batchMore = fileMore
 				inputDropped += fileBatch.InputDropped
-				decoded, decodeErr := decodeDockerJSONLines(id, name, fileBatch.Lines, &position)
+				if initialTail && len(paths) == 1 && completeDockerJSONHistory(info, paths) {
+					tailStart := fileBatch.Next.Offset
+					for _, line := range fileBatch.Lines {
+						tailStart -= int64(len(line) + 1)
+					}
+					if tailStart == 0 {
+						for stream, cursor := range position.Streams {
+							cursor.Boundary = false
+							position.Streams[stream] = cursor
+							if partial, ok := position.Partials[stream]; ok && partial.Boundary && partial.Time.IsZero() {
+								delete(position.Partials, stream)
+							}
+						}
+					}
+				}
+				if fileBatch.Discontinuity || fileBatch.InputDropped > 0 {
+					inputDropped += unreportedDockerPartials(position.Partials)
+					position.Partials = unknownDockerBoundaries(nil)
+					markDockerStreamBoundaries(position.Streams)
+				}
+				decoded, dropped, decodeErr := decodeDockerJSONLines(id, name, fileBatch.Lines, &position, reset)
 				if decodeErr != nil {
 					return nil, false, decodeErr
 				}
-				for _, item := range decoded {
-					batchLines = append(batchLines, item.line)
-					batchTimes = append(batchTimes, item.at)
+				inputDropped += dropped
+				if !fileMore && !hasResumeDockerPartial(position) {
+					position.ResumeActive = false
 				}
+				batchLines = append(batchLines, decoded...)
 			} else if os.IsNotExist(err) || os.IsPermission(err) {
 				directJSON = false
 			} else {
 				return nil, false, err
 			}
 		}
-		if !directJSON && initialTail {
-			batchLines, batchTimes, _, batchMore, err = containerRead(
-				ctx, id, time.Time{}, 0, false, true,
-				"--tail", strconv.Itoa(tailLines), "robin-agent-budget="+strconv.Itoa(budget), "robin-agent-lines="+strconv.Itoa(lineBudget), "robin-agent-recent",
+		if !directJSON && activeDockerPartials(position.Partials) > 0 {
+			return nil, false, fmt.Errorf("cannot safely switch Docker container %s to docker logs while a json-file fragment is incomplete", name)
+		}
+		if !directJSON {
+			var dropped uint64
+			batchLines, batchMore, dropped, _, err = readDockerFallback(
+				ctx, id, name, &position, initialTail, reset, tailLines, budget, lineBudget,
 			)
-		} else if !directJSON {
-			batchLines, batchTimes, _, batchMore, err = containerRead(
-				ctx, id, position.Since, position.Seen, position.DockerCursor == 0, true,
-				"--since", position.Since.Format(time.RFC3339Nano), "robin-agent-budget="+strconv.Itoa(budget), "robin-agent-lines="+strconv.Itoa(lineBudget),
-			)
+			inputDropped += dropped
 		}
 		if err != nil {
 			return nil, false, err
@@ -246,27 +367,33 @@ func followContainerSetWithTail(ctx context.Context, key, selectorText, label st
 			position.File = nil
 		}
 		more = more || batchMore
-		for i, line := range batchLines {
-			if i >= len(batchTimes) {
-				break
-			}
-			lines = append(lines, dockerLogLine{id: id, name: name, line: line, at: batchTimes[i]})
+		if batchMore || activeDockerPartials(position.Partials) > 0 {
+			pendingStreams[id] = true
 		}
+		lines = append(lines, batchLines...)
 		next.Containers[id] = position
 	}
 	for id, position := range next.Containers {
 		if present[id] {
 			continue
 		}
-		drained, updated, hasMore, dropped, drainErr := drainGoneDockerContainer(ctx, id, position, budget, lineBudget)
+		drained, updated, hasMore, dropped, _, drainErr := drainGoneDockerContainer(ctx, id, position, budget, lineBudget)
+		inputDropped += dropped
 		if drainErr != nil {
 			log.Printf("robin-agent: warning: could not drain removed Docker container %s: %v", position.Name, drainErr)
 			delete(next.Containers, id)
 			continue
 		}
 		more = more || hasMore
-		inputDropped += dropped
+		if hasMore || activeDockerPartials(updated.Partials) > 0 {
+			pendingStreams[id] = true
+		}
 		if len(drained) == 0 && !hasMore {
+			if unfinished := activeDockerPartials(updated.Partials); unfinished > 0 {
+				log.Printf("robin-agent: warning: discarded %d incomplete Docker log line(s) from removed container %s", unfinished, position.Name)
+				inputDropped += unreportedDockerPartials(updated.Partials)
+			}
+			delete(pendingStreams, id)
 			delete(next.Containers, id)
 			continue
 		}
@@ -294,6 +421,8 @@ func followContainerSetWithTail(ctx context.Context, key, selectorText, label st
 		lines, more = lines[:capLines], true
 	}
 	out, times, streamIDs := make([]string, 0, len(lines)), make([]string, 0, len(lines)), make([]string, 0, len(lines))
+	historical := make([]bool, 0, len(lines))
+	var inputMasked uint64
 	for _, item := range lines {
 		cursor := next.Containers[item.id]
 		if item.at.Equal(cursor.Since) {
@@ -306,73 +435,207 @@ func followContainerSetWithTail(ctx context.Context, key, selectorText, label st
 		out = append(out, "["+item.name+"] "+item.line)
 		times = append(times, item.at.Format(time.RFC3339Nano))
 		streamIDs = append(streamIDs, item.id)
+		historical = append(historical, item.historical)
+		if item.redacted {
+			inputMasked++
+		}
 	}
 	return &logBatch{
-		Source:       "docker containers",
-		Lines:        out,
-		Times:        times,
-		Streams:      streamIDs,
-		Reset:        reset,
-		Next:         next,
-		InputDropped: inputDropped,
+		Source:         "docker containers",
+		Lines:          out,
+		Times:          times,
+		Streams:        streamIDs,
+		Historical:     historical,
+		PendingStreams: pendingStreams,
+		Reset:          reset,
+		Next:           next,
+		InputDropped:   inputDropped,
+		InputMasked:    inputMasked,
 	}, more, nil
 }
 
-func drainGoneDockerContainer(ctx context.Context, id string, position dockerLogCursor, budget, lineBudget int) ([]dockerLogLine, dockerLogCursor, bool, uint64, error) {
+func drainGoneDockerContainer(ctx context.Context, id string, position dockerLogCursor, budget, lineBudget int) ([]dockerLogLine, dockerLogCursor, bool, uint64, uint64, error) {
+	position.Streams = cloneDockerStreamCursors(position.Streams, position.Since, position.Seen)
 	if position.Driver == "json-file" && position.LogPath != "" && position.File != nil {
 		if fileInfo, err := os.Stat(position.LogPath); err == nil && fileInfo.Mode().IsRegular() {
+			if position.FragmentVersion == 0 {
+				position.Partials = unknownDockerStreamBoundaries(position.Partials, position.Streams)
+				position.FragmentVersion = 1
+			}
 			batch, more, err := followFileWithLimits("docker-json-file:"+id, position.LogPath, "", position.File, budget, lineBudget)
 			if err != nil {
-				return nil, position, false, 0, err
+				return nil, position, false, 0, 0, err
 			}
 			updated := position
 			updated.File = &batch.Next
-			lines, err := decodeDockerJSONLines(id, position.Name, batch.Lines, &updated)
-			return lines, updated, more, batch.InputDropped, err
+			dropped := batch.InputDropped
+			if batch.Discontinuity || batch.InputDropped > 0 {
+				dropped += unreportedDockerPartials(updated.Partials)
+				updated.Partials = unknownDockerBoundaries(nil)
+				markDockerStreamBoundaries(updated.Streams)
+			}
+			lines, partialDropped, err := decodeDockerJSONLines(id, position.Name, batch.Lines, &updated, false)
+			return lines, updated, more, dropped + partialDropped, 0, err
 		}
 	}
-	rawLines, times, _, more, err := containerRead(
-		ctx, id, position.Since, position.Seen, position.DockerCursor == 0, true,
-		"--since", position.Since.Format(time.RFC3339Nano), "robin-agent-budget="+strconv.Itoa(budget), "robin-agent-lines="+strconv.Itoa(lineBudget),
+	if activeDockerPartials(position.Partials) > 0 {
+		return nil, position, false, unreportedDockerPartials(position.Partials), 0, errors.New("incomplete json-file fragment cannot be safely drained via docker logs")
+	}
+	lines, more, dropped, masked, err := readDockerFallback(
+		ctx, id, position.Name, &position, false, false, 0, budget, lineBudget,
 	)
 	if err != nil {
-		return nil, position, false, 0, err
+		return nil, position, false, dropped, masked, err
 	}
-	updated := position
-	updated.File = nil
-	lines := make([]dockerLogLine, 0, len(rawLines))
-	for i, line := range rawLines {
-		if i >= len(times) {
-			break
-		}
-		lines = append(lines, dockerLogLine{id: id, name: position.Name, line: line, at: times[i]})
-	}
-	return lines, updated, more, 0, nil
+	position.File = nil
+	return lines, position, more, dropped, masked, nil
 }
 
-func decodeDockerJSONLines(id, name string, rawLines []string, position *dockerLogCursor) ([]dockerLogLine, error) {
+func unknownDockerBoundaries(partials map[string]dockerLogPartial) map[string]dockerLogPartial {
+	return unknownDockerStreamBoundaries(partials, map[string]dockerStreamCursor{
+		"stdout": {Boundary: true},
+		"stderr": {Boundary: true},
+	})
+}
+
+func unknownDockerStreamBoundaries(partials map[string]dockerLogPartial, streams map[string]dockerStreamCursor) map[string]dockerLogPartial {
+	cloned := make(map[string]dockerLogPartial, len(partials)+2)
+	for stream, partial := range partials {
+		cloned[stream] = partial
+	}
+	for _, stream := range []string{"stdout", "stderr"} {
+		if _, ok := cloned[stream]; !ok && streams[stream].Boundary {
+			cloned[stream] = dockerLogPartial{Discarding: true, Boundary: true}
+		}
+	}
+	return cloned
+}
+
+func activeDockerPartials(partials map[string]dockerLogPartial) uint64 {
+	var count uint64
+	for _, partial := range partials {
+		if !partial.Time.IsZero() {
+			count++
+		}
+	}
+	return count
+}
+
+func unreportedDockerPartials(partials map[string]dockerLogPartial) uint64 {
+	var count uint64
+	for _, partial := range partials {
+		if !partial.Time.IsZero() && (!partial.Discarding || partial.Boundary) {
+			count++
+		}
+	}
+	return count
+}
+
+func hasResumeDockerPartial(position dockerLogCursor) bool {
+	if !position.ResumeActive {
+		return false
+	}
+	for stream, partial := range position.Partials {
+		if !partial.Time.IsZero() && !partial.Time.After(position.Streams[stream].ResumeSince) {
+			return true
+		}
+	}
+	return false
+}
+
+func decodeDockerJSONLines(id, name string, rawLines []string, position *dockerLogCursor, reset bool) ([]dockerLogLine, uint64, error) {
 	lines := make([]dockerLogLine, 0, len(rawLines))
+	position.Streams = cloneDockerStreamCursors(position.Streams, position.Since, position.Seen)
+	partials := make(map[string]dockerLogPartial, len(position.Partials))
+	for stream, partial := range position.Partials {
+		partials[stream] = partial
+	}
+	position.Partials = partials
+	var dropped uint64
 	for _, raw := range rawLines {
 		var record dockerJSONLogLine
 		if err := json.Unmarshal([]byte(raw), &record); err != nil {
-			return nil, fmt.Errorf("invalid Docker json-file record for %s", id)
+			return nil, dropped, fmt.Errorf("invalid Docker json-file record for %s", id)
 		}
 		at, err := time.Parse(time.RFC3339Nano, record.Time)
 		if err != nil {
-			return nil, fmt.Errorf("invalid Docker json-file timestamp for %s", id)
+			return nil, dropped, fmt.Errorf("invalid Docker json-file timestamp for %s", id)
 		}
-		if position.ResumeActive {
-			if at.Before(position.ResumeSince) {
+		stream := record.Stream
+		if stream == "" {
+			stream = "stdout"
+		}
+		if stream != "stdout" && stream != "stderr" {
+			return nil, dropped, fmt.Errorf("invalid Docker json-file stream for %s", id)
+		}
+		if end := strings.IndexByte(record.Log, '\n'); end >= 0 && end != len(record.Log)-1 {
+			return nil, dropped, fmt.Errorf("invalid Docker json-file line boundary for %s", id)
+		}
+		for text := record.Log; text != ""; {
+			end := strings.IndexByte(text, '\n')
+			part := text
+			if end >= 0 {
+				part, text = text[:end], text[end+1:]
+			} else {
+				text = ""
+			}
+			partial, exists := partials[stream]
+			if !exists || partial.Time.IsZero() {
+				partial.Time, partial.Historical = at, reset
+			}
+			if !partial.Discarding {
+				if len(partial.Text)+len(part) > logRawEntryMaxBytes {
+					log.Printf("robin-agent: warning: discarded an oversized Docker log line from %s", name)
+					partial.Text, partial.Discarding = "", true
+					dropped++
+				} else {
+					partial.Text += part
+				}
+			}
+			if end < 0 {
+				partials[stream] = partial
 				continue
 			}
-			if at.Equal(position.ResumeSince) && (position.ResumeLegacy || position.ResumeSkipped < position.ResumeSeen) {
-				position.ResumeSkipped++
+			delete(partials, stream)
+			cursor := position.Streams[stream]
+			skip := false
+			if position.ResumeActive {
+				if partial.Time.Before(cursor.ResumeSince) {
+					skip = true
+				} else if partial.Time.Equal(cursor.ResumeSince) &&
+					(position.ResumeLegacy || cursor.ResumeSkipped < cursor.ResumeSeen) {
+					cursor.ResumeSkipped++
+					skip = true
+				}
+			}
+			if partial.Boundary {
+				cursor.Boundary = false
+				if !skip {
+					log.Printf("robin-agent: warning: discarded a Docker log line with an unknown beginning from %s", name)
+					dropped++
+				}
+			}
+			discard := false
+			if cursor.Discard {
+				if skip && partial.Time.Equal(cursor.ResumeSince) && cursor.ResumeSkipped >= cursor.ResumeSeen {
+					cursor.Discard = false
+				} else if !skip {
+					cursor.Discard, discard = false, true
+				}
+			}
+			if !skip {
+				advanceDockerStreamCursor(&cursor, partial.Time)
+			}
+			cursor.Boundary = false
+			position.Streams[stream] = cursor
+			if skip || discard || partial.Discarding {
 				continue
 			}
-			position.ResumeActive = false
+			lines = append(lines, dockerLogLine{
+				id: id, name: name, stream: stream, line: strings.TrimSuffix(partial.Text, "\r"),
+				at: partial.Time, historical: partial.Historical,
+			})
 		}
-		line := strings.TrimSuffix(strings.TrimSuffix(record.Log, "\n"), "\r")
-		lines = append(lines, dockerLogLine{id: id, name: name, line: line, at: at})
 	}
-	return lines, nil
+	return lines, dropped, nil
 }

@@ -60,7 +60,7 @@ func runLogPreview(args []string) error {
 func previewLogEntries(ctx context.Context, service ownedService, since time.Duration, limit int) ([]string, logCounters, error) {
 	const previewMaxBytes = 16 << 20
 	rawLimit := min(100000, max(logTailLines, limit*10))
-	batch, _, err := collectLogsWithTail(ctx, service, nil, rawLimit, previewMaxBytes)
+	batch, _, err := collectLogsWithTail(ctx, service, nil, rawLimit, previewMaxBytes, nil)
 	if err != nil {
 		return nil, logCounters{}, err
 	}

@@ -59,8 +59,13 @@ also constrains its `INCLUDE` rules. Dedicated Docker sources do not inherit
 the default shared-file filter, although an explicitly configured filter still
 applies.
 
-Pending batches are masked. Incomplete entries, including their raw filter input
-and partially masked output, are encrypted with AES-GCM in
+Pending batches are masked. An upgrade from an older agent may find pending
+batches that were saved before masking existed. Their lines are replaced with
+redaction placeholders, with a warning, before retrying the original batch IDs
+in order. Those pending lines cannot be recovered from the agent's state; any
+older batch already accepted by Robin Admin is not retroactively sanitized.
+Incomplete entries, including their raw filter input, partially masked output,
+and Docker json-file fragments, are encrypted with AES-GCM in
 `<state>.log-cursors.json`; its separate random key is
 `<state>.log-cursors.json.key`. Both files are mode 0600. Protect and back up
 the entire state directory: anyone who can read the key and cursor can decrypt
@@ -72,13 +77,36 @@ when filters are configured and otherwise redacts it.
 
 Each Docker container has independent multiline and AUTH state. Input and
 assembled raw entries are bounded at 2 MiB. An oversized file record is
-discarded with a warning and counted as truncated; an oversized command-stream
-record stops collection without advancing its cursor. If a multiline entry
-exceeds the raw bound, it is discarded with a warning rather than shipping an
+discarded incrementally through its newline with a warning and counted as
+truncated; an oversized command-stream record stops collection without
+advancing its cursor. If a multiline entry exceeds the raw bound, it is
+discarded with a warning rather than shipping an
 entry whose complete text could not be safely filtered and masked. A mask rule
 can span lines; if it overlaps an AUTH redaction, the entire entry is redacted
-rather than exposing part of it.
+rather than exposing part of it. An entry is also redacted when a custom mask
+would interfere with a built-in credential or configured preset mask.
+Unterminated quoted credentials and incomplete IMAP LOGIN arguments are
+redacted rather than leaving their suffixes visible.
 An entry held across a change to its mask rules is also fully redacted.
+Docker json-file fragments are joined per stdout/stderr stream before filtering
+and masking, including across reads, restarts and rotations. Newly discovered
+containers are read from the oldest available uncompressed rotation. If the
+beginning is known to be available, their first lines are kept; expired or
+compressed rotations cannot be recovered through direct file reading. At a
+partial initial tail, after a lost file, when the oldest rotation may be
+missing, or when upgrading a cursor that did not track fragments, the first
+line of each affected stream is discarded with a warning because its beginning
+may be unavailable. A fragment exceeding 2 MiB is discarded through its
+terminating newline. If a json-file becomes inaccessible while a fragment is
+open, collection waits for direct access rather than switching to an unsafe
+partial read.
+
+The `docker logs` fallback keeps separate stdout/stderr positions. Docker adds
+timestamps inside split lines without identifying them as metadata, so
+ambiguous lines are fully redacted; an incomplete CLI line is discarded through
+its terminating newline. The first line of an untracked fallback stream is
+also redacted because its beginning may be unavailable. These safeguards can
+remove log content and are reflected in the counters and agent warnings.
 After an AUTH LOGIN or AUTH PLAIN has been observed, standalone
 base64-looking lines in that stream remain redacted to protect interleaved
 sessions, even if an unrelated line resembles an authentication result.
@@ -87,10 +115,20 @@ To prevent advancing an unread container cursor, a selector with more than
 workload across services or agents.
 The output entry limit is at most 64 KiB. Rate priority is selected across a
 bounded window of up to 16 reads, not across an unlimited future backlog.
-Rate budgets account for the elapsed collection window rather than limiting
-each poll to one burst. When timestamps are missing or outside that window,
-their arrival times are estimated across the window. Batches can therefore be
-sent together rather than paced evenly within each second.
+The token bucket refills over the elapsed collection window but cannot retain
+more than its configured burst during idle periods. Each output line consumes
+one token; multiline entries are kept or dropped together, so set the burst at
+least as high as the longest entry to allow it through. Among feasible
+selections, higher-severity lines take priority over lower-severity lines.
+Completed candidates wait durably for multiline entries begun in their window,
+so those entries participate in the same severity selection after completion.
+Changing filter rules discards deferred candidates evaluated under the old rules;
+changing mask rules redacts them.
+Deferred candidates are capped at 80,000 entries or 16 MiB per service;
+overflow is dropped with a warning and included in rate-limit counters.
+When any timestamp is missing or outside the window, arrival times are
+estimated evenly across it. Batches can therefore be sent together rather than
+paced evenly within each second.
 
 Use the per-service
 `ROBIN_AGENT_LOG_<SERVICE_ID>_...` variables or the equivalent
@@ -285,10 +323,16 @@ file cannot be identified, the agent warns and resumes with the oldest
 available candidate, which can replay lines as well as miss unavailable data.
 File identity can also be ambiguous when an inode is reused and files have the
 same prefix.
-Incomplete trailing lines are skipped with a warning when the agent moves to
-another file. Docker recovery depends on the daemon retaining records in
-timestamp order; rotation, clock changes, or a skewed remote daemon can cause
-gaps or replay. Journald recovery likewise depends on retained journal entries.
+When an incomplete line crosses a file rotation, the agent discards it and the
+first line of the next file with a warning: that line may be a continuation
+whose sensitive prefix is missing, or an unrelated line. If an initial file
+tail contains only a fragment whose beginning is outside the tail limit, the
+agent discards it through its next newline, including across restarts. If the
+followed file can no longer be identified, the first available line is also
+discarded because its beginning may be missing. Docker recovery depends on the
+daemon retaining records in timestamp order; rotation, clock changes, or a
+skewed remote daemon can cause gaps or replay. Journald recovery likewise
+depends on retained journal entries.
 The first recent-tail reset is not stored, so this is not historical backfill.
 
 The agent syncs its temporary state file before renaming it, but does not sync

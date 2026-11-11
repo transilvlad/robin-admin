@@ -11,8 +11,8 @@ import (
 	"os"
 )
 
-// Incomplete entries are encrypted separately from masked pending batches and
-// bound to their service and stream.
+// Incomplete entries and Docker fragments are encrypted separately from
+// masked pending batches and bound to their service and stream.
 func (s *logStateStore) logStateCipher(create bool) (cipher.AEAD, error) {
 	path := s.path + ".key"
 	key, err := os.ReadFile(path)
@@ -51,35 +51,17 @@ func transformLogPipeline(pipeline logPipelineState, serviceID string, aead ciph
 		additionalData := []byte(serviceID + "\x00" + streamID)
 		lineData := append(append([]byte(nil), additionalData...), "\x00line"...)
 		if encrypt {
-			seal := func(value string, associated []byte) (string, error) {
-				nonce := make([]byte, aead.NonceSize())
-				if _, err := rand.Read(nonce); err != nil {
-					return "", fmt.Errorf("generate log state nonce: %w", err)
-				}
-				return base64.RawStdEncoding.EncodeToString(aead.Seal(nonce, nonce, []byte(value), associated)), nil
-			}
 			var err error
-			if stream.HeldRawEncrypted, err = seal(stream.HeldRaw, additionalData); err != nil {
+			if stream.HeldRawEncrypted, err = sealLogState(aead, stream.HeldRaw, additionalData); err != nil {
 				return stream, err
 			}
-			if stream.HeldLineEncrypted, err = seal(stream.HeldLine, lineData); err != nil {
+			if stream.HeldLineEncrypted, err = sealLogState(aead, stream.HeldLine, lineData); err != nil {
 				return stream, err
 			}
 			stream.HeldRaw, stream.HeldLine = "", ""
 			return stream, nil
 		}
-		open := func(value string, associated []byte) (string, error) {
-			sealed, err := base64.RawStdEncoding.DecodeString(value)
-			if err != nil || len(sealed) < aead.NonceSize() {
-				return "", errors.New("invalid encrypted log entry")
-			}
-			plain, err := aead.Open(nil, sealed[:aead.NonceSize()], sealed[aead.NonceSize():], associated)
-			if err != nil {
-				return "", fmt.Errorf("decrypt held log entry: %w", err)
-			}
-			return string(plain), nil
-		}
-		raw, err := open(stream.HeldRawEncrypted, additionalData)
+		raw, err := openLogState(aead, stream.HeldRawEncrypted, additionalData)
 		if err != nil {
 			return stream, err
 		}
@@ -87,7 +69,7 @@ func transformLogPipeline(pipeline logPipelineState, serviceID string, aead ciph
 			if stream.HeldLine != "" {
 				return stream, errors.New("encrypted log entry also has plaintext output")
 			}
-			if stream.HeldLine, err = open(stream.HeldLineEncrypted, lineData); err != nil {
+			if stream.HeldLine, err = openLogState(aead, stream.HeldLineEncrypted, lineData); err != nil {
 				return stream, err
 			}
 		}
@@ -113,6 +95,26 @@ func transformLogPipeline(pipeline logPipelineState, serviceID string, aead ciph
 	return pipeline, nil
 }
 
+func sealLogState(aead cipher.AEAD, value string, associated []byte) (string, error) {
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("generate log state nonce: %w", err)
+	}
+	return base64.RawStdEncoding.EncodeToString(aead.Seal(nonce, nonce, []byte(value), associated)), nil
+}
+
+func openLogState(aead cipher.AEAD, value string, associated []byte) (string, error) {
+	sealed, err := base64.RawStdEncoding.DecodeString(value)
+	if err != nil || len(sealed) < aead.NonceSize() {
+		return "", errors.New("invalid encrypted log state")
+	}
+	plain, err := aead.Open(nil, sealed[:aead.NonceSize()], sealed[aead.NonceSize():], associated)
+	if err != nil {
+		return "", fmt.Errorf("decrypt log state: %w", err)
+	}
+	return string(plain), nil
+}
+
 func logPipelineHasOpenEntry(pipeline logPipelineState) bool {
 	if pipeline.HeldOpen {
 		return true
@@ -128,6 +130,9 @@ func logPipelineHasOpenEntry(pipeline logPipelineState) bool {
 func transformLogService(state *logServiceState, serviceID string, aead cipher.AEAD, encrypt bool) (*logServiceState, error) {
 	copyState := *state
 	var err error
+	if copyState.Cursor, err = transformLogCursor(state.Cursor, serviceID, aead, encrypt); err != nil {
+		return nil, err
+	}
 	copyState.Pipeline, err = transformLogPipeline(state.Pipeline, serviceID, aead, encrypt)
 	if err != nil {
 		return nil, err
@@ -137,6 +142,11 @@ func transformLogService(state *logServiceState, serviceID string, aead cipher.A
 			return nil, nil
 		}
 		copy := *batch
+		next, err := transformLogCursor(&batch.Next, serviceID, aead, encrypt)
+		if err != nil {
+			return nil, err
+		}
+		copy.Next = *next
 		copy.Pipeline, err = transformLogPipeline(batch.Pipeline, serviceID, aead, encrypt)
 		return &copy, err
 	}
@@ -154,12 +164,84 @@ func transformLogService(state *logServiceState, serviceID string, aead cipher.A
 	return &copyState, nil
 }
 
-func logServiceHasOpenEntry(state *logServiceState) bool {
-	if logPipelineHasOpenEntry(state.Pipeline) || state.Pending != nil && logPipelineHasOpenEntry(state.Pending.Pipeline) {
+func transformLogCursor(cursor *logCursor, serviceID string, aead cipher.AEAD, encrypt bool) (*logCursor, error) {
+	if cursor == nil {
+		return nil, nil
+	}
+	copyCursor := *cursor
+	if cursor.Containers == nil {
+		return &copyCursor, nil
+	}
+	copyCursor.Containers = make(map[string]dockerLogCursor, len(cursor.Containers))
+	for id, docker := range cursor.Containers {
+		var err error
+		docker.File, err = transformLogCursor(docker.File, serviceID, aead, encrypt)
+		if err != nil {
+			return nil, err
+		}
+		if docker.Partials != nil {
+			partials := make(map[string]dockerLogPartial, len(docker.Partials))
+			for stream, partial := range docker.Partials {
+				if partial.Discarding {
+					if partial.Text != "" || partial.Encrypted != "" {
+						return nil, errors.New("discarded Docker fragment contains log content")
+					}
+				} else {
+					if aead == nil {
+						return nil, errors.New("log state key is unavailable")
+					}
+					associated := []byte(fmt.Sprintf("docker-fragment\x00%d:%s%d:%s%d:%s", len(serviceID), serviceID, len(id), id, len(stream), stream))
+					if encrypt {
+						partial.Encrypted, err = sealLogState(aead, partial.Text, associated)
+						partial.Text = ""
+					} else {
+						partial.Text, err = openLogState(aead, partial.Encrypted, associated)
+						partial.Encrypted = ""
+					}
+					if err != nil {
+						return nil, fmt.Errorf("Docker fragment for %s/%s: %w", id, stream, err)
+					}
+				}
+				partials[stream] = partial
+			}
+			docker.Partials = partials
+		}
+		if docker.Streams != nil {
+			streams := make(map[string]dockerStreamCursor, len(docker.Streams))
+			for stream, position := range docker.Streams {
+				streams[stream] = position
+			}
+			docker.Streams = streams
+		}
+		copyCursor.Containers[id] = docker
+	}
+	return &copyCursor, nil
+}
+
+func logCursorNeedsCipher(cursor *logCursor) bool {
+	if cursor == nil {
+		return false
+	}
+	for _, docker := range cursor.Containers {
+		if logCursorNeedsCipher(docker.File) {
+			return true
+		}
+		for _, partial := range docker.Partials {
+			if !partial.Discarding {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func logServiceNeedsCipher(state *logServiceState) bool {
+	if logPipelineHasOpenEntry(state.Pipeline) || logCursorNeedsCipher(state.Cursor) ||
+		state.Pending != nil && (logPipelineHasOpenEntry(state.Pending.Pipeline) || logCursorNeedsCipher(&state.Pending.Next)) {
 		return true
 	}
 	for _, batch := range state.PendingQueue {
-		if logPipelineHasOpenEntry(batch.Pipeline) {
+		if logPipelineHasOpenEntry(batch.Pipeline) || logCursorNeedsCipher(&batch.Next) {
 			return true
 		}
 	}
