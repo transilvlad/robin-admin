@@ -36,6 +36,7 @@ import {
 } from '../services/alerts/telemetry-rules.js';
 import { getTelemetryAlertIssueById, listTelemetryAlertIssues } from '../db/queries/telemetry-alert-issues.js';
 import { buildSentryAlertPayload, parseSentryDsn } from '../services/alerts/sentry.js';
+import { buildAlertEmail, buildPagerDutyAlert, buildTeamsAlert, validAlertEmail, validPagerDutyKey } from '../services/alerts/channels.js';
 import { TelemetryQueryError } from '../services/telemetry/store-client.js';
 import {
   TELEMETRY_ALERT_COMPARATORS,
@@ -94,12 +95,20 @@ function integerValue(value: unknown, field: string, minimum: number, maximum: n
 }
 
 function parseAdapter(value: unknown): AlertWebhookAdapter {
-  if (value === 'slack' || value === 'generic' || value === 'sentry') return value;
-  throw new Error('adapter must be slack, generic or sentry');
+  if (value === 'slack' || value === 'generic' || value === 'sentry'
+    || value === 'email' || value === 'teams' || value === 'pagerduty') return value;
+  throw new Error('adapter must be slack, generic, sentry, email, teams or pagerduty');
 }
 
-/** A Sentry destination's URL is its DSN; the other destinations use a webhook URL. */
 function validateDestinationUrl(adapter: AlertWebhookAdapter, value: string): void {
+  if (adapter === 'email') {
+    if (!validAlertEmail(value)) throw new Error('webhookUrl must be a valid email address');
+    return;
+  }
+  if (adapter === 'pagerduty') {
+    if (!validPagerDutyKey(value)) throw new Error('webhookUrl must be a 32-character PagerDuty integration key');
+    return;
+  }
   if (adapter === 'sentry') {
     if (!parseSentryDsn(value)) throw new Error('webhookUrl must be a Sentry DSN (https://<key>@<host>/<project>)');
     return;
@@ -197,6 +206,23 @@ function samplePayload(webhook: { id: number; name: string; adapter: AlertWebhoo
         robin_alert: detail,
       }
     : detail;
+}
+
+function previewPayload(webhook: { id: number; name: string; adapter: AlertWebhookAdapter }): JsonRecord {
+  const payload = samplePayload(webhook);
+  const notification = {
+    notificationId: `preview-${webhook.id}`,
+    destinationUid: `preview-${webhook.id}`,
+    eventKind: 'test' as const,
+    alertType: 'availability' as const,
+    serviceId: 'sample-service',
+    serviceName: 'Sample service',
+    payload,
+  };
+  if (webhook.adapter === 'email') return { recipient: '[stored recipient]', ...buildAlertEmail(notification) };
+  if (webhook.adapter === 'teams') return buildTeamsAlert(notification);
+  if (webhook.adapter === 'pagerduty') return buildPagerDutyAlert(notification, '[stored integration key]');
+  return payload;
 }
 
 function routeError(res: Response, message: string, error: unknown): void {
@@ -369,7 +395,7 @@ router.post('/alert-webhooks/:id/preview', requireAuth, requireAdmin, async (req
     if (!id) return res.status(400).json({ success: false, error: 'Invalid webhook ID' });
     const webhook = await getAlertWebhook(id);
     if (!webhook) return res.status(404).json({ success: false, error: 'Webhook not found' });
-    res.json({ success: true, data: { payload: samplePayload(webhook), networkEffect: false } });
+    res.json({ success: true, data: { payload: previewPayload(webhook), networkEffect: false } });
   } catch (error) {
     routeError(res, 'Failed to preview alert webhook', error);
   }
@@ -388,7 +414,7 @@ router.post('/alert-webhooks/:id/test', requireAuth, requireAdmin, async (req, r
     const webhook = await getAlertWebhook(id);
     if (!webhook) return res.status(404).json({ success: false, error: 'Webhook not found' });
     if (!webhook.enabled || !webhook.hasSecret) {
-      return res.status(409).json({ success: false, error: 'Webhook must be enabled and have a URL before testing' });
+      return res.status(409).json({ success: false, error: 'Destination must be enabled and have its secret configured before testing' });
     }
     const paused = webhook.pausedAt && (!webhook.pausedUntil || webhook.pausedUntil > new Date());
     if (paused) return res.status(409).json({ success: false, error: 'Resume the webhook before testing' });

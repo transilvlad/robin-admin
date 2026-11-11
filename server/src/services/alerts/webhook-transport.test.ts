@@ -45,4 +45,13 @@ describe('Pinned alert transport', () => {
     expect((await send(input)).retryable).toBe(false); expect(request).not.toHaveBeenCalled();
     expect(publicWebhookAddress('::ffff:10.0.0.1')).toBe(false);
   });
+  it('requires a matching PagerDuty Events API acknowledgement', async () => {
+    const event = { ...input, adapter: 'pagerduty' as const, payload: { dedup_key: 'incident-1' } };
+    expect((await fixture(202, JSON.stringify({ status: 'success', dedup_key: 'incident-1' })).send(event)).accepted).toBe(true);
+    for (const body of ['not json', JSON.stringify({ status: 'success', dedup_key: 'another' })]) {
+      const result = await fixture(202, body).send(event);
+      expect(result).toMatchObject({ accepted: false, retryable: true });
+    }
+    expect((await fixture(429, 'rate limited').send(event)).retryable).toBe(true);
+  });
 });

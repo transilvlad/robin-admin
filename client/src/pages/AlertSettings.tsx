@@ -47,7 +47,9 @@ interface WebhookForm {
   hasSentryToken: boolean;
 }
 
-const ADAPTER_LABELS: Record<AlertWebhookAdapter, string> = { slack: 'Slack', generic: 'Generic JSON', sentry: 'Sentry' };
+const ADAPTER_LABELS: Record<AlertWebhookAdapter, string> = {
+  slack: 'Slack', generic: 'Generic JSON', sentry: 'Sentry', email: 'Email', teams: 'Microsoft Teams', pagerduty: 'PagerDuty',
+};
 
 const emptyForm = (catalog: AlertCatalogEntry[]): WebhookForm => ({
   id: null,
@@ -182,7 +184,7 @@ export function AlertSettingsPage() {
       if (form.id) {
         await alertsApi.updateWebhook(form.id, payload);
       } else {
-        if (!form.webhookUrl) throw new Error(form.adapter === 'sentry' ? 'A Sentry DSN is required' : 'A webhook URL is required');
+        if (!form.webhookUrl) throw new Error('A destination value is required');
         await alertsApi.createWebhook({ ...payload, webhookUrl: form.webhookUrl });
       }
       setForm(null);
@@ -244,7 +246,7 @@ export function AlertSettingsPage() {
       <PageHeader
         icon={appIcons.alerts}
         title="Alerts"
-        description="Send service health and resource alerts to Slack or generic HTTPS webhooks."
+        description="Send service health and resource alerts to your configured destinations."
         actions={(
           <Button variant="secondary" onClick={() => void load()}>
             <RefreshCw aria-hidden="true" className="h-4 w-4" />
@@ -268,12 +270,12 @@ export function AlertSettingsPage() {
           <section className="card p-5">
             <h2 className="text-base font-semibold">Alert routing</h2>
             <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
-              Webhooks choose alert types, failure confirmation, repeat cadence, and recovery notifications.
-              Pausing a webhook stops notifications while service state continues to update.
+              Destinations choose alert types, failure confirmation, repeat cadence, and recovery notifications.
+              Pausing a destination stops notifications while service state continues to update.
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-sm">
               <Pill>{runtime?.enabled ? 'Evaluator running' : 'Evaluator disabled'}</Pill>
-              <Pill>{runtime?.enabledWebhooks ?? 0} enabled webhooks</Pill>
+              <Pill>{runtime?.enabledWebhooks ?? 0} enabled destinations</Pill>
               <Pill>{runtime?.pendingDeliveries ?? 0} pending deliveries</Pill>
               <Pill>{runtime?.failedDeliveries ?? 0} failed deliveries</Pill>
             </div>
@@ -284,7 +286,7 @@ export function AlertSettingsPage() {
               <div>
                 <h2 className="text-base font-semibold">Destinations</h2>
                 <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                  Slack and generic webhooks, or a Sentry project (choose the Sentry format and enter its DSN). URLs and DSNs are encrypted and write-only; saving an empty one keeps the stored value.
+                  Slack, Microsoft Teams, PagerDuty, email, generic webhooks, and Sentry are supported. Destination values are encrypted and write-only; saving an empty one keeps the stored value.
                 </p>
               </div>
               <Button onClick={() => setForm(emptyForm(catalog))}>Add destination</Button>
@@ -300,7 +302,7 @@ export function AlertSettingsPage() {
                         <div className="min-w-0">
                           <h3 className="wrap-break-word font-medium">{webhook.name}</h3>
                           <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                            {ADAPTER_LABELS[webhook.adapter]} · {webhook.enabled ? 'Enabled' : 'Disabled'} · {webhook.hasSecret ? (webhook.adapter === 'sentry' ? 'DSN stored' : 'URL stored') : (webhook.adapter === 'sentry' ? 'DSN missing' : 'URL missing')}
+                            {ADAPTER_LABELS[webhook.adapter]} · {webhook.enabled ? 'Enabled' : 'Disabled'} · {webhook.hasSecret ? 'Destination stored' : 'Destination missing'}
                             {webhook.adapter === 'sentry' && (webhook.hasSentryToken && webhook.sentryOrg ? ' · resolves issues on recovery' : ' · no API token, Sentry auto-resolves')}
                           </p>
                           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
@@ -346,7 +348,7 @@ export function AlertSettingsPage() {
               </div>
             ) : (
               <p className="mt-4 rounded-lg border border-dashed border-gray-300 p-5 text-sm text-gray-600 dark:border-gray-700 dark:text-gray-300">
-                No webhooks are configured. Add one, select alert types, and preview its payload before enabling it.
+                No destinations are configured. Add one, select alert types, and preview its payload before enabling it.
               </p>
             )}
           </section>
@@ -425,7 +427,7 @@ export function AlertSettingsPage() {
 
       {form && (
         <Modal isOpen title={form.id ? `Edit ${selectedWebhook?.name ?? 'destination'}` : 'Add destination'} onClose={() => setForm(null)}>
-          <WebhookEditor form={form} catalog={catalog} setForm={setForm} working={working} onSave={save} />
+          <WebhookEditor form={form} originalAdapter={selectedWebhook?.adapter} catalog={catalog} setForm={setForm} working={working} onSave={save} />
         </Modal>
       )}
 
@@ -442,7 +444,11 @@ export function AlertSettingsPage() {
         <Modal isOpen title={confirmation.kind === 'test' ? 'Send live test?' : 'Delete destination?'} onClose={() => setConfirmation(null)}>
           <p className="wrap-break-word text-sm text-gray-600 dark:text-gray-300">
             {confirmation.kind === 'test'
-              ? `This sends a real webhook to ${confirmation.webhook.name}. Preview first if you only need to inspect the payload.`
+              ? confirmation.webhook.adapter === 'pagerduty'
+                ? `This creates a real PagerDuty test incident at ${confirmation.webhook.name}; resolve it in PagerDuty afterwards.`
+                : confirmation.webhook.adapter === 'email'
+                  ? `This sends a real email to ${confirmation.webhook.name}. Preview first if you only need to inspect the message.`
+                  : `This sends a real webhook to ${confirmation.webhook.name}. Preview first if you only need to inspect the payload.`
               : `This permanently deletes ${confirmation.webhook.name} and cancels its pending deliveries.`}
           </p>
           <div className="mt-5 flex justify-end gap-2">
@@ -471,13 +477,19 @@ export function AlertSettingsPage() {
   );
 }
 
-function WebhookEditor({ form, catalog, setForm, working, onSave }: {
+function WebhookEditor({ form, originalAdapter, catalog, setForm, working, onSave }: {
   form: WebhookForm;
+  originalAdapter?: AlertWebhookAdapter;
   catalog: AlertCatalogEntry[];
   setForm: (value: WebhookForm) => void;
   working: boolean;
   onSave: () => void;
 }) {
+  const keepsStoredValue = Boolean(form.id && form.adapter === originalAdapter);
+  const destinationLabel = form.adapter === 'sentry' ? 'Sentry DSN'
+    : form.adapter === 'email' ? 'Email recipient'
+      : form.adapter === 'pagerduty' ? 'PagerDuty integration key'
+        : form.adapter === 'teams' ? 'Teams Workflows webhook URL' : 'HTTPS webhook URL';
   const updateSubscription = (entry: AlertCatalogEntry, changes: Partial<AlertSubscription>) => {
     // A webhook saved before an alert type existed has no entry for it yet.
     const existing = form.subscriptions.some((subscription) => subscription.alertType === entry.key);
@@ -496,24 +508,31 @@ function WebhookEditor({ form, catalog, setForm, working, onSave }: {
         <Input label="Name" name="webhookName" autoComplete="off" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
         <label className="space-y-1">
           <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">Format</span>
-          <select name="webhookFormat" autoComplete="off" className="input" value={form.adapter} onChange={(event) => setForm({ ...form, adapter: event.target.value as AlertWebhookAdapter })}>
+          <select name="webhookFormat" autoComplete="off" className="input" value={form.adapter} onChange={(event) => setForm({ ...form, adapter: event.target.value as AlertWebhookAdapter, webhookUrl: '' })}>
             <option value="slack">Slack</option>
             <option value="generic">Generic JSON</option>
             <option value="sentry">Sentry</option>
+            <option value="email">Email</option>
+            <option value="teams">Microsoft Teams</option>
+            <option value="pagerduty">PagerDuty</option>
           </select>
         </label>
       </div>
       <Input
-        label={form.adapter === 'sentry'
-          ? (form.id ? 'Replace Sentry DSN' : 'Sentry DSN')
-          : (form.id ? 'Replace HTTPS webhook URL' : 'HTTPS webhook URL')}
-        type="url"
+        label={keepsStoredValue ? `Replace ${destinationLabel}` : destinationLabel}
+        type={form.adapter === 'email' ? 'email' : form.adapter === 'pagerduty' ? 'password' : 'url'}
         name="webhookUrl"
         autoComplete="off"
         value={form.webhookUrl}
-        placeholder={form.id ? 'Leave empty to keep the stored value' : form.adapter === 'sentry' ? 'https://<key>@o<org>.ingest.sentry.io/<project>' : 'https://…'}
+        placeholder={keepsStoredValue ? 'Leave empty to keep the stored value'
+          : form.adapter === 'sentry' ? 'https://<key>@o<org>.ingest.sentry.io/<project>'
+            : form.adapter === 'email' ? 'alerts@example.com'
+              : form.adapter === 'pagerduty' ? '32-character Events API v2 integration key' : 'https://…'}
         onChange={(event) => setForm({ ...form, webhookUrl: event.target.value })}
       />
+      {form.adapter === 'email' && <p className="text-sm text-gray-600 dark:text-gray-300">Configure the Alerts sender profile and an enabled relay in Administration → Email.</p>}
+      {form.adapter === 'teams' && <p className="text-sm text-gray-600 dark:text-gray-300">Use a Teams Workflows webhook that accepts requests from anyone.</p>}
+      {form.adapter === 'pagerduty' && <p className="text-sm text-gray-600 dark:text-gray-300">Recoveries resolve the PagerDuty incident when recovery notifications are enabled.</p>}
       {form.adapter === 'sentry' && (
         <fieldset className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
           <legend className="px-1 text-sm font-semibold">Resolve issues on recovery (optional)</legend>
@@ -602,11 +621,11 @@ function WebhookEditor({ form, catalog, setForm, working, onSave }: {
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} className="h-4 w-4 accent-robin-orange" />
-          Enable webhook
+          Enable destination
         </label>
       </div>
       <div className="flex justify-end">
-        <Button disabled={working || !form.name || (!form.id && !form.webhookUrl)} onClick={onSave}>Save webhook</Button>
+        <Button disabled={working || !form.name || (!keepsStoredValue && !form.webhookUrl)} onClick={onSave}>Save destination</Button>
       </div>
     </div>
   );

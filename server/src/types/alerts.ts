@@ -25,7 +25,7 @@ export const ALERT_TYPES = [
 
 export type AlertType = (typeof ALERT_TYPES)[number];
 export type AlertServiceType = FleetServiceType | 'monitoring';
-export type AlertWebhookAdapter = 'slack' | 'generic' | 'sentry';
+export type AlertWebhookAdapter = 'slack' | 'generic' | 'sentry' | 'email' | 'teams' | 'pagerduty';
 export type AlertEventKind = 'failure' | 'repeat' | 'recovery' | 'test' | 'dismissed';
 export type AlertDeliveryStatus = 'pending' | 'processing' | 'accepted' | 'failed' | 'cancelled' | 'expired';
 export type JsonRecord = Record<string, unknown>;

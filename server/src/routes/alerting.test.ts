@@ -153,6 +153,49 @@ describe('alert webhook routes', () => {
     expect(response.status).toBe(400);
     expect(alerts.createAlertWebhook).not.toHaveBeenCalled();
   });
+
+  it('accepts and validates the three new destination types without exposing their secrets in previews', async () => {
+    for (const [adapter, destination] of [
+      ['email', 'ops@example.com'],
+      ['teams', 'https://workflows.example.com/secret'],
+      ['pagerduty', 'a'.repeat(32)],
+    ]) {
+      vi.mocked(alerts.createAlertWebhook).mockResolvedValue({ ...webhook, adapter } as never);
+      const response = await fetch(`${baseUrl}/api/alert-webhooks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Alerts', adapter, webhookUrl: destination }),
+      });
+      expect(response.status).toBe(201);
+      expect(alerts.createAlertWebhook).toHaveBeenLastCalledWith(expect.objectContaining({ adapter, webhookUrl: destination }));
+      vi.mocked(alerts.getAlertWebhook).mockResolvedValue({ ...webhook, adapter } as never);
+      const preview = await fetch(`${baseUrl}/api/alert-webhooks/1/preview`, { method: 'POST' });
+      const body = await preview.json();
+      expect(body.data.networkEffect).toBe(false);
+      expect(JSON.stringify(body)).not.toContain(destination);
+    }
+
+    vi.mocked(alerts.createAlertWebhook).mockClear();
+    for (const [adapter, destination] of [['email', 'bad\r\nRCPT TO:<x@example.com>'], ['pagerduty', 'bad-key'], ['teams', 'http://example.com']]) {
+      const response = await fetch(`${baseUrl}/api/alert-webhooks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Invalid', adapter, webhookUrl: destination }),
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(alerts.createAlertWebhook).not.toHaveBeenCalled();
+  });
+
+  it('requires a new destination value when changing format', async () => {
+    const response = await fetch(`${baseUrl}/api/alert-webhooks/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adapter: 'email' }),
+    });
+    expect(response.status).toBe(400);
+    expect(alerts.updateAlertWebhook).not.toHaveBeenCalled();
+  });
 });
 
 describe('telemetry alert rule routes', () => {

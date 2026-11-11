@@ -475,7 +475,7 @@ function subscribed(webhook: AlertWebhook, event: TelemetryRuleEvent, now: Date)
   const paused = webhook.pausedAt !== null && (webhook.pausedUntil === null || webhook.pausedUntil > now);
   return webhook.enabled && !paused
     && (event !== 'recovery' || webhook.notifyRecovery)
-    && (event !== 'dismissed' || webhook.adapter === 'sentry')
+    && (event !== 'dismissed' || webhook.adapter === 'sentry' || webhook.adapter === 'pagerduty')
     && webhook.subscriptions.some((subscription) => subscription.alertType === 'telemetry_rule' && subscription.enabled);
 }
 
@@ -586,7 +586,7 @@ export function buildTelemetryRulePayload(
   delivery: Pick<PendingDelivery, 'rule' | 'event' | 'state' | 'absent' | 'now' | 'cleared'>,
 ): JsonRecord | null {
   const { rule, event, state } = delivery;
-  if (event === 'dismissed' && adapter !== 'sentry') return null;
+  if (event === 'dismissed' && adapter !== 'sentry' && adapter !== 'pagerduty') return null;
   const seriesLabel = formatSeriesLabels(state.labels_json);
   const value = state.last_value === null ? 'n/a' : String(Number(state.last_value.toFixed(4)));
   const outcome = event === 'failure'

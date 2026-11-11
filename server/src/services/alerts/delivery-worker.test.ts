@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { claimDueAlertDeliveries, completeAlertDelivery, expireStaleAlertDeliveries } from '../../db/queries/alerts.js';
 import { applyOperationsSettings, operationsDefaults, operationsPolicy } from '../operations-settings.js';
 import { sendAlertWebhook } from './webhook-transport.js';
+import { getEmailSenderProfile } from '../../db/queries/email.js';
+import { resolveEmailRelays, sendEmailViaRelay } from '../email/transport.js';
 import { nextAlertRetryAt, processAlertDelivery, startAlertDeliveryWorker, stopAlertDeliveryWorker } from './delivery-worker.js';
 
 vi.mock('../../db/queries/alerts.js', () => ({
@@ -10,6 +12,8 @@ vi.mock('../../db/queries/alerts.js', () => ({
   expireStaleAlertDeliveries: vi.fn(),
 }));
 vi.mock('./webhook-transport.js', () => ({ sendAlertWebhook: vi.fn() }));
+vi.mock('../../db/queries/email.js', () => ({ getEmailSenderProfile: vi.fn() }));
+vi.mock('../email/transport.js', () => ({ resolveEmailRelays: vi.fn(), sendEmailViaRelay: vi.fn() }));
 vi.mock('../../middleware/security.js', () => ({ validateOutboundUrl: vi.fn(() => null) }));
 vi.mock('../../logger.js', () => ({
   logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
@@ -35,8 +39,10 @@ const delivery = {
   createdAt: new Date(),
   completedAt: null,
   adapter: 'slack' as const,
+  destinationUid: 'destination-1',
   payload: { text: 'test' },
   webhookUrl: 'https://hooks.slack.com/services/test',
+  sentry: { org: null, apiUrl: null, apiToken: null },
   claimToken: 'claim-token',
   claimError: null,
 };
@@ -111,5 +117,69 @@ describe('alert delivery worker', () => {
     } finally {
       Date.now = original;
     }
+  });
+
+  it('sends a Teams Adaptive Card through the existing safe webhook transport', async () => {
+    vi.mocked(sendAlertWebhook).mockResolvedValue({ accepted: true, retryable: false, status: 202, error: null });
+    await processAlertDelivery({ ...delivery, adapter: 'teams', webhookUrl: 'https://example.com/teams', payload: { summary: 'Down' } });
+    expect(sendAlertWebhook).toHaveBeenCalledWith(expect.objectContaining({
+      adapter: 'teams',
+      payload: expect.objectContaining({ type: 'message', attachments: expect.any(Array) }),
+    }));
+    expect(completeAlertDelivery).toHaveBeenCalledWith(expect.objectContaining({ status: 'accepted' }));
+  });
+
+  it('sends PagerDuty resolves to the fixed Events API endpoint without putting the key in the URL', async () => {
+    vi.mocked(sendAlertWebhook).mockResolvedValue({ accepted: true, retryable: false, status: 202, error: null });
+    await processAlertDelivery({ ...delivery, adapter: 'pagerduty', webhookUrl: 'a'.repeat(32), eventKind: 'recovery' });
+    expect(sendAlertWebhook).toHaveBeenCalledWith(expect.objectContaining({
+      webhookUrl: 'https://events.pagerduty.com/v2/enqueue',
+      payload: expect.objectContaining({ routing_key: 'a'.repeat(32), event_action: 'resolve' }),
+    }));
+    expect(completeAlertDelivery).toHaveBeenCalledWith(expect.objectContaining({ status: 'accepted' }));
+  });
+
+  it('uses the alerts email sender and relay failover, reporting the real delivery result', async () => {
+    const sender = { enabled: true };
+    const relays = [{ id: 1 }, { id: 2 }];
+    vi.mocked(getEmailSenderProfile).mockResolvedValue(sender as never);
+    vi.mocked(resolveEmailRelays).mockResolvedValue(relays as never);
+    vi.mocked(sendEmailViaRelay)
+      .mockResolvedValueOnce({ accepted: false, retryable: true, error: 'temporary' })
+      .mockResolvedValueOnce({ accepted: true, retryable: false });
+    await processAlertDelivery({ ...delivery, adapter: 'email', webhookUrl: 'ops@example.com', payload: { summary: 'Test down' } });
+    expect(getEmailSenderProfile).toHaveBeenCalledWith('alerts');
+    expect(sendEmailViaRelay).toHaveBeenCalledTimes(2);
+    expect(sendEmailViaRelay).toHaveBeenCalledWith(expect.objectContaining({
+      recipientEmail: 'ops@example.com', subject: expect.stringContaining('Test down'),
+    }), sender, relays[1]);
+    expect(completeAlertDelivery).toHaveBeenCalledWith(expect.objectContaining({ status: 'accepted' }));
+
+    vi.clearAllMocks();
+    vi.mocked(getEmailSenderProfile).mockResolvedValue(sender as never);
+    vi.mocked(resolveEmailRelays).mockResolvedValue(relays.slice(0, 1) as never);
+    vi.mocked(sendEmailViaRelay).mockResolvedValue({ accepted: false, retryable: true, error: 'recipient ops@example.com secret' });
+    await processAlertDelivery({ ...delivery, adapter: 'email', webhookUrl: 'ops@example.com' });
+    expect(completeAlertDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'pending', error: 'All configured alert email relays rejected delivery',
+    }));
+  });
+
+  it('fails visibly when the alerts email profile is disabled', async () => {
+    vi.mocked(getEmailSenderProfile).mockResolvedValue(null);
+    await processAlertDelivery({ ...delivery, adapter: 'email', webhookUrl: 'ops@example.com' });
+    expect(completeAlertDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed', error: 'Alerts email sender profile is disabled or missing',
+    }));
+    expect(sendEmailViaRelay).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsafe sender profile headers before connecting to a relay', async () => {
+    vi.mocked(getEmailSenderProfile).mockResolvedValue({ enabled: true, fromName: 'Alerts\r\nBcc: other@example.com' } as never);
+    await processAlertDelivery({ ...delivery, adapter: 'email', webhookUrl: 'ops@example.com' });
+    expect(completeAlertDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed', error: 'Alerts email sender profile contains invalid header characters',
+    }));
+    expect(sendEmailViaRelay).not.toHaveBeenCalled();
   });
 });

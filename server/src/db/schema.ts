@@ -1974,6 +1974,7 @@ export async function initializeSchema(): Promise<void> {
     await client.query(`
       CREATE TABLE IF NOT EXISTS alert_webhooks (
         id SERIAL PRIMARY KEY,
+        destination_uid UUID NOT NULL DEFAULT gen_random_uuid(),
         name VARCHAR(120) NOT NULL,
         adapter VARCHAR(16) NOT NULL,
         enabled BOOLEAN NOT NULL DEFAULT false,
@@ -1989,7 +1990,7 @@ export async function initializeSchema(): Promise<void> {
         updated_by INTEGER REFERENCES admins(id) ON DELETE SET NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT valid_alert_webhook_adapter CHECK (adapter IN ('slack', 'generic', 'sentry')),
+        CONSTRAINT valid_alert_webhook_adapter CHECK (adapter IN ('slack', 'generic', 'sentry', 'email', 'teams', 'pagerduty')),
         CONSTRAINT valid_alert_webhook_failures CHECK (consecutive_failures BETWEEN 1 AND 20),
         CONSTRAINT valid_alert_webhook_repeat CHECK (repeat_interval_seconds IS NULL OR repeat_interval_seconds BETWEEN 300 AND 2592000),
         CONSTRAINT valid_alert_webhook_pause CHECK (paused_until IS NULL OR paused_at IS NOT NULL)
@@ -1999,13 +2000,14 @@ export async function initializeSchema(): Promise<void> {
     // URL and token (all optional) let recoveries resolve the Sentry issue.
     await client.query(`
       ALTER TABLE alert_webhooks
+        ADD COLUMN IF NOT EXISTS destination_uid UUID NOT NULL DEFAULT gen_random_uuid(),
         ADD COLUMN IF NOT EXISTS sentry_org VARCHAR(100),
         ADD COLUMN IF NOT EXISTS sentry_api_url VARCHAR(200),
         ADD COLUMN IF NOT EXISTS encrypted_sentry_token TEXT
     `);
     await client.query(`
       ALTER TABLE alert_webhooks DROP CONSTRAINT IF EXISTS valid_alert_webhook_adapter;
-      ALTER TABLE alert_webhooks ADD CONSTRAINT valid_alert_webhook_adapter CHECK (adapter IN ('slack', 'generic', 'sentry'))
+      ALTER TABLE alert_webhooks ADD CONSTRAINT valid_alert_webhook_adapter CHECK (adapter IN ('slack', 'generic', 'sentry', 'email', 'teams', 'pagerduty'))
     `);
 
     await client.query(`
@@ -2853,12 +2855,12 @@ export async function initializeSchema(): Promise<void> {
         CONSTRAINT valid_alert_delivery_type CHECK (alert_type IN (${ALERT_TYPES_SQL})),
         CONSTRAINT valid_alert_delivery_event CHECK (event_kind IN ('failure', 'repeat', 'recovery', 'test', 'dismissed')),
         CONSTRAINT valid_alert_delivery_status CHECK (status IN ('pending', 'processing', 'accepted', 'failed', 'cancelled')),
-        CONSTRAINT valid_alert_delivery_adapter CHECK (adapter IN ('slack', 'generic', 'sentry'))
+        CONSTRAINT valid_alert_delivery_adapter CHECK (adapter IN ('slack', 'generic', 'sentry', 'email', 'teams', 'pagerduty'))
       )
     `);
     await client.query(`
       ALTER TABLE alert_deliveries DROP CONSTRAINT IF EXISTS valid_alert_delivery_adapter;
-      ALTER TABLE alert_deliveries ADD CONSTRAINT valid_alert_delivery_adapter CHECK (adapter IN ('slack', 'generic', 'sentry'))
+      ALTER TABLE alert_deliveries ADD CONSTRAINT valid_alert_delivery_adapter CHECK (adapter IN ('slack', 'generic', 'sentry', 'email', 'teams', 'pagerduty'))
     `);
     await client.query(`
       ALTER TABLE alert_deliveries
@@ -2880,6 +2882,11 @@ export async function initializeSchema(): Promise<void> {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_alert_deliveries_due
       ON alert_deliveries (status, next_attempt_at, created_at)
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_alert_deliveries_pagerduty_order
+      ON alert_deliveries (webhook_id, service_id, alert_type, id)
+      WHERE adapter = 'pagerduty' AND status IN ('pending', 'processing')
     `);
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_alert_deliveries_recent

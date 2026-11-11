@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:https';
 import { request as httpsRequest } from 'node:https';
+import { createServer as createSmtpServer } from 'node:net';
 import { once } from 'node:events';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -14,9 +15,12 @@ import {
   createAlertDelivery,
   claimDueAlertDeliveries,
   completeAlertDelivery,
+  expireStaleAlertDeliveries,
   listAlertDeliveries,
+  updateAlertWebhook,
 } from '../../db/queries/alerts.js';
 import { updateConfig } from '../../db/queries/config.js';
+import { updateEmailSenderProfile, upsertEmailRelay } from '../../db/queries/email.js';
 import { processAlertDelivery } from './delivery-worker.js';
 import { createAlertTransport, sendAlertWebhook } from './webhook-transport.js';
 
@@ -165,5 +169,130 @@ describe.skipIf(!run)('Encrypted queue to verified TLS receiver', () => {
     );
     expect(await claimDueAlertDeliveries(1)).toEqual([]);
     expect((await listAlertDeliveries()).find((item) => item.id === stale.id)?.status).toBe('cancelled');
+  });
+
+  it('orders PagerDuty events for the same subject across retries without blocking other subjects', async () => {
+    const destination = await createAlertWebhook({
+      name: 'PagerDuty fixture', adapter: 'pagerduty', enabled: true, webhookUrl: 'a'.repeat(32),
+    });
+    const make = (subject: string, eventKind: 'failure' | 'recovery') => createAlertDelivery({
+      dedupeKey: `pager-order:${randomUUID()}`, webhookId: destination.id, webhookName: destination.name,
+      fleetServiceId: null, serviceId: subject, serviceName: subject, serviceType: 'robin',
+      alertType: 'availability', eventKind, adapter: 'pagerduty', payload: { summary: subject },
+    });
+    const firing = await make('server-a', 'failure');
+    const recovery = await make('server-a', 'recovery');
+    const other = await make('server-b', 'failure');
+    const batch = await claimDueAlertDeliveries(10);
+    expect(batch.map(item => item.id)).toEqual([firing.id, other.id]);
+    for (const item of batch) {
+      await completeAlertDelivery({
+        id: item.id, claimToken: item.claimToken, status: item.id === firing.id ? 'pending' : 'accepted',
+        nextAttemptAt: item.id === firing.id ? new Date(Date.now() + 60_000) : null,
+      });
+    }
+    expect(await claimDueAlertDeliveries(10)).toEqual([]);
+    await query('UPDATE alert_deliveries SET next_attempt_at = NOW() WHERE id = $1', [firing.id]);
+    const [retry] = await claimDueAlertDeliveries(10);
+    expect(retry.id).toBe(firing.id);
+    await completeAlertDelivery({ id: retry.id, claimToken: retry.claimToken, status: 'accepted' });
+    const [resolved] = await claimDueAlertDeliveries(10);
+    expect(resolved.id).toBe(recovery.id);
+    await completeAlertDelivery({ id: resolved.id, claimToken: resolved.claimToken, status: 'accepted' });
+  });
+
+  it('cancels deliveries queued under an old destination format', async () => {
+    const destination = await createAlertWebhook({
+      name: 'Changing destination', adapter: 'slack', enabled: true, webhookUrl: 'https://example.com/fixture',
+    });
+
+    const item = await createAlertDelivery({
+      dedupeKey: `destination-change:${randomUUID()}`, webhookId: destination.id, webhookName: destination.name,
+      fleetServiceId: null, serviceId: 'fixture', serviceName: 'Fixture', serviceType: 'robin',
+      alertType: 'availability', eventKind: 'failure', adapter: 'slack', payload: { text: 'old format' },
+    });
+    await updateAlertWebhook(destination.id, { adapter: 'email', webhookUrl: 'ops@example.com' });
+    expect(await claimDueAlertDeliveries(10)).toEqual([]);
+    expect((await listAlertDeliveries()).find(value => value.id === item.id)).toMatchObject({
+      status: 'cancelled', error: 'Destination type changed',
+    });
+  });
+
+  it('retains stale PagerDuty resolves while expiring old unattempted openings', async () => {
+    const destination = await createAlertWebhook({
+      name: 'PagerDuty expiry fixture', adapter: 'pagerduty', enabled: true, webhookUrl: 'b'.repeat(32),
+    });
+    const make = (eventKind: 'failure' | 'recovery') => createAlertDelivery({
+      dedupeKey: `pager-expiry:${randomUUID()}`, webhookId: destination.id, webhookName: destination.name,
+      fleetServiceId: null, serviceId: 'stale-subject', serviceName: 'Fixture', serviceType: 'robin',
+      alertType: 'availability', eventKind, adapter: 'pagerduty', payload: { summary: 'Fixture' },
+    });
+    const failure = await make('failure');
+    const recovery = await make('recovery');
+    await query("UPDATE alert_deliveries SET created_at = NOW() - INTERVAL '2 hours' WHERE id = ANY($1::bigint[])", [[failure.id, recovery.id]]);
+    await expireStaleAlertDeliveries(60 * 60 * 1000);
+    const history = await listAlertDeliveries();
+    expect(history.find(value => value.id === failure.id)?.status).toBe('expired');
+    expect(history.find(value => value.id === recovery.id)?.status).toBe('pending');
+    const [claimed] = await claimDueAlertDeliveries(1);
+    expect(claimed.id).toBe(recovery.id);
+    await completeAlertDelivery({ id: claimed.id, claimToken: claimed.claimToken, status: 'accepted' });
+  });
+
+  it('delivers an encrypted email destination through the configured SMTP relay', async () => {
+    let message = '';
+    const smtp = createSmtpServer(socket => {
+      let buffer = '';
+      let data = false;
+      socket.write('220 fixture ESMTP\r\n');
+      socket.on('data', chunk => {
+        buffer += chunk.toString();
+        let end: number;
+        while ((end = buffer.indexOf('\r\n')) !== -1) {
+          const line = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          if (data) {
+            if (line === '.') { data = false; socket.write('250 queued\r\n'); }
+            else message += `${line}\n`;
+          } else if (line.startsWith('EHLO ')) socket.write('250 fixture\r\n');
+          else if (line.startsWith('MAIL FROM:') || line.startsWith('RCPT TO:')) socket.write('250 ok\r\n');
+          else if (line === 'DATA') { data = true; socket.write('354 send data\r\n'); }
+          else if (line === 'QUIT') socket.end('221 bye\r\n');
+          else socket.write('500 unsupported\r\n');
+        }
+      });
+    });
+    smtp.listen(0, '127.0.0.1');
+    await once(smtp, 'listening');
+    try {
+      const relay = await upsertEmailRelay({
+        name: 'SMTP fixture', relayType: 'smtp', enabled: true, priority: 1, smtpHost: '127.0.0.1',
+        smtpPort: (smtp.address() as { port: number }).port, smtpSecurity: 'none', tlsMode: 'strict',
+        username: null, robinServiceId: null, postfixServiceId: null,
+      });
+      await updateEmailSenderProfile({
+        profileKey: 'alerts', fromName: 'Fixture alerts', fromEmail: 'alerts@example.com',
+        replyTo: null, envelopeFrom: null, enabled: true, relayIds: [relay.id],
+      });
+      const destination = await createAlertWebhook({
+        name: 'Email fixture', adapter: 'email', enabled: true, webhookUrl: 'ops@example.com',
+      });
+      const stored = await query('SELECT encrypted_url FROM alert_webhooks WHERE id=$1', [destination.id]);
+      expect(stored.rows[0].encrypted_url).not.toContain('ops@example.com');
+      const item = await createAlertDelivery({
+        dedupeKey: `smtp:${randomUUID()}`, webhookId: destination.id, webhookName: destination.name,
+        fleetServiceId: null, serviceId: 'fixture', serviceName: 'Fixture', serviceType: 'robin',
+        alertType: 'availability', eventKind: 'failure', adapter: 'email', payload: { summary: 'Fixture is down' },
+      });
+      const [claimed] = await claimDueAlertDeliveries(1);
+      expect(claimed.id).toBe(item.id);
+      await processAlertDelivery(claimed);
+      expect((await listAlertDeliveries()).find(value => value.id === item.id)?.status).toBe('accepted');
+      expect(message).toContain('To: ops@example.com');
+      expect(message).toContain('Subject: [FAILURE] Fixture is down');
+      expect(message).toContain(item.notificationId);
+    } finally {
+      await new Promise<void>(resolve => smtp.close(() => resolve()));
+    }
   });
 });

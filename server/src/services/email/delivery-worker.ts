@@ -3,18 +3,13 @@ import {
   claimDueEmailDeliveries,
   completeEmailDelivery,
   getEmailSenderProfile,
-  getResolvedEmailRelay,
-  listEmailRelays,
   recordEmailDeliveryAttempt,
   type ClaimedEmailDelivery,
-  type ResolvedEmailRelay,
 } from '../../db/queries/email.js';
 import { createAlertDelivery, listAlertWebhooks } from '../../db/queries/alerts.js';
-import { queueRawEmail } from '../robin-api.js';
 import { logger } from '../../logger.js';
-import { renderMessage, sendSmtpMail } from './smtp-client.js';
-import type { EmailSenderProfile } from '../../types/email.js';
 import { buildSentryAlertPayload } from '../alerts/sentry.js';
+import { resolveEmailRelays, sendEmailViaRelay } from './transport.js';
 
 const WORKER_INTERVAL_MS = 5000;
 const MAX_ATTEMPTS = 5;
@@ -63,7 +58,7 @@ export async function processEmailDelivery(delivery: ClaimedEmailDelivery): Prom
     await failDelivery(delivery, null, 'Sender profile is disabled or missing', false);
     return;
   }
-  const relays = await resolveRelayPolicy(sender);
+  const relays = await resolveEmailRelays(sender);
   if (relays.length === 0) {
     await failDelivery(delivery, null, 'No enabled email relays are configured for this sender profile', false);
     return;
@@ -71,7 +66,7 @@ export async function processEmailDelivery(delivery: ClaimedEmailDelivery): Prom
 
   const errors: string[] = [];
   for (const relay of relays) {
-    const result = await sendViaRelay(delivery, sender, relay);
+    const result = await sendEmailViaRelay(delivery, sender, relay);
     await recordEmailDeliveryAttempt({
       deliveryId: delivery.id,
       relayId: relay.id,
@@ -106,52 +101,6 @@ export async function processEmailDelivery(delivery: ClaimedEmailDelivery): Prom
   if (!shouldRetry) {
     await enqueueEmailDeliveryFailureAlert(delivery, error);
   }
-}
-
-async function resolveRelayPolicy(sender: EmailSenderProfile): Promise<ResolvedEmailRelay[]> {
-  const ids = sender.relayIds;
-  const relays = ids.length > 0
-    ? (await Promise.all(ids.map((id) => getResolvedEmailRelay(id)))).filter((relay): relay is ResolvedEmailRelay => Boolean(relay?.enabled))
-    : (await Promise.all((await listEmailRelays()).filter((relay) => relay.enabled).map((relay) => getResolvedEmailRelay(relay.id))))
-      .filter((relay): relay is ResolvedEmailRelay => Boolean(relay?.enabled));
-  return relays.sort((a, b) => a.priority - b.priority || a.id - b.id);
-}
-
-async function sendViaRelay(
-  delivery: ClaimedEmailDelivery,
-  sender: EmailSenderProfile,
-  relay: ResolvedEmailRelay,
-): Promise<{ accepted: boolean; response?: string; error?: string; retryable: boolean }> {
-  if (relay.relayType === 'robin') {
-    try {
-      const response = await queueRawEmail({
-        mail: sender.envelopeFrom || sender.fromEmail,
-        rcpt: [delivery.recipientEmail],
-        message: renderMessage({
-          relay,
-          sender,
-          to: delivery.recipientEmail,
-          subject: delivery.subject,
-          text: delivery.textBody,
-          html: delivery.htmlBody,
-        }),
-      }, relay.robinServiceId ?? undefined);
-      if (response.success === false) {
-        return { accepted: false, error: String(response.error ?? 'Robin queue rejected message'), retryable: true };
-      }
-      return { accepted: true, response: JSON.stringify(response).slice(0, 500), retryable: false };
-    } catch (error) {
-      return { accepted: false, error: (error as Error).message, retryable: true };
-    }
-  }
-  return sendSmtpMail({
-    relay,
-    sender,
-    to: delivery.recipientEmail,
-    subject: delivery.subject,
-    text: delivery.textBody,
-    html: delivery.htmlBody,
-  });
 }
 
 async function failDelivery(
@@ -209,7 +158,7 @@ async function enqueueEmailDeliveryFailureAlert(delivery: ClaimedEmailDelivery, 
       : genericPayload;
     if (!payload) continue;
     await createAlertDelivery({
-      dedupeKey: `email-delivery:${delivery.id}:failure:${delivery.attempts}`,
+      dedupeKey: `email-delivery:${delivery.id}:failure:${delivery.attempts}:${webhook.id}`,
       webhookId: webhook.id,
       webhookName: webhook.name,
       fleetServiceId: null,

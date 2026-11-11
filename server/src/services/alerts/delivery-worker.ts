@@ -5,6 +5,17 @@ import { validateOutboundUrl } from '../../middleware/security.js';
 import { sendAlertWebhook } from './webhook-transport.js';
 import { sendSentryAlert, sentryDeliveryUrl } from './sentry.js';
 import { reportError } from '../error-reporting.js';
+import { getEmailSenderProfile } from '../../db/queries/email.js';
+import { resolveEmailRelays, sendEmailViaRelay } from '../email/transport.js';
+import {
+  buildAlertEmail,
+  buildPagerDutyAlert,
+  buildTeamsAlert,
+  PAGERDUTY_EVENTS_URL,
+  validAlertEmail,
+  validPagerDutyKey,
+} from './channels.js';
+import type { AlertTransportResult } from './webhook-transport.js';
 
 export function alertDeliveryPolicy() {
   const policy = operationsPolicy();
@@ -84,34 +95,44 @@ export async function processAlertDelivery(delivery: ClaimedAlertDelivery): Prom
       id: delivery.id,
       claimToken: delivery.claimToken,
       status: 'failed',
-      error: delivery.claimError ?? 'Destination webhook URL is unavailable',
+      error: delivery.claimError ?? 'Destination secret is unavailable',
     });
     return;
   }
 
-  const destination = { dsn: delivery.webhookUrl, ...delivery.sentry };
-  // A Sentry DSN carries its key as URL credentials; the URL actually sent to
-  // (the envelope endpoint or the API) is the one that must pass the checks.
-  const targetUrl = delivery.adapter === 'sentry' ? sentryDeliveryUrl(destination, delivery.payload) : delivery.webhookUrl;
-  const urlError = targetUrl ? await validateWebhookUrl(targetUrl) : 'Sentry DSN is invalid';
-  if (urlError) {
-    await completeAlertDelivery({
-      id: delivery.id,
-      claimToken: delivery.claimToken,
-      status: 'failed',
-      error: urlError,
-    });
-    return;
+  let result: AlertTransportResult & { skipped?: boolean };
+  if (delivery.adapter === 'email') {
+    result = await sendAlertEmail(delivery);
+  } else {
+    const destination = { dsn: delivery.webhookUrl, ...delivery.sentry };
+    const targetUrl = delivery.adapter === 'sentry' ? sentryDeliveryUrl(destination, delivery.payload)
+      : delivery.adapter === 'pagerduty' ? PAGERDUTY_EVENTS_URL : delivery.webhookUrl;
+    const urlError = targetUrl ? await validateWebhookUrl(targetUrl) : 'Sentry DSN is invalid';
+    if (urlError || !targetUrl) {
+      await completeAlertDelivery({
+        id: delivery.id,
+        claimToken: delivery.claimToken,
+        status: 'failed',
+        error: urlError ?? 'Destination URL is unavailable',
+      });
+      return;
+    }
+    if (delivery.adapter === 'pagerduty' && !validPagerDutyKey(delivery.webhookUrl)) {
+      result = { accepted: false, retryable: false, status: null, error: 'PagerDuty integration key is invalid' };
+    } else if (delivery.adapter === 'sentry') {
+      result = await sendSentryAlert(destination, delivery.payload, delivery.notificationId);
+    } else {
+      const payload = delivery.adapter === 'teams' ? buildTeamsAlert(delivery)
+        : delivery.adapter === 'pagerduty' ? buildPagerDutyAlert(delivery, delivery.webhookUrl)
+          : delivery.payload;
+      result = await sendAlertWebhook({
+        adapter: delivery.adapter,
+        webhookUrl: targetUrl,
+        payload,
+        notificationId: delivery.notificationId,
+      });
+    }
   }
-
-  const result = delivery.adapter === 'sentry'
-    ? await sendSentryAlert(destination, delivery.payload, delivery.notificationId)
-    : await sendAlertWebhook({
-      adapter: delivery.adapter,
-      webhookUrl: delivery.webhookUrl,
-      payload: delivery.payload,
-      notificationId: delivery.notificationId,
-    });
 
   if ('skipped' in result && result.skipped) {
     await completeAlertDelivery({
@@ -142,6 +163,36 @@ export async function processAlertDelivery(delivery: ClaimedAlertDelivery): Prom
     error: result.error,
     nextAttemptAt: shouldRetry ? nextAlertRetryAt(delivery.attempts) : null,
   });
+}
+
+async function sendAlertEmail(delivery: ClaimedAlertDelivery): Promise<AlertTransportResult> {
+  if (!delivery.webhookUrl || !validAlertEmail(delivery.webhookUrl)) {
+    return { accepted: false, retryable: false, status: null, error: 'Alert email recipient is invalid' };
+  }
+  const sender = await getEmailSenderProfile('alerts');
+  if (!sender?.enabled) {
+    return { accepted: false, retryable: false, status: null, error: 'Alerts email sender profile is disabled or missing' };
+  }
+  if ([sender.fromName, sender.fromEmail, sender.replyTo, sender.envelopeFrom].some(value => value && /[\r\n\x00]/.test(value))) {
+    return { accepted: false, retryable: false, status: null, error: 'Alerts email sender profile contains invalid header characters' };
+  }
+  const relays = await resolveEmailRelays(sender);
+  if (relays.length === 0) {
+    return { accepted: false, retryable: false, status: null, error: 'No enabled relays are configured for the alerts email sender' };
+  }
+  const message = buildAlertEmail(delivery);
+  let retryable = false;
+  for (const relay of relays) {
+    const result = await sendEmailViaRelay({
+      recipientEmail: delivery.webhookUrl,
+      subject: message.subject,
+      textBody: message.text,
+      htmlBody: null,
+    }, sender, relay);
+    if (result.accepted) return { accepted: true, retryable: false, status: null, error: null };
+    retryable ||= result.retryable;
+  }
+  return { accepted: false, retryable, status: null, error: 'All configured alert email relays rejected delivery' };
 }
 
 async function validateWebhookUrl(rawUrl: string): Promise<string | null> {

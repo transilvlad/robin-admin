@@ -207,7 +207,7 @@ describe('AlertSettingsPage', () => {
     await screen.findByText('Operations Slack');
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Telemetry rule/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save webhook' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save destination' }));
     await waitFor(() => expect(alertsApi.updateWebhook).toHaveBeenCalled());
     const sent = alertsApi.updateWebhook.mock.calls[0][1] as { subscriptions: Array<{ alertType: string; enabled: boolean }> };
     expect(sent.subscriptions).toContainEqual({ alertType: 'telemetry_rule', enabled: true, threshold: null });
@@ -223,7 +223,7 @@ describe('AlertSettingsPage', () => {
     fireEvent.change(screen.getByLabelText('Sentry DSN'), { target: { value: 'https://key@o1.ingest.us.sentry.io/2' } });
     fireEvent.change(screen.getByLabelText('Organization slug'), { target: { value: 'example-org' } });
     fireEvent.change(screen.getByLabelText('API token'), { target: { value: 'sntrys_token' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save webhook' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save destination' }));
     await waitFor(() => expect(alertsApi.createWebhook).toHaveBeenCalled());
     expect(alertsApi.createWebhook.mock.calls[0][0]).toMatchObject({
       name: 'Sentry infrastructure',
@@ -233,6 +233,34 @@ describe('AlertSettingsPage', () => {
       sentryApiUrl: null,
       sentryApiToken: 'sntrys_token',
     });
+  });
+
+  it.each([
+    ['email', 'Email recipient', 'ops@example.com'],
+    ['teams', 'Teams Workflows webhook URL', 'https://example.com/workflow'],
+    ['pagerduty', 'PagerDuty integration key', 'a'.repeat(32)],
+  ])('creates a %s destination with the right input', async (adapter, label, value) => {
+    alertsApi.createWebhook.mockResolvedValue({ data: webhook });
+    render(<AlertSettingsPage />);
+    await screen.findByText('Operations Slack');
+    fireEvent.click(screen.getByRole('button', { name: 'Add destination' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New destination' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Format' }), { target: { value: adapter } });
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save destination' }));
+    await waitFor(() => expect(alertsApi.createWebhook).toHaveBeenCalledWith(expect.objectContaining({
+      adapter, webhookUrl: value,
+    })));
+  });
+
+  it('requires a fresh destination value when changing an existing format', async () => {
+    render(<AlertSettingsPage />);
+    await screen.findByText('Operations Slack');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Format' }), { target: { value: 'pagerduty' } });
+    expect(screen.getByRole('button', { name: 'Save destination' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('PagerDuty integration key'), { target: { value: 'a'.repeat(32) } });
+    expect(screen.getByRole('button', { name: 'Save destination' })).toBeEnabled();
   });
 });
 

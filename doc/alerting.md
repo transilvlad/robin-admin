@@ -1,6 +1,6 @@
-# Service webhook alerts
+# Service alerts
 
-Robin Admin evaluates the latest observations for every enabled fleet service and sends matching notifications to configured Slack or generic HTTPS webhooks, or to Sentry.
+Robin Admin evaluates the latest observations for every enabled fleet service and sends matching notifications to configured Slack, Microsoft Teams, PagerDuty, email, generic HTTPS webhook, or Sentry destinations.
 
 ## Webhook settings
 
@@ -14,7 +14,15 @@ Each webhook has its own:
 
 The defaults are three consecutive failures, a four-hour repeat interval, and recovery notifications enabled. Paused webhooks continue tracking service state but do not create notifications. A timed pause resumes automatically.
 
-Webhook URLs are encrypted at rest with `ROBIN_ADMIN_ENCRYPTION_KEY` and are write-only through the API. Preview renders a sample payload without making a network request. Test requires explicit confirmation and sends a live request only when alerting and the webhook are enabled.
+Destination values are encrypted at rest with `ROBIN_ADMIN_ENCRYPTION_KEY` and are write-only through the API. Preview renders a sample payload without making a network request. Test requires explicit confirmation and sends a live notification only when alerting and the destination are enabled.
+
+### Email, Teams, and PagerDuty
+
+- **Email:** enter one recipient address. Configure and enable the **Alerts** sender profile and at least one relay under **Administration -> Email**. Relays are tried in priority order; the alert delivery is accepted only when a relay accepts it. Its history and retries are under **Administration -> Alerts -> Deliveries**. A failed alert email does not generate another email-delivery-failure alert.
+- **Microsoft Teams:** create a Workflows webhook using the **Send webhook alerts to a channel/chat** template, configured to accept requests from anyone, and enter its URL. Robin Admin sends an Adaptive Card. A successful response means the workflow accepted the request; check the workflow run if the message is not posted. Authenticated-only webhook triggers are not supported.
+- **PagerDuty:** enter the 32-character Events API v2 integration key. Failures create incidents, repeats update the same incident, and recoveries resolve it when recovery notifications are enabled. Dismissing a telemetry issue also resolves its PagerDuty incident; resuming it can open a new one. Live tests create a real test incident that must be resolved in PagerDuty. Alerts without a recovery, or incidents left open when a destination/key is changed or disabled, require manual resolution.
+
+PagerDuty events for the same alert subject are delivered in order, including retries, so a delayed failure cannot reopen an incident after its recovery. PagerDuty resolve events do not expire before their first attempt, because dropping one can leave an incident open. Destination identity is stored separately from its editable name and secret. Pending notifications queued under an old destination format are cancelled when that format changes.
 
 ## Alert types
 
@@ -77,7 +85,7 @@ Missing timestamps, unknown deferred-message ages, and cache ratios with no requ
 
 The evaluator records one state per webhook, service, and alert type. Generation-based delivery keys prevent repeated evaluator ticks or process restarts from creating duplicate notifications. Repeat notifications use the configured interval, and recovery is sent only after a failure notification.
 
-The delivery worker validates HTTPS destinations, blocks unsafe outbound addresses, disables redirects, applies a timeout, and retries transient network, 408, 429, and server errors up to five attempts. Delivery is at-least-once: a process failure after the remote endpoint accepts a request but before Robin Admin records success can produce a duplicate. Every request includes `X-Robin-Notification-Id` for receiver-side deduplication.
+The delivery worker validates HTTPS destinations, blocks unsafe outbound addresses, disables redirects, applies a timeout, and retries transient network, 408, 429, and server errors up to five attempts. Email uses the configured relay's transport and the same alert retry policy. Delivery is at-least-once: a process failure after the remote endpoint or email relay accepts a request but before Robin Admin records success can produce a duplicate. Webhook requests include `X-Robin-Notification-Id` for receiver-side deduplication; email includes the notification ID in its body.
 
 Delivery history contains only compact status, attempt, response, and bounded
 error details. Webhook secrets and payload secrets are never returned.
@@ -155,7 +163,7 @@ On first schema initialization, when no Operations policy has been saved, legacy
 override the saved policy. Monitoring issue notifications are not queued while
 alert delivery is disabled. Pending deliveries older than the configurable
 expiry age (one hour by default) are marked expired before delivery if they
-have not yet been attempted. Deliveries already in the retry schedule are not
+have not yet been attempted, except PagerDuty recoveries and dismissals. Deliveries already in the retry schedule are not
 expired by this backlog cutoff.
 
 Administrators configure alert enablement, instance name, evaluation and delivery

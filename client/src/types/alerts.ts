@@ -22,7 +22,7 @@ export type AlertType =
 
 export type AlertServiceType = FleetServiceType | 'monitoring';
 
-export type AlertWebhookAdapter = 'slack' | 'generic' | 'sentry';
+export type AlertWebhookAdapter = 'slack' | 'generic' | 'sentry' | 'email' | 'teams' | 'pagerduty';
 export type AlertDeliveryStatus = 'pending' | 'processing' | 'accepted' | 'failed' | 'cancelled' | 'expired';
 export type AlertJson = Record<string, unknown>;
 

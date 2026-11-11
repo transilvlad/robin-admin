@@ -76,9 +76,21 @@ export function createAlertTransport(dependencies: {
         outgoing.on('error', reject);
         outgoing.end(input.body ?? JSON.stringify(input.payload ?? {}));
       });
-      const accepted = response.status >= 200 && response.status < 300
+      let pagerDutyAcknowledged = input.adapter !== 'pagerduty';
+      if (input.adapter === 'pagerduty' && response.status === 202) {
+        try {
+          const acknowledgement: unknown = JSON.parse(response.text);
+          pagerDutyAcknowledged = Boolean(acknowledgement && typeof acknowledgement === 'object'
+            && 'status' in acknowledgement && acknowledgement.status === 'success'
+            && 'dedup_key' in acknowledgement && acknowledgement.dedup_key === input.payload?.dedup_key);
+        } catch {
+          pagerDutyAcknowledged = false;
+        }
+      }
+      const accepted = response.status >= 200 && response.status < 300 && pagerDutyAcknowledged
         && (input.adapter !== 'slack' || response.text.trim().toLowerCase() === 'ok');
-      return { accepted, retryable: [408, 429].includes(response.status) || response.status >= 500,
+      return { accepted, retryable: [408, 429].includes(response.status) || response.status >= 500
+          || (input.adapter === 'pagerduty' && response.status >= 200 && response.status < 300 && !pagerDutyAcknowledged),
         status: response.status, error: accepted ? null : `Webhook did not acknowledge delivery (HTTP ${response.status})` };
     } catch (error) {
       return { accepted: false, retryable: !(error instanceof DestinationPolicyError || error instanceof TypeError), status: null,

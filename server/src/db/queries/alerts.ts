@@ -66,6 +66,7 @@ interface DeliveryRow {
 
 interface ClaimedDeliveryRow extends DeliveryRow {
   encrypted_url: string | null;
+  destination_uid: string;
   sentry_org: string | null;
   sentry_api_url: string | null;
   encrypted_sentry_token: string | null;
@@ -306,7 +307,9 @@ export async function cancelUnavailableAlertDeliveries(): Promise<void> {
   await query(`
     UPDATE alert_deliveries d
     SET status = 'cancelled',
-        error = CASE WHEN w.id IS NULL THEN 'Webhook deleted' ELSE 'Webhook unavailable' END,
+        error = CASE WHEN w.id IS NULL THEN 'Webhook deleted'
+          WHEN d.adapter <> w.adapter THEN 'Destination type changed'
+          ELSE 'Webhook unavailable' END,
         completed_at = CURRENT_TIMESTAMP,
         updated_at = CURRENT_TIMESTAMP
     FROM alert_deliveries candidate
@@ -314,6 +317,7 @@ export async function cancelUnavailableAlertDeliveries(): Promise<void> {
     WHERE d.id = candidate.id
       AND d.status = 'pending'
       AND (w.id IS NULL OR w.enabled = false
+        OR d.adapter <> w.adapter
         OR (w.paused_at IS NOT NULL AND (w.paused_until IS NULL OR w.paused_until > CURRENT_TIMESTAMP)))
   `);
 }
@@ -326,6 +330,7 @@ export async function expireStaleAlertDeliveries(maxAgeMs: number): Promise<numb
          completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
      WHERE status = 'pending'
        AND attempts = 0
+       AND NOT (adapter = 'pagerduty' AND event_kind IN ('recovery', 'dismissed'))
        AND created_at <= CURRENT_TIMESTAMP - ($1::double precision * INTERVAL '1 millisecond')`,
     [maxAgeMs]
   );
@@ -401,6 +406,7 @@ export async function listAlertDeliveries(limit = 50): Promise<AlertDelivery[]> 
 
 export interface ClaimedAlertDelivery extends AlertDelivery {
   adapter: AlertWebhookAdapter;
+  destinationUid: string;
   payload: JsonRecord;
   webhookUrl: string | null;
   sentry: { org: string | null; apiUrl: string | null; apiToken: string | null };
@@ -438,16 +444,27 @@ export async function claimDueAlertDeliveries(limit: number): Promise<ClaimedAle
     `);
     const result = await client.query<ClaimedDeliveryRow>(
       `WITH due AS (
-         SELECT d.id, w.encrypted_url, w.sentry_org, w.sentry_api_url, w.encrypted_sentry_token
+         SELECT d.id, w.encrypted_url, w.destination_uid, w.sentry_org, w.sentry_api_url, w.encrypted_sentry_token
          FROM alert_deliveries d
          JOIN alert_webhooks w ON w.id = d.webhook_id
          WHERE d.status = 'pending'
            AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= CURRENT_TIMESTAMP)
            AND w.enabled = true
            AND w.encrypted_url IS NOT NULL
+           AND d.adapter = w.adapter
            AND (w.paused_at IS NULL OR (w.paused_until IS NOT NULL AND w.paused_until <= CURRENT_TIMESTAMP))
            AND (d.telemetry_alert_issue_id IS NULL OR d.event_kind NOT IN ('failure', 'dismissed')
              OR ${telemetryIssueDeliveryIsCurrent('d')})
+           AND (d.adapter <> 'pagerduty' OR NOT EXISTS (
+             SELECT 1 FROM alert_deliveries older
+             WHERE older.webhook_id = d.webhook_id
+               AND older.adapter = d.adapter
+               AND older.service_id = d.service_id
+               AND older.alert_type = d.alert_type
+               AND older.monitoring_issue_id IS NOT DISTINCT FROM d.monitoring_issue_id
+               AND older.telemetry_alert_issue_id IS NOT DISTINCT FROM d.telemetry_alert_issue_id
+               AND older.id < d.id AND older.status IN ('pending', 'processing')
+           ))
          ORDER BY d.created_at ASC, d.id ASC
          LIMIT $1
          FOR UPDATE OF d SKIP LOCKED
@@ -457,7 +474,7 @@ export async function claimDueAlertDeliveries(limit: number): Promise<ClaimedAle
            claimed_at = CURRENT_TIMESTAMP, claim_token = $2, updated_at = CURRENT_TIMESTAMP
        FROM due
        WHERE d.id = due.id
-       RETURNING ${DELIVERY_COLUMNS.split(',').map((column) => `d.${column.trim()}`).join(', ')}, due.encrypted_url,
+       RETURNING ${DELIVERY_COLUMNS.split(',').map((column) => `d.${column.trim()}`).join(', ')}, due.encrypted_url, due.destination_uid,
          due.sentry_org, due.sentry_api_url, due.encrypted_sentry_token`,
       [Math.max(1, Math.min(limit, 25)), claimToken]
     );
@@ -467,6 +484,7 @@ export async function claimDueAlertDeliveries(limit: number): Promise<ClaimedAle
         return {
           ...mapDelivery(row),
           adapter: row.adapter,
+          destinationUid: row.destination_uid,
           payload: row.payload_json && typeof row.payload_json === 'object' ? row.payload_json as JsonRecord : {},
           webhookUrl: decryptStoredSecret(row.encrypted_url ?? ''),
           sentry: {
@@ -481,6 +499,7 @@ export async function claimDueAlertDeliveries(limit: number): Promise<ClaimedAle
         return {
           ...mapDelivery(row),
           adapter: row.adapter,
+          destinationUid: row.destination_uid,
           payload: row.payload_json && typeof row.payload_json === 'object' ? row.payload_json as JsonRecord : {},
           webhookUrl: null,
           sentry: { org: null, apiUrl: null, apiToken: null },

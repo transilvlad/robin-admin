@@ -156,8 +156,8 @@ describe('telemetry issue dismiss and resume', () => {
     expect(client.release).toHaveBeenCalledOnce();
   });
 
-  it('revision-fences the Sentry resolution queued for a dismissal', async () => {
-    vi.mocked(alertQueries.listAlertWebhooks).mockResolvedValue([{ ...webhook, adapter: 'sentry' }]);
+  it.each(['sentry', 'pagerduty'] as const)('revision-fences the %s resolution queued for a dismissal', async (adapter) => {
+    vi.mocked(alertQueries.listAlertWebhooks).mockResolvedValue([{ ...webhook, adapter }]);
 
     await changeTelemetryAlertIssueDismissal({
       issueId, action: 'dismiss', expectedRevision: 1, actorAdminId: 12,
