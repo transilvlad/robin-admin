@@ -10,6 +10,7 @@ interface AssertionRow { kind: 'body' | 'header' | 'json'; operator: MonitoringH
 export interface CheckForm {
   id: number | null; targetId: number; name: string; checkType: MonitoringCheckType; endpoint: string; port: string;
   intervalSeconds: number; timeoutSeconds: number; confirmationSeconds: number; recoverySeconds: number;
+  pushScheduleMode: 'interval' | 'cron'; pushCronExpression: string; pushTimezone: string;
   placementMode: 'all' | 'selected'; locationIds: number[]; quorum: number;
   certExpiryDays: string; tlsMode: MonitoringTlsMode; certificateErrorMode: MonitoringCertificateErrorMode; enabled: boolean; allowPrivate: boolean;
   startTls: boolean;
@@ -19,12 +20,13 @@ export interface CheckForm {
 function httpDefaults(): MonitoringHttpOptions { return { method: 'GET', headers: {}, body: '', expectedStatuses: Array.from({ length: 100 }, (_, i) => 200 + i), followRedirects: true, maxRedirects: 3, maxResponseTimeMs: null, assertions: [] }; }
 function startTlsDefault(type: MonitoringCheckType, port: string): boolean { return (type === 'smtp' && port === '587') || (type === 'imap' && port === '143'); }
 export function emptyCheckForm(targetId = 0): CheckForm {
-  return { id: null, targetId, name: '', checkType: 'http', endpoint: '', port: '', intervalSeconds: 60, timeoutSeconds: 10, confirmationSeconds: 180, recoverySeconds: 180, placementMode: 'all', locationIds: [], quorum: 0, certExpiryDays: '', tlsMode: 'strict', certificateErrorMode: 'down', enabled: true, allowPrivate: false, startTls: false,
+  return { id: null, targetId, name: '', checkType: 'http', endpoint: '', port: '', intervalSeconds: 60, timeoutSeconds: 10, confirmationSeconds: 180, recoverySeconds: 180, pushScheduleMode: 'interval', pushCronExpression: '0 3 * * *', pushTimezone: 'UTC', placementMode: 'all', locationIds: [], quorum: 0, certExpiryDays: '', tlsMode: 'strict', certificateErrorMode: 'down', enabled: true, allowPrivate: false, startTls: false,
     http: httpDefaults(), statuses: '200-299', headers: [], storedHeaders: [], assertions: [], tcp: { tls: false, bannerContains: '' }, dns: { recordType: 'A', resolver: null, expectedValues: [] }, expectedRecords: '' };
 }
 export function editCheckForm(check: MonitoringCheck): CheckForm {
   const http = check.options.http ?? httpDefaults();
   return { ...emptyCheckForm(check.targetId), ...check, port: check.port === null ? '' : String(check.port), certExpiryDays: check.certExpiryDays === null ? '' : String(check.certExpiryDays),
+    pushScheduleMode: check.pushCronExpression ? 'cron' : 'interval', pushCronExpression: check.pushCronExpression ?? '0 3 * * *', pushTimezone: check.pushTimezone ?? 'UTC',
     http, statuses: formatStatuses(http.expectedStatuses), storedHeaders: check.secretHeaderNames,
     headers: [...Object.entries(http.headers).map(([name, value]) => ({ name, value, secret: false })), ...check.secretHeaderNames.map(name => ({ name, value: '', secret: true }))],
     assertions: http.assertions.map(assertion => ({ kind: assertion.kind, operator: assertion.operator, name: 'name' in assertion ? assertion.name : '', pointer: 'pointer' in assertion ? assertion.pointer : '', value: assertion.value === undefined || assertion.value === null ? '' : String(assertion.value), valueType: assertion.value === null ? 'null' : typeof assertion.value === 'number' ? 'number' : typeof assertion.value === 'boolean' ? 'boolean' : 'string' })),
@@ -43,6 +45,9 @@ function formatStatuses(codes: number[]): string {
 }
 export function checkPayload(form: CheckForm) {
   const options: MonitoringCheckOptions = {};
+  if (form.checkType === 'push' && form.pushScheduleMode === 'cron' && (!form.pushCronExpression.trim() || !form.pushTimezone.trim())) {
+    throw new Error('Cron expression and timezone are required');
+  }
   const secretHeaders: Record<string, string | null> = Object.create(null);
   for (const name of form.storedHeaders) secretHeaders[name] = null;
   if (form.checkType === 'http') {
@@ -91,6 +96,10 @@ export function checkPayload(form: CheckForm) {
     port: form.port ? Number(form.port) : null, intervalSeconds: form.intervalSeconds, timeoutSeconds: form.timeoutSeconds,
     confirmationSeconds: form.confirmationSeconds, recoverySeconds: form.recoverySeconds,
     placementMode: form.placementMode, locationIds: form.locationIds, quorum: form.quorum,
+    ...(form.checkType === 'push' ? {
+      pushCronExpression: form.pushScheduleMode === 'cron' ? form.pushCronExpression.trim() : null,
+      pushTimezone: form.pushScheduleMode === 'cron' ? form.pushTimezone.trim() : null,
+    } : {}),
     ...(usesTls ? { certExpiryDays: form.certExpiryDays ? Number(form.certExpiryDays) : null, tlsMode: form.tlsMode, certificateErrorMode: form.certificateErrorMode } : {}),
     enabled: form.enabled, allowPrivate: form.allowPrivate, options, secretHeaders };
 }
@@ -122,7 +131,7 @@ export function CheckEditor({ form, targets, setForm, onSave, working }: { form:
   return <div className="space-y-5">
     {error && <div role="alert" className="text-sm text-red-600 dark:text-red-300">{error}</div>}
     <div className="grid gap-4 sm:grid-cols-2"><Field label="Target"><select className="input" value={form.targetId} onChange={e => update({ targetId: Number(e.target.value) })}>{targets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}</select></Field><Input label="Name" value={form.name} onChange={e => update({ name: e.target.value })} /></div>
-    <div className="grid gap-4 sm:grid-cols-2"><Field label="Protocol"><select className="input" value={form.checkType} onChange={e => { const type = e.target.value as MonitoringCheckType; const defaults = emptyCheckForm(form.targetId); const port = type === 'imap' ? '993' : type === 'smtp' ? '25' : ''; update({ checkType: type, port, ...(type === 'push' ? { endpoint: 'push', intervalSeconds: 3600, confirmationSeconds: 300, recoverySeconds: 0 } : form.checkType === 'push' ? { endpoint: '', intervalSeconds: 60, confirmationSeconds: 180, recoverySeconds: 180 } : {}), startTls: startTlsDefault(type, port), http: defaults.http, statuses: defaults.statuses, headers: [], assertions: [], tcp: defaults.tcp, dns: defaults.dns, expectedRecords: '', certExpiryDays: '', tlsMode: 'strict', certificateErrorMode: 'down' }); }}>{['http', 'tcp', 'dns', 'smtp', 'imap', 'push'].map(type => <option key={type} value={type}>{type === 'http' ? 'HTTP / HTTPS' : type === 'push' ? 'Push (a job pings Robin Admin)' : type.toUpperCase()}</option>)}</select></Field>{form.checkType !== 'http' && !push && <Input label="Port" type="number" min={1} max={65535} value={form.port} onChange={e => { const startTls = startTlsDefault(form.checkType, e.target.value); const usesTls = (form.checkType === 'imap' && e.target.value !== '143' && !startTls) || ((form.checkType === 'smtp' || form.checkType === 'imap') && startTls) || (form.checkType === 'smtp' && e.target.value === '465') || (form.checkType === 'tcp' && form.tcp.tls); update({ port: e.target.value, startTls, ...(!usesTls ? { certExpiryDays: '', tlsMode: 'strict', certificateErrorMode: 'down' } : {}) }); }} />}</div>
+    <div className="grid gap-4 sm:grid-cols-2"><Field label="Protocol"><select className="input" value={form.checkType} onChange={e => { const type = e.target.value as MonitoringCheckType; const defaults = emptyCheckForm(form.targetId); const port = type === 'imap' ? '993' : type === 'smtp' ? '25' : ''; update({ checkType: type, port, ...(type === 'push' ? { endpoint: 'push', intervalSeconds: 3600, confirmationSeconds: 300, recoverySeconds: 0, pushScheduleMode: 'interval', pushCronExpression: defaults.pushCronExpression, pushTimezone: defaults.pushTimezone } : form.checkType === 'push' ? { endpoint: '', intervalSeconds: 60, confirmationSeconds: 180, recoverySeconds: 180 } : {}), startTls: startTlsDefault(type, port), http: defaults.http, statuses: defaults.statuses, headers: [], assertions: [], tcp: defaults.tcp, dns: defaults.dns, expectedRecords: '', certExpiryDays: '', tlsMode: 'strict', certificateErrorMode: 'down' }); }}>{['http', 'tcp', 'dns', 'smtp', 'imap', 'push'].map(type => <option key={type} value={type}>{type === 'http' ? 'HTTP / HTTPS' : type === 'push' ? 'Push (a job pings Robin Admin)' : type.toUpperCase()}</option>)}</select></Field>{form.checkType !== 'http' && !push && <Input label="Port" type="number" min={1} max={65535} value={form.port} onChange={e => { const startTls = startTlsDefault(form.checkType, e.target.value); const usesTls = (form.checkType === 'imap' && e.target.value !== '143' && !startTls) || ((form.checkType === 'smtp' || form.checkType === 'imap') && startTls) || (form.checkType === 'smtp' && e.target.value === '465') || (form.checkType === 'tcp' && form.tcp.tls); update({ port: e.target.value, startTls, ...(!usesTls ? { certExpiryDays: '', tlsMode: 'strict', certificateErrorMode: 'down' } : {}) }); }} />}</div>
     {push && <PushUrl checkId={form.id} />}
     {!push && <Input label={form.checkType === 'dns' ? 'Record name' : 'Endpoint'} value={form.endpoint} onChange={e => update({ endpoint: e.target.value, ...(form.checkType === 'http' && !/^https:/i.test(e.target.value) ? { certExpiryDays: '', tlsMode: 'strict' } : {}) })} />}
     {(form.checkType === 'smtp' || form.checkType === 'imap') && <Toggle label="Use STARTTLS" checked={form.startTls} disabled={(form.checkType === 'smtp' && form.port === '465') || (form.checkType === 'imap' && form.port === '993')} onChange={value => { const remainsTls = value || (form.checkType === 'imap' && form.port !== '143') || (form.checkType === 'smtp' && form.port === '465'); update({ startTls: value, ...(!remainsTls ? { certExpiryDays: '', tlsMode: 'strict', certificateErrorMode: 'down' } : {}) }); }} />}
@@ -174,10 +183,15 @@ export function CheckEditor({ form, targets, setForm, onSave, working }: { form:
     {tls && <div className="grid gap-4 sm:grid-cols-2"><Input label="Certificate warning (days)" type="number" min={1} max={365} value={form.certExpiryDays} onChange={e => update({ certExpiryDays: e.target.value })} /><Field label="TLS verification"><select className="input" value={form.tlsMode} onChange={e => update({ tlsMode: e.target.value as MonitoringTlsMode })}><option value="strict">Strict</option><option value="allow_self_signed">Allow self-signed/local CA</option></select></Field><Field label="Certificate errors"><select className="input" value={form.certificateErrorMode} onChange={e => update({ certificateErrorMode: e.target.value as MonitoringCertificateErrorMode })}><option value="down">Mark check down</option><option value="warning">Show warning, exclude from availability</option></select></Field></div>}
     {push
       ? <div className="grid gap-4 sm:grid-cols-3">
-        <Input label="Expected every (seconds)" type="number" min={60} max={2592000} value={form.intervalSeconds} onChange={e => update({ intervalSeconds: Number(e.target.value) })} />
+        <Field label="Schedule"><select className="input" value={form.pushScheduleMode} onChange={e => update({ pushScheduleMode: e.target.value as CheckForm['pushScheduleMode'] })}><option value="interval">Interval</option><option value="cron">Cron expression</option></select></Field>
+        {form.pushScheduleMode === 'cron'
+          ? <><Input label="Cron expression" value={form.pushCronExpression} onChange={e => update({ pushCronExpression: e.target.value })} /><Input label="Time zone (IANA)" value={form.pushTimezone} onChange={e => update({ pushTimezone: e.target.value })} /></>
+          : <Input label="Expected every (seconds)" type="number" min={60} max={2592000} value={form.intervalSeconds} onChange={e => update({ intervalSeconds: Number(e.target.value) })} />}
         <Input label="Grace before an issue (seconds)" type="number" min={0} max={86400} value={form.confirmationSeconds} onChange={e => update({ confirmationSeconds: Number(e.target.value) })} />
         <Input label="Recover (seconds)" type="number" min={0} max={86400} value={form.recoverySeconds} onChange={e => update({ recoverySeconds: Number(e.target.value) })} />
-        <p className="text-xs text-gray-500 sm:col-span-3 dark:text-gray-400">Down once no ping has arrived for the expected interval, or when the job calls the URL ending in <code>/fail</code>. An issue opens after the grace period. Evaluated every minute on this server.</p>
+        <p className="text-xs text-gray-500 sm:col-span-3 dark:text-gray-400">{form.pushScheduleMode === 'cron'
+          ? 'Use five cron fields, for example 0 3 * * * for 03:00 daily. A successful ping must arrive between the scheduled time and the end of the grace period. Evaluated about every minute on this server.'
+          : <>Down once no ping has arrived for the expected interval, or when the job calls the URL ending in <code>/fail</code>. An issue opens after the grace period. Evaluated every minute on this server.</>}</p>
       </div>
       : <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{(['intervalSeconds', 'timeoutSeconds', 'confirmationSeconds', 'recoverySeconds'] as const).map((key, index) => <Input key={key} label={['Interval (seconds)', 'Timeout (seconds)', 'Confirm (seconds)', 'Recover (seconds)'][index]} type="number" min={key === 'intervalSeconds' ? 10 : key === 'timeoutSeconds' ? 1 : 0} max={key === 'timeoutSeconds' ? 120 : 86400} value={form[key]} onChange={e => update({ [key]: Number(e.target.value) })} />)}</div>}
     <div className="flex items-center justify-between gap-3"><Toggle label="Enabled" checked={form.enabled} onChange={value => update({ enabled: value })} /><Button onClick={() => void save()} disabled={working || !form.name || !form.endpoint || !form.targetId}>Save check</Button></div>

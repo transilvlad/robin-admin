@@ -2264,6 +2264,8 @@ export const monitoringApi = {
     options?: MonitoringCheck['options'];
     secretHeaders?: Record<string, string | null>;
     enabled?: boolean;
+    pushCronExpression?: string | null;
+    pushTimezone?: string | null;
   }) =>
     request<ApiResponse<MonitoringCheck>>('/monitoring/checks', {
       method: 'POST',
@@ -2290,6 +2292,8 @@ export const monitoringApi = {
     options: MonitoringCheck['options'];
     secretHeaders: Record<string, string | null>;
     enabled: boolean;
+    pushCronExpression: string | null;
+    pushTimezone: string | null;
   }>) =>
     request<ApiResponse<MonitoringCheck>>(`/monitoring/checks/${id}`, {
       method: 'PUT',

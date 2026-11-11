@@ -2158,10 +2158,31 @@ export async function initializeSchema(): Promise<void> {
         ADD COLUMN IF NOT EXISTS push_token_hash VARCHAR(64),
         ADD COLUMN IF NOT EXISTS encrypted_push_token TEXT,
         ADD COLUMN IF NOT EXISTS last_ping_at TIMESTAMPTZ,
-        ADD COLUMN IF NOT EXISTS last_ping_status VARCHAR(8)
+        ADD COLUMN IF NOT EXISTS last_ping_status VARCHAR(8),
+        ADD COLUMN IF NOT EXISTS push_cron_expression VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS push_timezone VARCHAR(128),
+        ADD COLUMN IF NOT EXISTS push_schedule_started_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS push_recovered_through TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS push_schedule_cursor TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS push_revision INTEGER NOT NULL DEFAULT 0
     `);
+    await client.query(`ALTER TABLE monitoring_checks DROP CONSTRAINT IF EXISTS valid_monitoring_push_schedule`);
+    await client.query(`ALTER TABLE monitoring_checks ADD CONSTRAINT valid_monitoring_push_schedule CHECK (
+      (push_cron_expression IS NULL AND push_timezone IS NULL AND push_schedule_started_at IS NULL AND push_recovered_through IS NULL AND push_schedule_cursor IS NULL)
+      OR (check_type = 'push' AND push_cron_expression IS NOT NULL AND push_timezone IS NOT NULL AND push_schedule_started_at IS NOT NULL)
+    )`);
     await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_monitoring_checks_push_token
       ON monitoring_checks (push_token_hash) WHERE push_token_hash IS NOT NULL`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS monitoring_push_checkins (
+        check_id INTEGER NOT NULL REFERENCES monitoring_checks(id) ON DELETE CASCADE,
+        scheduled_at TIMESTAMPTZ NOT NULL,
+        received_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (check_id, scheduled_at)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_monitoring_push_checkins_received
+      ON monitoring_push_checkins (received_at)`);
     await client.query(`ALTER TABLE monitoring_checks DROP CONSTRAINT IF EXISTS valid_monitoring_check_interval`);
     await client.query(`ALTER TABLE monitoring_checks ADD CONSTRAINT valid_monitoring_check_interval
       CHECK (interval_seconds BETWEEN 10 AND 2592000)`);

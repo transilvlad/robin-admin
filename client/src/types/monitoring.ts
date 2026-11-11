@@ -133,6 +133,12 @@ export interface MonitoringCheck {
   /** Push checks: the last ping the job sent, and whether it reported success. */
   lastPingAt: string | null;
   lastPingStatus: 'ok' | 'fail' | null;
+  pushCronExpression: string | null;
+  pushTimezone: string | null;
+  pushScheduleStartedAt: string | null;
+  pushRecoveredThrough: string | null;
+  pushScheduleCursor: string | null;
+  pushRevision: number;
   createdAt: string;
   updatedAt: string;
 }

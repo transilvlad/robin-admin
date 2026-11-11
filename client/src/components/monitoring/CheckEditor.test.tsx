@@ -3,6 +3,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CheckEditor, checkPayload, editCheckForm, emptyCheckForm } from './CheckEditor';
 import type { MonitoringCheck } from '../../types/monitoring';
 afterEach(cleanup);
+
+function monitoringCheck(overrides: Partial<MonitoringCheck> = {}): MonitoringCheck {
+  return {
+    ...emptyCheckForm(1), id: 7, targetName: 'Test', targetEnvironment: 'test', port: null, certExpiryDays: null,
+    options: {}, secretHeaderNames: [], pausedAt: null, pauseReason: null, currentStatus: 'unknown', targetEnabled: true,
+    statusSince: null, lastRunAt: null, nextRunAt: null, lastResponseTimeMs: null, lastError: null,
+    consecutiveFailures: 0, consecutiveSuccesses: 0, lastPingAt: null, lastPingStatus: null,
+    pushCronExpression: null, pushTimezone: null, pushScheduleStartedAt: null, pushRecoveredThrough: null,
+    pushScheduleCursor: null, pushRevision: 0, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
 describe('monitoring check editor', () => {
   it('builds canonical HTTP settings and typed numeric JSON assertions', () => {
     const form = emptyCheckForm(1);
@@ -14,7 +27,7 @@ describe('monitoring check editor', () => {
     expect(() => checkPayload(form)).toThrow('finite number');
   });
   it('preserves stored credentials without exposing their value and deletes removed headers', () => {
-    const form = editCheckForm({ ...emptyCheckForm(1), id: 7, port: null, certExpiryDays: null, options: {}, secretHeaderNames: ['authorization', 'x-api-key'] } as unknown as MonitoringCheck);
+    const form = editCheckForm(monitoringCheck({ secretHeaderNames: ['authorization', 'x-api-key'] }));
     expect(form.headers.every(header => header.value === '')).toBe(true);
     expect(checkPayload(form).secretHeaders).toEqual({});
     form.headers = form.headers.slice(0, 1);
@@ -65,6 +78,25 @@ describe('monitoring check editor', () => {
     expect(screen.queryByLabelText('Timeout (seconds)')).toBeNull();
     expect(screen.queryByText('Probe locations')).toBeNull();
     expect(screen.getByText(/ping URL is created when the check is saved/)).toBeTruthy();
+  });
+  it('edits cron schedules and switches back to interval mode without losing the selection', () => {
+    const check = monitoringCheck({
+      id: 9, checkType: 'push', endpoint: 'push',
+      pushCronExpression: '0 9 * * MON-FRI', pushTimezone: 'Europe/London',
+    });
+    const form = editCheckForm(check);
+    expect(form.pushScheduleMode).toBe('cron');
+    expect(checkPayload(form)).toMatchObject({ pushCronExpression: '0 9 * * MON-FRI', pushTimezone: 'Europe/London' });
+    const setForm = vi.fn();
+    render(<CheckEditor form={form} targets={[]} setForm={setForm} onSave={async () => {}} working={false} />);
+    expect(screen.getByLabelText('Cron expression')).toHaveValue('0 9 * * MON-FRI');
+    expect(screen.getByLabelText('Time zone (IANA)')).toHaveValue('Europe/London');
+    fireEvent.change(screen.getByLabelText('Schedule'), { target: { value: 'interval' } });
+    expect(setForm).toHaveBeenCalledWith(expect.objectContaining({ pushScheduleMode: 'interval' }));
+    form.pushScheduleMode = 'interval';
+    expect(checkPayload(form)).toMatchObject({ pushCronExpression: null, pushTimezone: null });
+    form.pushScheduleMode = 'cron'; form.pushTimezone = '';
+    expect(() => checkPayload(form)).toThrow('Cron expression and timezone are required');
   });
   it('keeps credential values masked and renders bounded typed assertion controls', () => {
     const form = emptyCheckForm(1); form.headers = [{ name: 'authorization', value: '', secret: true }];

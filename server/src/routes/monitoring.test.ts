@@ -190,6 +190,41 @@ describe('monitoring check configuration', () => {
     expect(response.status).toBe(400);
     expect(monitoringQueries.updateMonitoringCheck).not.toHaveBeenCalled();
   });
+  it('accepts cron push schedules and preserves them during partial edits', async () => {
+    const push = { ...checkInput, checkType: 'push', endpoint: 'push', port: null, certExpiryDays: null, tlsMode: 'strict',
+      options: {}, pushCronExpression: '0 9 * * MON-FRI', pushTimezone: 'Europe/London' };
+    vi.mocked(monitoringQueries.createMonitoringCheck).mockResolvedValueOnce({ ...push, id: 8 } as never);
+    const created = await fetch(`${baseUrl}/monitoring/checks`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(push),
+    });
+    expect(created.status).toBe(201);
+    expect(monitoringQueries.createMonitoringCheck).toHaveBeenCalledWith(expect.objectContaining({
+      pushCronExpression: '0 9 * * MON-FRI', pushTimezone: 'Europe/London',
+    }));
+    vi.mocked(monitoringQueries.getMonitoringCheck).mockResolvedValueOnce(push as never);
+    vi.mocked(monitoringQueries.updateMonitoringCheck).mockResolvedValueOnce({ ...push, id: 8 } as never);
+    const updated = await fetch(`${baseUrl}/monitoring/checks/8`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Renamed' }),
+    });
+    expect(updated.status).toBe(200);
+    expect(monitoringQueries.updateMonitoringCheck).toHaveBeenCalledWith(8, expect.objectContaining({
+      pushCronExpression: '0 9 * * MON-FRI', pushTimezone: 'Europe/London',
+    }));
+  });
+  it.each([
+    { pushCronExpression: '0 0 31 2 *', pushTimezone: 'UTC' },
+    { pushCronExpression: '0 9 * * *', pushTimezone: 'No/Such_Zone' },
+    { pushCronExpression: '0 9 * * *' },
+    { pushCronExpression: 123, pushTimezone: 'UTC' },
+    { pushCronExpression: '0 9 * * *', pushTimezone: '+02:00' },
+  ])('rejects invalid cron push settings: %j', async patch => {
+    const response = await fetch(`${baseUrl}/monitoring/checks`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...checkInput, checkType: 'push', certExpiryDays: null, ...patch }),
+    });
+    expect(response.status).toBe(400);
+    expect(monitoringQueries.createMonitoringCheck).not.toHaveBeenCalled();
+  });
 });
 
 afterAll(async () => {

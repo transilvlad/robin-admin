@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { enqueueEmailDelivery } from '../../db/queries/email.js';
 import type { StatusPageSubscriber } from '../../types/email.js';
 import type { MonitoringIssue } from '../../types/monitoring.js';
@@ -42,6 +43,7 @@ export async function enqueueMonitoringIssueAdminEmail(input: {
   email: string;
   issue: MonitoringIssue;
   event: 'opened' | 'recovered';
+  client?: PoolClient;
 }): Promise<void> {
   await enqueueEmailDelivery({
     purpose: `monitoring_issue_${input.event}`,
@@ -51,6 +53,7 @@ export async function enqueueMonitoringIssueAdminEmail(input: {
     subject: `${input.issue.summary} ${input.event === 'opened' ? 'failed' : 'recovered'}`,
     textBody: `${input.issue.summary}\n\nStatus: ${input.event}\nSeverity: ${input.issue.severity}\nOpened: ${input.issue.openedAt.toISOString()}`,
     metadata: { monitoringIssueId: input.issue.id, event: input.event },
+    client: input.client,
   });
 }
 

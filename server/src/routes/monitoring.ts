@@ -46,13 +46,13 @@ import {
   updateMonitoringProbeLocation,
 } from '../db/queries/monitoring-probes.js';
 import { getFleetAgentById, listFleetAgents } from '../db/queries/fleet-agents.js';
-import { PUSH_INTERVAL_MAX_SECONDS } from '../services/monitoring/push.js';
+import { PUSH_INTERVAL_MAX_SECONDS, resolvePushSchedule } from '../services/monitoring/push.js';
 import { pushUrl } from './monitoring-ping.js';
 
 const router = Router();
 
 function validateCheckFields(body: unknown): void {
-  const fields = ['targetId', 'name', 'checkType', 'endpoint', 'port', 'intervalSeconds', 'timeoutSeconds', 'confirmationSeconds', 'recoverySeconds', 'placementMode', 'locationIds', 'quorum', 'certExpiryDays', 'tlsMode', 'certificateErrorMode', 'allowPrivate', 'options', 'secretHeaders', 'enabled'];
+  const fields = ['targetId', 'name', 'checkType', 'endpoint', 'port', 'intervalSeconds', 'timeoutSeconds', 'confirmationSeconds', 'recoverySeconds', 'placementMode', 'locationIds', 'quorum', 'certExpiryDays', 'tlsMode', 'certificateErrorMode', 'allowPrivate', 'options', 'secretHeaders', 'enabled', 'pushCronExpression', 'pushTimezone'];
   if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !fields.includes(key))) throw new MonitoringInputError('Check contains unsupported settings');
   if (typeof (body as Record<string, unknown>).name === 'string' && String((body as Record<string, unknown>).name).length > 160) throw new MonitoringInputError('Check name exceeds 160 characters');
 }
@@ -436,6 +436,7 @@ router.post('/checks', requireAuth, requireAdmin, async (req: Request, res: Resp
   try {
     validateCheckFields(req.body);
     const checkType = parseCheckType(req.body.checkType);
+    const schedule = resolvePushSchedule(checkType, req.body);
     const input = {
       targetId: parseNumber(req.body.targetId, 'targetId', 1, 2_147_483_647)!,
       name: parseRequiredString(req.body.name, 'name'),
@@ -456,6 +457,7 @@ router.post('/checks', requireAuth, requireAdmin, async (req: Request, res: Resp
       placementMode: parsePlacementMode(req.body.placementMode) ?? 'all',
       locationIds: parseLocationIds(req.body.locationIds) ?? [],
       quorum: parseNumber(req.body.quorum, 'quorum', 0, 128) ?? 0,
+      ...schedule,
     };
     if (!input.targetId) throw new MonitoringInputError('targetId is required');
     validateMonitoringProtocol(input);
@@ -471,6 +473,8 @@ router.post('/checks', requireAuth, requireAdmin, async (req: Request, res: Resp
         placementMode: check.placementMode,
         locationIds: check.locationIds,
         quorum: check.quorum,
+        pushCronExpression: check.pushCronExpression,
+        pushTimezone: check.pushTimezone,
         secretHeadersChanged: input.secretHeaders !== undefined,
       },
     });
@@ -487,6 +491,7 @@ router.put('/checks/:id', requireAuth, requireAdmin, async (req: Request, res: R
     const current = await getMonitoringCheck(id);
     if (!current) { res.status(404).json({ success: false, error: 'Check not found' }); return; }
     const checkType = req.body.checkType === undefined ? current.checkType : parseCheckType(req.body.checkType);
+    const schedule = resolvePushSchedule(checkType, req.body, current);
     const input = {
       targetId: parseNumber(req.body.targetId, 'targetId', 1, 2_147_483_647),
       name: req.body.name === undefined ? undefined : parseRequiredString(req.body.name, 'name'),
@@ -510,6 +515,7 @@ router.put('/checks/:id', requireAuth, requireAdmin, async (req: Request, res: R
       placementMode: parsePlacementMode(req.body.placementMode),
       locationIds: parseLocationIds(req.body.locationIds),
       quorum: parseNumber(req.body.quorum, 'quorum', 0, 128),
+      ...schedule,
     };
     validateMonitoringProtocol(input);
     const check = await updateMonitoringCheck(id, input);
@@ -528,6 +534,8 @@ router.put('/checks/:id', requireAuth, requireAdmin, async (req: Request, res: R
         placementMode: check.placementMode,
         locationIds: check.locationIds,
         quorum: check.quorum,
+        pushCronExpression: check.pushCronExpression,
+        pushTimezone: check.pushTimezone,
         secretHeadersChanged: input.secretHeaders !== undefined,
       },
     });

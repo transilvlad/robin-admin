@@ -7,7 +7,8 @@ import { MONITORING_LIMITS, MonitoringInputError, parseMonitoringOptions, valida
 import { connectProbe, permittedAddress, ProbeError, upgradeProbeTls } from './network.js';
 import type { ProbeTiming } from './network.js';
 import { evaluateAssertions } from './assertions.js';
-import { evaluatePushCheck } from './push.js';
+import { evaluatePushCheck, expiredPushOccurrence, inspectPushCheckins, pushCheckinScanStart } from './push.js';
+import { hasMonitoringPushCheckin, listMonitoringPushCheckins } from '../../db/queries/monitoring.js';
 
 export interface MonitoringProbeResult {
   status: Exclude<MonitoringStatus, 'unknown'>;
@@ -30,7 +31,34 @@ export function probeErrorCode(message: string, details: Record<string, unknown>
 }
 
 export async function runMonitoringProbe(check: MonitoringCheck, secrets: Record<string, string> = {}): Promise<MonitoringProbeResult> {
-  if (check.checkType === 'push') return evaluatePushCheck(check, new Date());
+  if (check.checkType === 'push') {
+    const now = new Date();
+    const recovered = check.currentStatus === 'down' && check.lastPingStatus === 'ok' && check.lastPingAt && check.pushScheduleCursor
+      ? expiredPushOccurrence(check, check.lastPingAt)
+      : null;
+    const recoveryThrough = recovered && check.pushScheduleCursor && recovered >= check.pushScheduleCursor
+      && (!check.pushRecoveredThrough || recovered > check.pushRecoveredThrough) ? recovered : null;
+    const effectiveCheck = recoveryThrough ? { ...check, pushRecoveredThrough: recoveryThrough } : check;
+    const scheduled = check.lastPingStatus === 'fail' ? null : expiredPushOccurrence(effectiveCheck, now);
+    if (!scheduled) return evaluatePushCheck(effectiveCheck, now);
+    const start = pushCheckinScanStart(effectiveCheck);
+    const evaluation = scheduled > start
+      ? inspectPushCheckins(effectiveCheck, scheduled, await listMonitoringPushCheckins(check.id, start, scheduled))
+      : {
+        scheduledAt: check.pushScheduleCursor ?? scheduled,
+        received: !!effectiveCheck.pushRecoveredThrough && effectiveCheck.pushRecoveredThrough >= scheduled
+          || await hasMonitoringPushCheckin(check.id, check.pushScheduleCursor ?? scheduled),
+        evaluatedThrough: check.pushScheduleCursor ?? scheduled,
+        hasMore: false,
+      };
+    const result = evaluatePushCheck(effectiveCheck, now, evaluation.received, evaluation.scheduledAt);
+    return { ...result, details: {
+      ...result.details,
+      pushEvaluatedThrough: evaluation.evaluatedThrough.toISOString(),
+      ...(recoveryThrough ? { pushRecoveryThrough: recoveryThrough.toISOString() } : {}),
+      ...(evaluation.hasMore ? { pushScanBacklog: true } : {}),
+    } };
+  }
   const started = Date.now();
   const deadline = started + check.timeoutSeconds * 1000;
   const timing = { connectionStartedAt: null as number | null, dnsTimeMs: 0 };

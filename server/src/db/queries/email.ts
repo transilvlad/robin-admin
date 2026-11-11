@@ -374,15 +374,14 @@ export async function updateEmailSenderProfile(input: {
   return mapProfile(result.rows[0]);
 }
 
-export async function listAdminEmailSubscriptions(): Promise<AdminEmailSubscription[]> {
-  const result = await query<AdminSubscriptionRow>(
-    `SELECT a.id AS admin_id, a.name AS admin_name, a.email AS admin_email, a.disabled,
+export async function listAdminEmailSubscriptions(client?: PoolClient): Promise<AdminEmailSubscription[]> {
+  const text = `SELECT a.id AS admin_id, a.name AS admin_name, a.email AS admin_email, a.disabled,
             s.monitoring_issue_opened, s.monitoring_issue_recovered, s.status_page_reports,
             s.email_delivery_failure, s.created_at, s.updated_at
      FROM admins a
      LEFT JOIN admin_email_subscriptions s ON s.admin_id = a.id
-     ORDER BY a.email ASC`
-  );
+     ORDER BY a.email ASC`;
+  const result = client ? await client.query<AdminSubscriptionRow>(text) : await query<AdminSubscriptionRow>(text);
   return result.rows.map(mapAdminSubscription);
 }
 

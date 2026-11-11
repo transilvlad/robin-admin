@@ -182,12 +182,43 @@ check has a secret ping URL, shown to administrators in the check editor
     GET or POST https://<robin-admin>/api/monitoring/ping/<token>       the job succeeded
     GET or POST https://<robin-admin>/api/monitoring/ping/<token>/fail  the job failed
 
-The check is down once no ping has arrived for its expected interval (up to 30
-days) or after a `/fail` ping, and up again with the next successful ping. The
-confirmation window is the grace period before an issue opens, so issues,
-alerts, Sentry and the status page work as for any check. Push checks are
-evaluated every minute, only on the Robin Admin server (never on remote probe
-locations), and are not included in configuration export or import, because
+In **Interval** mode, the check is down once no ping has arrived for its
+expected interval (up to 30 days), or after a `/fail` ping. The confirmation
+window delays the issue; the next successful ping begins recovery.
+
+In **Cron expression** mode, enter five standard fields (minute, hour, day of
+month, month, day of week), such as `0 3 * * MON-FRI`, and an IANA timezone,
+such as `Europe/London`. Numbers, names, lists, ranges and steps are accepted.
+When both day-of-month and day-of-week are restricted, either can match. The
+confirmation window is the grace period after each scheduled time: a successful
+ping must arrive at or after that time and no later than its deadline. A missed
+deadline opens an issue without a second confirmation delay. A `/fail` ping
+uses the ordinary confirmation window; recovery uses the configured recovery
+window. A late success can recover an issue. If it arrives before the scheduler
+notices a miss while the check is otherwise healthy, the miss is recorded first
+and recovery follows on a later evaluation.
+
+Each successful ping is assigned to the latest scheduled occurrence at or
+before receipt; an early ping cannot satisfy a future occurrence. When grace
+windows overlap, a ping after the next occurrence belongs to the newer one,
+even if the earlier run is still within grace. There are no run IDs,
+start/finish check-ins or runtime tracking. Use a grace period that allows for
+job duration and network delays; zero grace requires a ping exactly at the
+scheduled instant.
+
+Monitoring starts with the first occurrence after a cron schedule is created.
+Changing its expression, timezone or grace starts a new schedule from the edit;
+unrelated edits do not. Pausing or disabling a check suppresses issues but does
+not reset the schedule, so missed runs can be detected after it resumes.
+Check-ins needed for an unprocessed schedule are retained even past normal
+history retention, including while paused or disabled.
+
+For daylight-saving changes, a skipped fixed local time runs at the first valid
+time, and a repeated fixed local time runs once at its first occurrence.
+Interval-style cron patterns may run in both repeated hours. Push checks are
+evaluated on the Robin Admin server about once a minute, subject to scheduler
+load; a ping also requests an immediate evaluation. They never run on remote
+probe locations and are not included in configuration export or import because
 they are tied to their URL. Unknown tokens get a plain 404; the token is the
 only credential, so treat the URL as a secret.
 
