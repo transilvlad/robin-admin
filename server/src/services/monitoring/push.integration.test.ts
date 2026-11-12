@@ -6,14 +6,18 @@ import {
   createMonitoringCheck,
   createMonitoringSilence,
   createMonitoringTarget,
+  expireOverdueMonitoringPushRuns,
   endMonitoringSilence,
   evaluateMonitoringCheckLocations,
   getMonitoringCheck,
   getMonitoringCheckPushToken,
+  finishMonitoringPushRun,
+  listMonitoringPushRuns,
   pauseMonitoringCheck,
   pruneMonitoringHistory,
   processExpiredMonitoringSilences,
   recordMonitoringCheckPing,
+  startMonitoringPushRun,
   recordMonitoringObservation,
   resumeMonitoringCheck,
   updateMonitoringCheck,
@@ -37,10 +41,11 @@ describe.skipIf(!run)('cron push checks (PostgreSQL integration)', () => {
 
   afterAll(async () => closePool());
 
-  async function createCheck(name: string): Promise<MonitoringCheck> {
+  async function createCheck(name: string, pushMaxRuntimeSeconds = 3600): Promise<MonitoringCheck> {
     return createMonitoringCheck({
       targetId, name, checkType: 'push', endpoint: 'push', intervalSeconds: 3600,
       confirmationSeconds: 120, recoverySeconds: 0, pushCronExpression: '* * * * *', pushTimezone: 'UTC',
+      pushMaxRuntimeSeconds,
     });
   }
 
@@ -113,6 +118,27 @@ describe.skipIf(!run)('cron push checks (PostgreSQL integration)', () => {
       }
       await deleteAlertWebhook(webhook.id);
     }
+  });
+
+  it('tracks overlapping run IDs independently and times out each run', async () => {
+    const created = await createCheck('Tracked runs', 120);
+    const token = (await getMonitoringCheckPushToken(created.id))!;
+    const first = await startMonitoringPushRun(token);
+    expect(first?.maxRuntimeSeconds).toBe(120);
+    await query("UPDATE monitoring_push_runs SET started_at = NOW() - INTERVAL '3 minutes' WHERE id = $1", [first!.run.id]);
+    const second = await startMonitoringPushRun(token);
+    expect(second?.run.id).not.toBe(first?.run.id);
+
+    expect(await expireOverdueMonitoringPushRuns()).toContain(created.id);
+    const runs = await listMonitoringPushRuns(created.id);
+    expect(runs.find(run => run.id === first!.run.id)?.status).toBe('timed_out');
+    expect(runs.find(run => run.id === second!.run.id)?.status).toBe('running');
+
+    expect(await finishMonitoringPushRun(token, second!.run.id, 'succeeded', null)).toBe(created.id);
+    expect(await finishMonitoringPushRun(token, first!.run.id, 'succeeded', null)).toBe(created.id);
+    const finished = await listMonitoringPushRuns(created.id);
+    expect(finished.find(run => run.id === second!.run.id)?.status).toBe('succeeded');
+    expect(finished.find(run => run.id === first!.run.id)).toMatchObject({ status: 'timed_out', finishedAt: expect.any(Date) });
   });
 
   it('opens a missed-run issue after grace and closes it after a successful ping', async () => {

@@ -2164,13 +2164,17 @@ export async function initializeSchema(): Promise<void> {
         ADD COLUMN IF NOT EXISTS push_schedule_started_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS push_recovered_through TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS push_schedule_cursor TIMESTAMPTZ,
-        ADD COLUMN IF NOT EXISTS push_revision INTEGER NOT NULL DEFAULT 0
+        ADD COLUMN IF NOT EXISTS push_revision INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS push_max_runtime_seconds INTEGER NOT NULL DEFAULT 3600
     `);
     await client.query(`ALTER TABLE monitoring_checks DROP CONSTRAINT IF EXISTS valid_monitoring_push_schedule`);
     await client.query(`ALTER TABLE monitoring_checks ADD CONSTRAINT valid_monitoring_push_schedule CHECK (
       (push_cron_expression IS NULL AND push_timezone IS NULL AND push_schedule_started_at IS NULL AND push_recovered_through IS NULL AND push_schedule_cursor IS NULL)
       OR (check_type = 'push' AND push_cron_expression IS NOT NULL AND push_timezone IS NOT NULL AND push_schedule_started_at IS NOT NULL)
     )`);
+    await client.query(`ALTER TABLE monitoring_checks DROP CONSTRAINT IF EXISTS valid_monitoring_push_max_runtime`);
+    await client.query(`ALTER TABLE monitoring_checks ADD CONSTRAINT valid_monitoring_push_max_runtime
+      CHECK (push_max_runtime_seconds BETWEEN 1 AND 604800)`);
     await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_monitoring_checks_push_token
       ON monitoring_checks (push_token_hash) WHERE push_token_hash IS NOT NULL`);
     await client.query(`
@@ -2183,6 +2187,28 @@ export async function initializeSchema(): Promise<void> {
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_monitoring_push_checkins_received
       ON monitoring_push_checkins (received_at)`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS monitoring_push_runs (
+        id UUID PRIMARY KEY,
+        check_id INTEGER NOT NULL REFERENCES monitoring_checks(id) ON DELETE CASCADE,
+        status VARCHAR(16) NOT NULL DEFAULT 'running',
+        started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        finished_at TIMESTAMPTZ,
+        timed_out_at TIMESTAMPTZ,
+        error TEXT,
+        CONSTRAINT valid_monitoring_push_run_status CHECK (status IN ('running', 'succeeded', 'failed', 'timed_out')),
+        CONSTRAINT valid_monitoring_push_run_finish CHECK (
+          (status = 'running' AND finished_at IS NULL AND timed_out_at IS NULL)
+          OR (status = 'succeeded' AND finished_at IS NOT NULL AND timed_out_at IS NULL)
+          OR (status = 'failed' AND finished_at IS NOT NULL AND timed_out_at IS NULL)
+          OR (status = 'timed_out' AND timed_out_at IS NOT NULL)
+        )
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_monitoring_push_runs_active
+      ON monitoring_push_runs (started_at) WHERE status = 'running'`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_monitoring_push_runs_check
+      ON monitoring_push_runs (check_id, started_at DESC)`);
     await client.query(`ALTER TABLE monitoring_checks DROP CONSTRAINT IF EXISTS valid_monitoring_check_interval`);
     await client.query(`ALTER TABLE monitoring_checks ADD CONSTRAINT valid_monitoring_check_interval
       CHECK (interval_seconds BETWEEN 10 AND 2592000)`);

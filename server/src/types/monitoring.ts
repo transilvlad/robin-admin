@@ -106,8 +106,19 @@ export interface MonitoringCheck {
   pushRecoveredThrough: Date | null;
   pushScheduleCursor: Date | null;
   pushRevision: number;
+  pushMaxRuntimeSeconds: number;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface MonitoringPushRun {
+  id: string;
+  checkId: number;
+  status: 'running' | 'succeeded' | 'failed' | 'timed_out';
+  startedAt: Date;
+  finishedAt: Date | null;
+  timedOutAt: Date | null;
+  error: string | null;
 }
 
 export interface MonitoringObservation {

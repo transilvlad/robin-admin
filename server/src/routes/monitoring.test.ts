@@ -50,6 +50,7 @@ vi.mock('../db/queries/monitoring.js', () => ({
   getMonitoringCheckHistory: vi.fn(),
   getMonitoringCheckLocationHistory: vi.fn(),
   getMonitoringCheckObservations: vi.fn(),
+  listMonitoringPushRuns: vi.fn(),
   requestMonitoringEvaluation: vi.fn(),
   getMonitoringSummary: vi.fn(),
   listMonitoringSilences: vi.fn(),
@@ -203,7 +204,7 @@ describe('monitoring check configuration', () => {
     });
     expect(created.status).toBe(201);
     expect(monitoringQueries.createMonitoringCheck).toHaveBeenCalledWith(expect.objectContaining({
-      pushCronExpression: '0 9 * * MON-FRI', pushTimezone: 'Europe/London',
+      pushCronExpression: '0 9 * * MON-FRI', pushTimezone: 'Europe/London', pushMaxRuntimeSeconds: 3600,
     }));
     vi.mocked(monitoringQueries.getMonitoringCheck).mockResolvedValueOnce(push as never);
     vi.mocked(monitoringQueries.updateMonitoringCheck).mockResolvedValueOnce({ ...push, id: 8 } as never);
@@ -214,6 +215,30 @@ describe('monitoring check configuration', () => {
     expect(monitoringQueries.updateMonitoringCheck).toHaveBeenCalledWith(8, expect.objectContaining({
       pushCronExpression: '0 9 * * MON-FRI', pushTimezone: 'Europe/London',
     }));
+  });
+  it('validates and stores push maximum runtime', async () => {
+    const push = { ...checkInput, checkType: 'push', endpoint: 'push', port: null, certExpiryDays: null, tlsMode: 'strict', options: {} };
+    vi.mocked(monitoringQueries.createMonitoringCheck).mockResolvedValueOnce({ ...push, id: 8, pushMaxRuntimeSeconds: 7200 } as never);
+    const created = await fetch(`${baseUrl}/monitoring/checks`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...push, pushMaxRuntimeSeconds: 7200 }),
+    });
+    expect(created.status).toBe(201);
+    expect(monitoringQueries.createMonitoringCheck).toHaveBeenCalledWith(expect.objectContaining({ pushMaxRuntimeSeconds: 7200 }));
+    const invalid = await fetch(`${baseUrl}/monitoring/checks`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...push, pushMaxRuntimeSeconds: 0 }),
+    });
+    expect(invalid.status).toBe(400);
+  });
+  it('lists push run history with a bounded limit', async () => {
+    vi.mocked(monitoringQueries.getMonitoringCheck).mockResolvedValueOnce({ id: 8, checkType: 'push' } as never);
+    vi.mocked(monitoringQueries.listMonitoringPushRuns).mockResolvedValueOnce([] as never);
+    const response = await fetch(`${baseUrl}/monitoring/checks/8/runs?limit=20`);
+    expect(response.status).toBe(200);
+    expect(monitoringQueries.listMonitoringPushRuns).toHaveBeenCalledWith(8, 20);
+    const invalid = await fetch(`${baseUrl}/monitoring/checks/8/runs?limit=101`);
+    expect(invalid.status).toBe(400);
   });
   it.each([
     { pushCronExpression: '0 0 31 2 *', pushTimezone: 'UTC' },

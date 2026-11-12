@@ -177,6 +177,7 @@ import type {
   MonitoringProbeLocationsResponse,
   MonitoringIssue,
   MonitoringObservation,
+  MonitoringPushRun,
   MonitoringSilence,
   MonitoringSummary,
   MonitoringTarget,
@@ -2265,6 +2266,9 @@ export const monitoringApi = {
   endSilence: (id: number) =>
     request<ApiResponse<MonitoringSilence>>(`/monitoring/silences/${id}/end`, { method: 'POST' }),
 
+  pushRuns: (id: number, limit = 100) =>
+    request<ApiResponse<MonitoringPushRun[]>>(`/monitoring/checks/${id}/runs?limit=${limit}`),
+
   createCheck: (data: {
     targetId: number;
     name: string;
@@ -2287,6 +2291,7 @@ export const monitoringApi = {
     enabled?: boolean;
     pushCronExpression?: string | null;
     pushTimezone?: string | null;
+    pushMaxRuntimeSeconds?: number;
   }) =>
     request<ApiResponse<MonitoringCheck>>('/monitoring/checks', {
       method: 'POST',
@@ -2315,6 +2320,7 @@ export const monitoringApi = {
     enabled: boolean;
     pushCronExpression: string | null;
     pushTimezone: string | null;
+    pushMaxRuntimeSeconds: number;
   }>) =>
     request<ApiResponse<MonitoringCheck>>(`/monitoring/checks/${id}`, {
       method: 'PUT',

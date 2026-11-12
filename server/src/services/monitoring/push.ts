@@ -18,7 +18,10 @@ import { MonitoringInputError } from './options.js';
 export const PUSH_EVALUATION_SECONDS = 60;
 export const PUSH_INTERVAL_MAX_SECONDS = 30 * 24 * 3600;
 export const PUSH_CHECKIN_SCAN_LIMIT = 1000;
+export const PUSH_MAX_RUNTIME_DEFAULT_SECONDS = 3600;
+export const PUSH_MAX_RUNTIME_MAX_SECONDS = 7 * 24 * 3600;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CRON_NAMES = new Set(['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC', 'SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']);
 
 type PushSchedule = Pick<MonitoringCheck, 'pushCronExpression' | 'pushTimezone'>;
@@ -90,6 +93,10 @@ export function generatePushToken(): string {
 
 export function isPushToken(value: string): boolean {
   return TOKEN_PATTERN.test(value);
+}
+
+export function isPushRunId(value: string): boolean {
+  return RUN_ID_PATTERN.test(value);
 }
 
 export function hashPushToken(token: string): string {

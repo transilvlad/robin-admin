@@ -13,6 +13,9 @@ vi.mock('../../db/queries/monitoring.js', () => ({
   getMonitoringCheckSecrets: vi.fn(),
   isMonitoringCheckPlacedLocally: vi.fn(),
   pruneMonitoringHistory: vi.fn(),
+  expireOverdueMonitoringPushRuns: vi.fn().mockResolvedValue([]),
+  processExpiredMonitoringSilences: vi.fn().mockResolvedValue(0),
+  evaluateAllMonitoringChecks: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./probes.js', () => ({ runMonitoringProbe: vi.fn() }));
 
@@ -199,7 +202,7 @@ it('expires waiting manual work without running it and releases failed execution
 });
 
 it('prunes history with the configured retention and survives database errors', async () => {
-  vi.mocked(pruneMonitoringHistory).mockResolvedValueOnce({ observations: 3, days: 0 });
+  vi.mocked(pruneMonitoringHistory).mockResolvedValueOnce({ observations: 3, days: 0, pushRuns: 0 });
   await runMonitoringMaintenance();
   expect(pruneMonitoringHistory).toHaveBeenCalledWith(policy.monitoringObservationRetentionDays, policy.monitoringHistoryRetentionDays);
 

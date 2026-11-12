@@ -17,6 +17,7 @@ import {
   processExpiredMonitoringSilences,
   recordMonitoringObservation,
   evaluateAllMonitoringChecks,
+  expireOverdueMonitoringPushRuns,
 } from '../../db/queries/monitoring.js';
 import { runMonitoringProbe } from './probes.js';
 import type { MonitoringObservation } from '../../types/monitoring.js';
@@ -52,6 +53,10 @@ function capacityError(message: string): Error {
 
 async function runExpiredSilenceEvaluation(): Promise<void> {
   try {
+    const timedOutChecks = await expireOverdueMonitoringPushRuns();
+    for (const checkId of timedOutChecks) {
+      await runMonitoringCheckNow(checkId);
+    }
     const count = await processExpiredMonitoringSilences();
     if (count > 0) logger.info('Sent notifications for issues still active after maintenance', { issueCount: count });
   } catch (error) {
@@ -177,7 +182,7 @@ export async function runMonitoringMaintenance(): Promise<void> {
   try {
     const settings = await getConfig();
     const removed = await pruneMonitoringHistory(settings.monitoringObservationRetentionDays, settings.monitoringHistoryRetentionDays);
-    if (removed.observations > 0 || removed.days > 0) {
+    if (removed.observations > 0 || removed.days > 0 || removed.pushRuns > 0) {
       logger.info('Pruned monitoring history', removed);
     }
   } catch (error) {

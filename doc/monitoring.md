@@ -201,10 +201,26 @@ and recovery follows on a later evaluation.
 Each successful ping is assigned to the latest scheduled occurrence at or
 before receipt; an early ping cannot satisfy a future occurrence. When grace
 windows overlap, a ping after the next occurrence belongs to the newer one,
-even if the earlier run is still within grace. There are no run IDs,
-start/finish check-ins or runtime tracking. Use a grace period that allows for
-job duration and network delays; zero grace requires a ping exactly at the
+even if the earlier run is still within grace. Use a grace period that allows
+for job duration and network delays; zero grace requires a ping exactly at the
 scheduled instant.
+
+For run-level tracking, call the start endpoint before work and use its returned
+`runId` to finish that specific execution:
+
+    POST /api/monitoring/ping/<token>/runs
+    POST /api/monitoring/ping/<token>/runs/<runId>/complete
+    POST /api/monitoring/ping/<token>/runs/<runId>/fail
+
+The failure endpoint accepts an optional JSON `{"error":"..."}` body. Runs
+receive independent IDs, so overlapping executions do not overwrite each
+other. Completion also records a normal success or failure ping; the original
+ping URLs remain supported. Configure **Maximum run time (seconds)** in the
+push-check editor (1 second to 7 days). Runs still active beyond that limit are
+marked timed out and report a failure; finishing one late records its finish
+time but retains the timeout in history. Administrators can review the latest
+100 runs in the check's History view. Completed run history is retained for the
+configured Monitoring history-retention period.
 
 Monitoring starts with the first occurrence after a cron schedule is created.
 Changing its expression, timezone or grace starts a new schedule from the edit;

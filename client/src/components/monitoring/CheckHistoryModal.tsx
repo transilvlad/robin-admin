@@ -9,7 +9,7 @@ import { Modal } from '../ui/Modal';
 import { Spinner } from '../ui/Spinner';
 import { SegmentedFilter } from '../ui/SegmentedFilter';
 import { TimeSeriesChart } from '../telemetry/TimeSeriesChart';
-import type { MonitoringCheck, MonitoringCheckDay, MonitoringLocationDay, MonitoringObservation } from '../../types/monitoring';
+import type { MonitoringCheck, MonitoringCheckDay, MonitoringLocationDay, MonitoringObservation, MonitoringPushRun } from '../../types/monitoring';
 import type { TelemetryRangeData } from '../../types/telemetry';
 
 const RANGES = [
@@ -68,6 +68,8 @@ export function CheckHistoryModal({ check, onClose }: { check: MonitoringCheck; 
   const [error, setError] = useState<string | null>(null);
   const [observations, setObservations] = useState<MonitoringObservation[]>([]);
   const [observationError, setObservationError] = useState('');
+  const [pushRuns, setPushRuns] = useState<MonitoringPushRun[]>([]);
+  const [pushRunError, setPushRunError] = useState('');
   const [locationDays, setLocationDays] = useState<MonitoringLocationDay[] | null>(null);
   const [locationHistoryError, setLocationHistoryError] = useState('');
 
@@ -78,6 +80,16 @@ export function CheckHistoryModal({ check, onClose }: { check: MonitoringCheck; 
       .catch(() => { if (active) setObservationError('Failed to load recent observations'); });
     return () => { active = false; };
   }, [check.id]);
+
+  useEffect(() => {
+    let active = true;
+    setPushRuns([]);
+    setPushRunError('');
+    if (check.checkType !== 'push') return () => { active = false; };
+    monitoringApi.pushRuns(check.id).then(response => { if (active) setPushRuns(response.data ?? []); })
+      .catch(() => { if (active) setPushRunError('Failed to load push run history'); });
+    return () => { active = false; };
+  }, [check.checkType, check.id]);
 
   useEffect(() => {
     setDays(null);
@@ -177,6 +189,20 @@ export function CheckHistoryModal({ check, onClose }: { check: MonitoringCheck; 
           {observationError && <p role="alert" className="text-sm text-red-600">{observationError}</p>}
           <div className="overflow-x-auto"><table className="min-w-full text-left text-sm"><thead><tr>{['Observed', 'Status', 'Response', 'Result'].map(label => <th className="px-2 py-2 font-medium" key={label}>{label}</th>)}</tr></thead><tbody>{observations.map(observation => <tr className="border-t border-gray-200 dark:border-robin-gray-700" key={observation.id}><td className="whitespace-nowrap px-2 py-2">{new Date(observation.observedAt).toLocaleString()}</td><td className="px-2 py-2">{observation.status}</td><td className="px-2 py-2">{observation.responseTimeMs === null ? '-' : `${observation.responseTimeMs} ms`}</td><td className="max-w-sm wrap-break-word px-2 py-2">{observation.error ?? 'Passed'}</td></tr>)}</tbody></table></div>
         </section>
+        {check.checkType === 'push' && <section className="border-t border-gray-200 pt-4 dark:border-robin-gray-700">
+          <h3 className="mb-2 text-sm font-medium">Latest 100 job runs</h3>
+          {pushRunError && <p role="alert" className="text-sm text-red-600">{pushRunError}</p>}
+          <div className="max-h-64 overflow-auto"><table className="min-w-full text-left text-sm"><thead><tr>{['Run', 'Started', 'Finished', 'Status', 'Result'].map(label => <th className="px-2 py-2 font-medium" key={label}>{label}</th>)}</tr></thead><tbody>
+            {pushRuns.map(run => <tr className="border-t border-gray-200 dark:border-robin-gray-700" key={run.id}>
+              <td className="whitespace-nowrap px-2 py-2 font-mono text-xs" title={run.id}>{run.id.slice(0, 8)}</td>
+              <td className="whitespace-nowrap px-2 py-2">{new Date(run.startedAt).toLocaleString()}</td>
+              <td className="whitespace-nowrap px-2 py-2">{run.finishedAt ? new Date(run.finishedAt).toLocaleString() : run.timedOutAt ? `Timed out ${new Date(run.timedOutAt).toLocaleString()}` : '—'}</td>
+              <td className="px-2 py-2">{run.status}</td>
+              <td className="max-w-sm wrap-break-word px-2 py-2">{run.error ?? (run.finishedAt ? `${Math.max(0, Math.round((Date.parse(run.finishedAt) - Date.parse(run.startedAt)) / 1000))} s` : 'Running')}</td>
+            </tr>)}
+            {!pushRuns.length && <tr><td colSpan={5} className="px-2 py-4 text-center text-gray-500">No tracked job runs yet.</td></tr>}
+          </tbody></table></div>
+        </section>}
       </div>
     </Modal>
   );

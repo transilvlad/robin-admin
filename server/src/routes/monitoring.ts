@@ -16,6 +16,7 @@ import {
   getMonitoringCheck,
   getMonitoringSummary,
   listMonitoringSilences,
+  listMonitoringPushRuns,
   endMonitoringSilence,
   processExpiredMonitoringSilences,
   pauseMonitoringCheck,
@@ -50,13 +51,13 @@ import {
   updateMonitoringProbeLocation,
 } from '../db/queries/monitoring-probes.js';
 import { getFleetAgentById, listFleetAgents } from '../db/queries/fleet-agents.js';
-import { PUSH_INTERVAL_MAX_SECONDS, resolvePushSchedule } from '../services/monitoring/push.js';
+import { PUSH_INTERVAL_MAX_SECONDS, PUSH_MAX_RUNTIME_DEFAULT_SECONDS, PUSH_MAX_RUNTIME_MAX_SECONDS, resolvePushSchedule } from '../services/monitoring/push.js';
 import { pushUrl } from './monitoring-ping.js';
 
 const router = Router();
 
 function validateCheckFields(body: unknown): void {
-  const fields = ['targetId', 'name', 'checkType', 'endpoint', 'port', 'intervalSeconds', 'timeoutSeconds', 'confirmationSeconds', 'recoverySeconds', 'placementMode', 'locationIds', 'quorum', 'certExpiryDays', 'tlsMode', 'certificateErrorMode', 'allowPrivate', 'options', 'secretHeaders', 'enabled', 'pushCronExpression', 'pushTimezone'];
+  const fields = ['targetId', 'name', 'checkType', 'endpoint', 'port', 'intervalSeconds', 'timeoutSeconds', 'confirmationSeconds', 'recoverySeconds', 'placementMode', 'locationIds', 'quorum', 'certExpiryDays', 'tlsMode', 'certificateErrorMode', 'allowPrivate', 'options', 'secretHeaders', 'enabled', 'pushCronExpression', 'pushTimezone', 'pushMaxRuntimeSeconds'];
   if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !fields.includes(key))) throw new MonitoringInputError('Check contains unsupported settings');
   if (typeof (body as Record<string, unknown>).name === 'string' && String((body as Record<string, unknown>).name).length > 160) throw new MonitoringInputError('Check name exceeds 160 characters');
 }
@@ -521,6 +522,10 @@ router.post('/checks', requireAuth, requireAdmin, async (req: Request, res: Resp
   try {
     validateCheckFields(req.body);
     const checkType = parseCheckType(req.body.checkType);
+    const pushMaxRuntimeSeconds = parseNumber(req.body.pushMaxRuntimeSeconds, 'pushMaxRuntimeSeconds', 1, PUSH_MAX_RUNTIME_MAX_SECONDS);
+    if (checkType !== 'push' && pushMaxRuntimeSeconds !== undefined) {
+      throw new MonitoringInputError('Maximum runtime is only supported for push checks');
+    }
     const schedule = resolvePushSchedule(checkType, req.body);
     const input = {
       targetId: parseNumber(req.body.targetId, 'targetId', 1, 2_147_483_647)!,
@@ -542,6 +547,7 @@ router.post('/checks', requireAuth, requireAdmin, async (req: Request, res: Resp
       placementMode: parsePlacementMode(req.body.placementMode) ?? 'all',
       locationIds: parseLocationIds(req.body.locationIds) ?? [],
       quorum: parseNumber(req.body.quorum, 'quorum', 0, 128) ?? 0,
+      pushMaxRuntimeSeconds: pushMaxRuntimeSeconds ?? PUSH_MAX_RUNTIME_DEFAULT_SECONDS,
       ...schedule,
     };
     if (!input.targetId) throw new MonitoringInputError('targetId is required');
@@ -560,6 +566,7 @@ router.post('/checks', requireAuth, requireAdmin, async (req: Request, res: Resp
         quorum: check.quorum,
         pushCronExpression: check.pushCronExpression,
         pushTimezone: check.pushTimezone,
+        pushMaxRuntimeSeconds: check.pushMaxRuntimeSeconds,
         secretHeadersChanged: input.secretHeaders !== undefined,
       },
     });
@@ -576,6 +583,10 @@ router.put('/checks/:id', requireAuth, requireAdmin, async (req: Request, res: R
     const current = await getMonitoringCheck(id);
     if (!current) { res.status(404).json({ success: false, error: 'Check not found' }); return; }
     const checkType = req.body.checkType === undefined ? current.checkType : parseCheckType(req.body.checkType);
+    const pushMaxRuntimeSeconds = parseNumber(req.body.pushMaxRuntimeSeconds, 'pushMaxRuntimeSeconds', 1, PUSH_MAX_RUNTIME_MAX_SECONDS);
+    if (checkType !== 'push' && pushMaxRuntimeSeconds !== undefined) {
+      throw new MonitoringInputError('Maximum runtime is only supported for push checks');
+    }
     const schedule = resolvePushSchedule(checkType, req.body, current);
     const input = {
       targetId: parseNumber(req.body.targetId, 'targetId', 1, 2_147_483_647),
@@ -600,6 +611,7 @@ router.put('/checks/:id', requireAuth, requireAdmin, async (req: Request, res: R
       placementMode: parsePlacementMode(req.body.placementMode),
       locationIds: parseLocationIds(req.body.locationIds),
       quorum: parseNumber(req.body.quorum, 'quorum', 0, 128),
+      pushMaxRuntimeSeconds,
       ...schedule,
     };
     validateMonitoringProtocol(input);
@@ -621,6 +633,7 @@ router.put('/checks/:id', requireAuth, requireAdmin, async (req: Request, res: R
         quorum: check.quorum,
         pushCronExpression: check.pushCronExpression,
         pushTimezone: check.pushTimezone,
+        pushMaxRuntimeSeconds: check.pushMaxRuntimeSeconds,
         secretHeadersChanged: input.secretHeaders !== undefined,
       },
     });
@@ -704,6 +717,22 @@ router.get('/checks/:id/observations', requireAdmin, async (req: Request, res: R
     if (!await getMonitoringCheck(id)) { res.status(404).json({ success: false, error: 'Check not found' }); return; }
     res.json({ success: true, data: await getMonitoringCheckObservations(id) });
   } catch (error) { routeError(res, 'Failed to load check observations', error); }
+});
+
+router.get('/checks/:id/runs', requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const id = parseRouteId(req);
+    const limit = req.query.limit === undefined ? 100 : Number(req.query.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new MonitoringInputError('limit must be a whole number from 1 to 100');
+    }
+    const check = await getMonitoringCheck(id);
+    if (!check || check.checkType !== 'push') {
+      res.status(404).json({ success: false, error: 'Push check not found' });
+      return;
+    }
+    res.json({ success: true, data: await listMonitoringPushRuns(id, limit) });
+  } catch (error) { routeError(res, 'Failed to load push run history', error); }
 });
 
 router.post('/checks/:id/run', requireAuth, requireAdmin, async (req: Request, res: Response) => {

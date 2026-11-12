@@ -132,7 +132,7 @@ describe.skipIf(!RUN)('monitoring scheduler under load (integration)', () => {
 
     const removed = await pruneMonitoringHistory(30, 400);
 
-    expect(removed).toEqual({ observations: 25000, days: 1 });
+    expect(removed).toEqual({ observations: 25000, days: 1, pushRuns: 0 });
     const after = await query<{ count: string }>(`SELECT COUNT(*) FROM monitoring_observations`);
     expect(after.rows[0].count).toBe(before.rows[0].count);
     const days = await query<{ count: string }>(`SELECT COUNT(*) FROM monitoring_check_daily WHERE day < CURRENT_DATE - 400`);

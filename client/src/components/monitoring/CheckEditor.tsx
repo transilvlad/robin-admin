@@ -10,7 +10,7 @@ interface AssertionRow { kind: 'body' | 'header' | 'json'; operator: MonitoringH
 export interface CheckForm {
   id: number | null; targetId: number; name: string; checkType: MonitoringCheckType; endpoint: string; port: string;
   intervalSeconds: number; timeoutSeconds: number; confirmationSeconds: number; recoverySeconds: number;
-  pushScheduleMode: 'interval' | 'cron'; pushCronExpression: string; pushTimezone: string;
+  pushScheduleMode: 'interval' | 'cron'; pushCronExpression: string; pushTimezone: string; pushMaxRuntimeSeconds: number;
   placementMode: 'all' | 'selected'; locationIds: number[]; quorum: number;
   certExpiryDays: string; tlsMode: MonitoringTlsMode; certificateErrorMode: MonitoringCertificateErrorMode; enabled: boolean; allowPrivate: boolean;
   startTls: boolean;
@@ -20,7 +20,7 @@ export interface CheckForm {
 function httpDefaults(): MonitoringHttpOptions { return { method: 'GET', headers: {}, body: '', expectedStatuses: Array.from({ length: 100 }, (_, i) => 200 + i), followRedirects: true, maxRedirects: 3, maxResponseTimeMs: null, assertions: [] }; }
 function startTlsDefault(type: MonitoringCheckType, port: string): boolean { return (type === 'smtp' && port === '587') || (type === 'imap' && port === '143'); }
 export function emptyCheckForm(targetId = 0): CheckForm {
-  return { id: null, targetId, name: '', checkType: 'http', endpoint: '', port: '', intervalSeconds: 60, timeoutSeconds: 10, confirmationSeconds: 180, recoverySeconds: 180, pushScheduleMode: 'interval', pushCronExpression: '0 3 * * *', pushTimezone: 'UTC', placementMode: 'all', locationIds: [], quorum: 0, certExpiryDays: '', tlsMode: 'strict', certificateErrorMode: 'down', enabled: true, allowPrivate: false, startTls: false,
+  return { id: null, targetId, name: '', checkType: 'http', endpoint: '', port: '', intervalSeconds: 60, timeoutSeconds: 10, confirmationSeconds: 180, recoverySeconds: 180, pushScheduleMode: 'interval', pushCronExpression: '0 3 * * *', pushTimezone: 'UTC', pushMaxRuntimeSeconds: 3600, placementMode: 'all', locationIds: [], quorum: 0, certExpiryDays: '', tlsMode: 'strict', certificateErrorMode: 'down', enabled: true, allowPrivate: false, startTls: false,
     http: httpDefaults(), statuses: '200-299', headers: [], storedHeaders: [], assertions: [], tcp: { tls: false, bannerContains: '' }, dns: { recordType: 'A', resolver: null, expectedValues: [] }, expectedRecords: '' };
 }
 export function editCheckForm(check: MonitoringCheck): CheckForm {
@@ -47,6 +47,9 @@ export function checkPayload(form: CheckForm) {
   const options: MonitoringCheckOptions = {};
   if (form.checkType === 'push' && form.pushScheduleMode === 'cron' && (!form.pushCronExpression.trim() || !form.pushTimezone.trim())) {
     throw new Error('Cron expression and timezone are required');
+  }
+  if (form.checkType === 'push' && (!Number.isInteger(form.pushMaxRuntimeSeconds) || form.pushMaxRuntimeSeconds < 1 || form.pushMaxRuntimeSeconds > 604800)) {
+    throw new Error('Maximum run time must be between 1 and 604800 seconds');
   }
   const secretHeaders: Record<string, string | null> = Object.create(null);
   for (const name of form.storedHeaders) secretHeaders[name] = null;
@@ -99,6 +102,7 @@ export function checkPayload(form: CheckForm) {
     ...(form.checkType === 'push' ? {
       pushCronExpression: form.pushScheduleMode === 'cron' ? form.pushCronExpression.trim() : null,
       pushTimezone: form.pushScheduleMode === 'cron' ? form.pushTimezone.trim() : null,
+      pushMaxRuntimeSeconds: form.pushMaxRuntimeSeconds,
     } : {}),
     ...(usesTls ? { certExpiryDays: form.certExpiryDays ? Number(form.certExpiryDays) : null, tlsMode: form.tlsMode, certificateErrorMode: form.certificateErrorMode } : {}),
     enabled: form.enabled, allowPrivate: form.allowPrivate, options, secretHeaders };
@@ -189,9 +193,10 @@ export function CheckEditor({ form, targets, setForm, onSave, working }: { form:
           : <Input label="Expected every (seconds)" type="number" min={60} max={2592000} value={form.intervalSeconds} onChange={e => update({ intervalSeconds: Number(e.target.value) })} />}
         <Input label="Grace before an issue (seconds)" type="number" min={0} max={86400} value={form.confirmationSeconds} onChange={e => update({ confirmationSeconds: Number(e.target.value) })} />
         <Input label="Recover (seconds)" type="number" min={0} max={86400} value={form.recoverySeconds} onChange={e => update({ recoverySeconds: Number(e.target.value) })} />
+        <Input label="Maximum run time (seconds)" type="number" min={1} max={604800} value={form.pushMaxRuntimeSeconds} onChange={e => update({ pushMaxRuntimeSeconds: Number(e.target.value) })} />
         <p className="text-xs text-gray-500 sm:col-span-3 dark:text-gray-400">{form.pushScheduleMode === 'cron'
           ? 'Use five cron fields, for example 0 3 * * * for 03:00 daily. A successful ping must arrive between the scheduled time and the end of the grace period. Evaluated about every minute on this server.'
-          : <>Down once no ping has arrived for the expected interval, or when the job calls the URL ending in <code>/fail</code>. An issue opens after the grace period. Evaluated every minute on this server.</>}</p>
+          : <>Down once no ping has arrived for the expected interval, or when the job calls the URL ending in <code>/fail</code>. An issue opens after the grace period. Evaluated every minute on this server.</>} Start and finish calls track each run independently; runs exceeding this time are marked timed out.</p>
       </div>
       : <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{(['intervalSeconds', 'timeoutSeconds', 'confirmationSeconds', 'recoverySeconds'] as const).map((key, index) => <Input key={key} label={['Interval (seconds)', 'Timeout (seconds)', 'Confirm (seconds)', 'Recover (seconds)'][index]} type="number" min={key === 'intervalSeconds' ? 10 : key === 'timeoutSeconds' ? 1 : 0} max={key === 'timeoutSeconds' ? 120 : 86400} value={form[key]} onChange={e => update({ [key]: Number(e.target.value) })} />)}</div>}
     <div className="flex items-center justify-between gap-3"><Toggle label="Enabled" checked={form.enabled} onChange={value => update({ enabled: value })} /><Button onClick={() => void save()} disabled={working || !form.name || !form.endpoint || !form.targetId}>Save check</Button></div>

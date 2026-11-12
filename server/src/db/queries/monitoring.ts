@@ -1,4 +1,5 @@
 import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
+import { randomUUID } from 'node:crypto';
 import { getClient, query } from '../connection.js';
 import { createAlertDelivery } from './alerts.js';
 import { listAdminEmailSubscriptions } from './email.js';
@@ -19,6 +20,7 @@ import type {
   MonitoringIssue,
   MonitoringIssueDelivery,
   MonitoringObservation,
+  MonitoringPushRun,
   MonitoringSilence,
   MonitoringStatus,
   MonitoringSummary,
@@ -27,7 +29,7 @@ import type {
   MonitoringTlsMode,
 } from '../../types/monitoring.js';
 import { buildSentryAlertPayload } from '../../services/alerts/sentry.js';
-import { evaluationIntervalSeconds, expiredPushOccurrence, generatePushToken, hashPushToken, PUSH_CHECKIN_SCAN_LIMIT, PUSH_EVALUATION_SECONDS, pushScheduledOccurrence, resolvePushSchedule } from '../../services/monitoring/push.js';
+import { evaluationIntervalSeconds, expiredPushOccurrence, generatePushToken, hashPushToken, PUSH_CHECKIN_SCAN_LIMIT, PUSH_EVALUATION_SECONDS, PUSH_MAX_RUNTIME_DEFAULT_SECONDS, pushScheduledOccurrence, resolvePushSchedule } from '../../services/monitoring/push.js';
 import { reportError } from '../../services/error-reporting.js';
 
 interface TargetRow {
@@ -83,6 +85,7 @@ interface CheckRow {
   push_recovered_through: Date | null;
   push_schedule_cursor: Date | null;
   push_revision: number;
+  push_max_runtime_seconds: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -129,6 +132,16 @@ interface MonitoringSilenceRow {
   updated_at: Date;
 }
 
+interface MonitoringPushRunRow {
+  id: string;
+  check_id: number;
+  status: MonitoringPushRun['status'];
+  started_at: Date;
+  finished_at: Date | null;
+  timed_out_at: Date | null;
+  error: string | null;
+}
+
 interface MonitoringDeliveryWebhookRow {
   id: number;
   name: string;
@@ -160,12 +173,14 @@ const CHECK_COLUMNS = `
   c.enabled, c.paused_at, c.pause_reason, c.current_status,
   c.status_since, c.last_run_at, c.next_run_at, c.last_response_time_ms, c.last_error,
   c.consecutive_failures, c.consecutive_successes, c.last_ping_at, c.last_ping_status,
-  c.push_cron_expression, c.push_timezone, c.push_schedule_started_at, c.push_recovered_through, c.push_schedule_cursor, c.push_revision, c.created_at, c.updated_at
+  c.push_cron_expression, c.push_timezone, c.push_schedule_started_at, c.push_recovered_through, c.push_schedule_cursor,
+  c.push_revision, c.push_max_runtime_seconds, c.created_at, c.updated_at
 `;
 const ISSUE_COLUMNS = `
   i.id, i.check_id, c.name AS check_name, t.name AS target_name, i.status, i.severity,
   i.summary, i.details_json, i.opened_at, i.closed_at, i.updated_at
 `;
+const PUSH_RUN_COLUMNS = 'id, check_id, status, started_at, finished_at, timed_out_at, error';
 
 function mapTarget(row: TargetRow): MonitoringTarget {
   return {
@@ -221,6 +236,7 @@ function mapCheck(row: CheckRow): MonitoringCheck {
     pushRecoveredThrough: row.push_recovered_through,
     pushScheduleCursor: row.push_schedule_cursor,
     pushRevision: row.push_revision,
+    pushMaxRuntimeSeconds: row.push_max_runtime_seconds,
     consecutiveFailures: row.consecutive_failures,
     consecutiveSuccesses: row.consecutive_successes,
     createdAt: row.created_at,
@@ -292,6 +308,18 @@ function mapMonitoringSilence(row: MonitoringSilenceRow): MonitoringSilence {
     processedAt: row.processed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function mapMonitoringPushRun(row: MonitoringPushRunRow): MonitoringPushRun {
+  return {
+    id: row.id,
+    checkId: row.check_id,
+    status: row.status,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    timedOutAt: row.timed_out_at,
+    error: row.error,
   };
 }
 
@@ -527,6 +555,7 @@ export async function createMonitoringCheck(input: {
   enabled?: boolean;
   pushCronExpression?: string | null;
   pushTimezone?: string | null;
+  pushMaxRuntimeSeconds?: number;
 }): Promise<MonitoringCheck> {
   if (input.checkType === 'push') input = { ...input, ...await pushCheckFields() };
   const schedule = resolvePushSchedule(input.checkType, input);
@@ -543,10 +572,11 @@ export async function createMonitoringCheck(input: {
        confirmation_seconds, recovery_seconds, placement_mode, location_ids, quorum,
        cert_expiry_days, tls_mode, certificate_error_mode, enabled,
        allow_private, options_json, encrypted_headers, secret_header_names, next_run_at,
-       push_token_hash, encrypted_push_token, push_cron_expression, push_timezone, push_schedule_started_at
+       push_token_hash, encrypted_push_token, push_cron_expression, push_timezone, push_schedule_started_at,
+       push_max_runtime_seconds
      )
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, CURRENT_TIMESTAMP, $21, $22, $23, $24,
-       CASE WHEN $23::varchar IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)
+       CASE WHEN $23::varchar IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END, $25)
      RETURNING id`,
     [
       input.targetId,
@@ -573,6 +603,7 @@ export async function createMonitoringCheck(input: {
       pushToken ? encryptStoredSecret(pushToken) : null,
       schedule.pushCronExpression,
       schedule.pushTimezone,
+      input.pushMaxRuntimeSeconds ?? PUSH_MAX_RUNTIME_DEFAULT_SECONDS,
     ]
   );
   return (await getMonitoringCheck(result.rows[0].id))!;
@@ -609,19 +640,55 @@ export async function rotateMonitoringCheckPushToken(id: number): Promise<string
 }
 
 /** Records a ping; returns the check ID, or null for an unknown token. */
+interface MonitoringPingState {
+  id: number;
+  current_status: MonitoringStatus;
+  confirmation_seconds: number;
+  push_cron_expression: string | null;
+  push_timezone: string | null;
+  push_schedule_started_at: Date | null;
+  push_schedule_cursor: Date | null;
+}
+
+async function updateMonitoringPing(client: PoolClient, row: MonitoringPingState, status: 'ok' | 'fail'): Promise<void> {
+  const updated = await client.query<{ last_ping_at: Date }>(
+    `UPDATE monitoring_checks SET last_ping_at = clock_timestamp(), last_ping_status = $2, push_revision = push_revision + 1
+     WHERE id = $1 RETURNING last_ping_at`,
+    [row.id, status],
+  );
+  if (status !== 'ok' || !row.push_cron_expression) return;
+  const schedule = {
+    pushCronExpression: row.push_cron_expression,
+    pushTimezone: row.push_timezone,
+    pushScheduleStartedAt: row.push_schedule_started_at,
+    confirmationSeconds: row.confirmation_seconds,
+  };
+  const pingAt = updated.rows[0].last_ping_at;
+  const scheduled = pushScheduledOccurrence(schedule, pingAt);
+  if (scheduled) {
+    await client.query(
+      `INSERT INTO monitoring_push_checkins (check_id, scheduled_at, received_at)
+       SELECT id, $2, last_ping_at FROM monitoring_checks WHERE id = $1
+       ON CONFLICT (check_id, scheduled_at) DO UPDATE
+         SET received_at = LEAST(monitoring_push_checkins.received_at, EXCLUDED.received_at)`,
+      [row.id, scheduled],
+    );
+  }
+  const expired = row.current_status === 'down' ? expiredPushOccurrence(schedule, pingAt) : null;
+  const recoveredThrough = expired && row.push_schedule_cursor && row.push_schedule_cursor > expired ? row.push_schedule_cursor : expired;
+  if (recoveredThrough) {
+    await client.query(
+      `UPDATE monitoring_checks SET push_recovered_through = GREATEST(push_recovered_through, $2::timestamptz) WHERE id = $1`,
+      [row.id, recoveredThrough],
+    );
+  }
+}
+
 export async function recordMonitoringCheckPing(token: string, status: 'ok' | 'fail'): Promise<number | null> {
   const client = await getClient();
   try {
     await client.query('BEGIN');
-    const result = await client.query<{
-      id: number;
-      current_status: MonitoringStatus;
-      confirmation_seconds: number;
-      push_cron_expression: string | null;
-      push_timezone: string | null;
-      push_schedule_started_at: Date | null;
-      push_schedule_cursor: Date | null;
-    }>(
+    const result = await client.query<MonitoringPingState>(
       `SELECT id, current_status, confirmation_seconds, push_cron_expression, push_timezone, push_schedule_started_at, push_schedule_cursor
        FROM monitoring_checks WHERE push_token_hash = $1 AND check_type = 'push' FOR UPDATE`,
       [hashPushToken(token)],
@@ -631,38 +698,7 @@ export async function recordMonitoringCheckPing(token: string, status: 'ok' | 'f
       await client.query('COMMIT');
       return null;
     }
-    const updated = await client.query<{ last_ping_at: Date }>(
-      `UPDATE monitoring_checks SET last_ping_at = clock_timestamp(), last_ping_status = $2, push_revision = push_revision + 1
-       WHERE id = $1 RETURNING last_ping_at`,
-      [row.id, status],
-    );
-    if (status === 'ok' && row.push_cron_expression) {
-      const schedule = {
-        pushCronExpression: row.push_cron_expression,
-        pushTimezone: row.push_timezone,
-        pushScheduleStartedAt: row.push_schedule_started_at,
-        confirmationSeconds: row.confirmation_seconds,
-      };
-      const pingAt = updated.rows[0].last_ping_at;
-      const scheduled = pushScheduledOccurrence(schedule, pingAt);
-      if (scheduled) {
-        await client.query(
-          `INSERT INTO monitoring_push_checkins (check_id, scheduled_at, received_at)
-           SELECT id, $2, last_ping_at FROM monitoring_checks WHERE id = $1
-           ON CONFLICT (check_id, scheduled_at) DO UPDATE
-             SET received_at = LEAST(monitoring_push_checkins.received_at, EXCLUDED.received_at)`,
-          [row.id, scheduled],
-        );
-      }
-      const expired = row.current_status === 'down' ? expiredPushOccurrence(schedule, pingAt) : null;
-      const recoveredThrough = expired && row.push_schedule_cursor && row.push_schedule_cursor > expired ? row.push_schedule_cursor : expired;
-      if (recoveredThrough) {
-        await client.query(
-          `UPDATE monitoring_checks SET push_recovered_through = GREATEST(push_recovered_through, $2::timestamptz) WHERE id = $1`,
-          [row.id, recoveredThrough],
-        );
-      }
-    }
+    await updateMonitoringPing(client, row, status);
     await client.query('COMMIT');
     return row.id;
   } catch (error) {
@@ -671,6 +707,129 @@ export async function recordMonitoringCheckPing(token: string, status: 'ok' | 'f
   } finally {
     client.release();
   }
+}
+
+export async function startMonitoringPushRun(token: string): Promise<{ run: MonitoringPushRun; maxRuntimeSeconds: number } | null> {
+  const id = randomUUID();
+  const result = await query<MonitoringPushRunRow & { push_max_runtime_seconds: number }>(
+    `WITH started AS (
+       INSERT INTO monitoring_push_runs (id, check_id)
+       SELECT $2, c.id FROM monitoring_checks c
+       WHERE c.push_token_hash = $1 AND c.check_type = 'push'
+       RETURNING *
+     )
+     SELECT r.id, r.check_id, r.status, r.started_at, r.finished_at, r.timed_out_at, r.error,
+            c.push_max_runtime_seconds
+     FROM started r JOIN monitoring_checks c ON c.id = r.check_id`,
+    [hashPushToken(token), id],
+  );
+  return result.rows[0] ? {
+    run: mapMonitoringPushRun(result.rows[0]),
+    maxRuntimeSeconds: result.rows[0].push_max_runtime_seconds,
+  } : null;
+}
+
+export async function finishMonitoringPushRun(
+  token: string,
+  id: string,
+  status: 'succeeded' | 'failed',
+  error: string | null,
+): Promise<number | null> {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const runResult = await client.query<{ check_id: number; status: MonitoringPushRun['status'] }>(
+      'SELECT check_id, status FROM monitoring_push_runs WHERE id = $1 FOR UPDATE',
+      [id],
+    );
+    const run = runResult.rows[0];
+    if (!run) {
+      await client.query('COMMIT');
+      return null;
+    }
+    const checkResult = await client.query<MonitoringPingState>(
+      `SELECT id, current_status, confirmation_seconds, push_cron_expression, push_timezone, push_schedule_started_at, push_schedule_cursor
+       FROM monitoring_checks WHERE id = $1 AND push_token_hash = $2 AND check_type = 'push' FOR UPDATE`,
+      [run.check_id, hashPushToken(token)],
+    );
+    const check = checkResult.rows[0];
+    if (!check) {
+      await client.query('COMMIT');
+      return null;
+    }
+    const updated = await client.query(
+      `UPDATE monitoring_push_runs
+       SET status = CASE WHEN status = 'timed_out' THEN status ELSE $3 END,
+           finished_at = clock_timestamp(), error = $4
+       WHERE id = $1 AND check_id = $2 AND finished_at IS NULL`,
+      [id, check.id, status, error?.slice(0, 500) ?? null],
+    );
+    if (!updated.rowCount) {
+      await client.query('COMMIT');
+      return null;
+    }
+    await updateMonitoringPing(client, check, status === 'succeeded' ? 'ok' : 'fail');
+    await client.query('COMMIT');
+    return check.id;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function expireOverdueMonitoringPushRuns(): Promise<number[]> {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const expired = await client.query<{ id: string; check_id: number }>(
+      `SELECT r.id, r.check_id
+       FROM monitoring_push_runs r
+       JOIN monitoring_checks c ON c.id = r.check_id
+       WHERE r.status = 'running'
+         AND r.started_at <= CURRENT_TIMESTAMP - (c.push_max_runtime_seconds * INTERVAL '1 second')
+       ORDER BY r.started_at, r.id
+       LIMIT 1000
+       FOR UPDATE OF r SKIP LOCKED`,
+    );
+    if (!expired.rows.length) {
+      await client.query('COMMIT');
+      return [];
+    }
+    const runIds = expired.rows.map(row => row.id);
+    const checkIds = [...new Set(expired.rows.map(row => row.check_id))];
+    await client.query(
+      `UPDATE monitoring_push_runs
+       SET status = 'timed_out', timed_out_at = clock_timestamp(),
+           error = COALESCE(error, 'Run exceeded its configured maximum runtime')
+       WHERE id = ANY($1::uuid[])`,
+      [runIds],
+    );
+    await client.query(
+      `UPDATE monitoring_checks
+       SET last_ping_at = clock_timestamp(), last_ping_status = 'fail',
+           push_revision = push_revision + 1, next_run_at = clock_timestamp(), updated_at = clock_timestamp()
+       WHERE id = ANY($1::int[])`,
+      [checkIds],
+    );
+    await client.query('COMMIT');
+    return checkIds;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function listMonitoringPushRuns(checkId: number, limit = 100): Promise<MonitoringPushRun[]> {
+  const result = await query<MonitoringPushRunRow>(
+    `SELECT ${PUSH_RUN_COLUMNS} FROM monitoring_push_runs
+     WHERE check_id = $1 ORDER BY started_at DESC, id DESC LIMIT $2`,
+    [checkId, Math.max(1, Math.min(100, limit))],
+  );
+  return result.rows.map(mapMonitoringPushRun);
 }
 
 export async function hasMonitoringPushCheckin(checkId: number, scheduledAt: Date): Promise<boolean> {
@@ -719,6 +878,7 @@ export async function updateMonitoringCheck(id: number, input: {
   enabled?: boolean;
   pushCronExpression?: string | null;
   pushTimezone?: string | null;
+  pushMaxRuntimeSeconds?: number;
 }): Promise<MonitoringCheck | null> {
   const current = await getMonitoringCheck(id);
   if (!current) return null;
@@ -771,6 +931,7 @@ export async function updateMonitoringCheck(id: number, input: {
     add('secret_header_names', JSON.stringify(Object.keys(secrets)));
   }
   if (input.enabled !== undefined) add('enabled', input.enabled);
+  if (input.pushMaxRuntimeSeconds !== undefined) add('push_max_runtime_seconds', input.pushMaxRuntimeSeconds);
   const scheduleChanged = schedule.pushCronExpression !== (current.pushCronExpression ?? null)
     || schedule.pushTimezone !== (current.pushTimezone ?? null)
     || (schedule.pushCronExpression !== null && input.confirmationSeconds !== undefined && input.confirmationSeconds !== current.confirmationSeconds);
@@ -1907,8 +2068,9 @@ const PRUNE_BATCH_SIZE = 10_000;
  * backlog never holds one long lock, and daily rollups older than
  * `historyDays`. Returns the number of rows removed from each table.
  */
-export async function pruneMonitoringHistory(observationDays: number, historyDays: number): Promise<{ observations: number; days: number }> {
+export async function pruneMonitoringHistory(observationDays: number, historyDays: number): Promise<{ observations: number; days: number; pushRuns: number }> {
   let observations = 0;
+  let pushRuns = 0;
   for (;;) {
     const result = await query(
       `DELETE FROM monitoring_observations
@@ -1921,6 +2083,21 @@ export async function pruneMonitoringHistory(observationDays: number, historyDay
       [observationDays, PRUNE_BATCH_SIZE]
     );
     observations += result.rowCount ?? 0;
+    if ((result.rowCount ?? 0) < PRUNE_BATCH_SIZE) break;
+  }
+  for (;;) {
+    const result = await query(
+      `DELETE FROM monitoring_push_runs
+       WHERE id IN (
+         SELECT id FROM monitoring_push_runs
+         WHERE status <> 'running'
+           AND COALESCE(finished_at, timed_out_at) < CURRENT_TIMESTAMP - ($1::int * INTERVAL '1 day')
+         ORDER BY COALESCE(finished_at, timed_out_at), id
+         LIMIT $2
+       )`,
+      [historyDays, PRUNE_BATCH_SIZE],
+    );
+    pushRuns += result.rowCount ?? 0;
     if ((result.rowCount ?? 0) < PRUNE_BATCH_SIZE) break;
   }
   for (;;) {
@@ -1953,7 +2130,7 @@ export async function pruneMonitoringHistory(observationDays: number, historyDay
     `DELETE FROM monitoring_location_daily WHERE day < CURRENT_DATE - $1::int`,
     [historyDays]
   );
-  return { observations, days: (days.rowCount ?? 0) + (locationDays.rowCount ?? 0) };
+  return { observations, days: (days.rowCount ?? 0) + (locationDays.rowCount ?? 0), pushRuns };
 }
 
 interface CheckDayRow {
