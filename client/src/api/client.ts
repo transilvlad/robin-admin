@@ -177,6 +177,7 @@ import type {
   MonitoringProbeLocationsResponse,
   MonitoringIssue,
   MonitoringObservation,
+  MonitoringSilence,
   MonitoringSummary,
   MonitoringTarget,
   MonitoringTargetType,
@@ -2243,6 +2244,26 @@ export const monitoringApi = {
 
   deleteTarget: (id: number) =>
     request<ApiResponse<void>>(`/monitoring/targets/${id}`, { method: 'DELETE' }),
+
+  silences: () =>
+    request<ApiResponse<MonitoringSilence[]>>('/monitoring/silences'),
+
+  createSilence: (data: {
+    name: string;
+    scopeType: MonitoringSilence['scopeType'];
+    targetId?: number;
+    checkId?: number;
+    reason?: string | null;
+    startsAt: string;
+    endsAt: string;
+  }) =>
+    request<ApiResponse<MonitoringSilence>>('/monitoring/silences', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  endSilence: (id: number) =>
+    request<ApiResponse<MonitoringSilence>>(`/monitoring/silences/${id}/end`, { method: 'POST' }),
 
   createCheck: (data: {
     targetId: number;

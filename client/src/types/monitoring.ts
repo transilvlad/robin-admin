@@ -95,6 +95,22 @@ export interface MonitoringLocationDay extends MonitoringCheckDay {
   region: string | null;
 }
 
+export interface MonitoringSilence {
+  id: number;
+  name: string;
+  scopeType: 'target' | 'check';
+  targetId: number | null;
+  targetName: string | null;
+  checkId: number | null;
+  checkName: string | null;
+  reason: string | null;
+  startsAt: string;
+  endsAt: string;
+  processedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MonitoringCheck {
   id: number;
   targetId: number;

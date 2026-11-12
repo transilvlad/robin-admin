@@ -14,16 +14,17 @@ import { CheckEditor, checkPayload, editCheckForm, emptyCheckForm, type CheckFor
 import { CheckHistoryModal } from '../components/monitoring/CheckHistoryModal';
 import { MonitoringConfigTransfer } from '../components/monitoring/MonitoringConfigTransfer';
 import { MonitoringLocations } from '../components/monitoring/MonitoringLocations';
+import { MonitoringSilences } from '../components/monitoring/MonitoringSilences';
 import type { MonitoringCheck, MonitoringCheckType, MonitoringStatus, MonitoringSummary, MonitoringTarget, MonitoringTargetType } from '../types/monitoring';
 
 interface TargetForm { id: number | null; name: string; targetType: MonitoringTargetType; environment: string; description: string; enabled: boolean; }
 
-type MonitoringTab = 'checks' | 'targets' | 'issues' | 'recent' | 'locations';
+type MonitoringTab = 'checks' | 'targets' | 'issues' | 'recent' | 'locations' | 'silences';
 type PageSize = 25 | 50 | 100;
 const PAGE_SIZE_OPTIONS: PageSize[] = [25, 50, 100];
 const STORAGE_KEYS = { tab: 'monitoring-tab' };
 const emptyTargetForm: TargetForm = { id: null, name: '', targetType: 'host', environment: 'production', description: '', enabled: true };
-function isMonitoringTab(value: unknown): value is MonitoringTab { return value === 'checks' || value === 'targets' || value === 'issues' || value === 'recent' || value === 'locations'; }
+function isMonitoringTab(value: unknown): value is MonitoringTab { return value === 'checks' || value === 'targets' || value === 'issues' || value === 'recent' || value === 'locations' || value === 'silences'; }
 function loadMonitoringTab(): MonitoringTab { try { const raw = localStorage.getItem(STORAGE_KEYS.tab); const parsed = raw ? JSON.parse(raw) : null; return isMonitoringTab(parsed) ? parsed : 'checks'; } catch { return 'checks'; } }
 function saveMonitoringTab(tab: MonitoringTab): void { try { localStorage.setItem(STORAGE_KEYS.tab, JSON.stringify(tab)); } catch {} }
 
@@ -132,6 +133,7 @@ export function MonitoringPage() {
     { id: 'issues', label: `Issues (${filteredIssues.length})`, icon: ShieldAlert },
     { id: 'recent', label: `Recent (${filteredObservations.length})`, icon: History },
     { id: 'locations', label: 'Locations', icon: MapPin },
+    { id: 'silences', label: 'Maintenance', icon: PauseCircle },
   ], [filteredChecks.length, filteredIssues.length, filteredObservations.length, filteredTargets.length]);  const run = async (successMessage: string, action: () => Promise<void>) => {
     setWorking(true); setError(''); setMessage('');
     try { await action(); setMessage(successMessage); await load(false); }
@@ -193,12 +195,13 @@ export function MonitoringPage() {
       <MetricTabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
 
       {activeTab === 'locations' && <MonitoringLocations />}
+      {activeTab === 'silences' && <MonitoringSilences targets={targets} checks={checks} onChanged={() => void load(false)} />}
       {activeTab === 'checks' && <ChecksFilter targets={targets} environments={environments} targetFilter={targetFilter} setTargetFilter={setTargetFilter} environmentFilter={environmentFilter} setEnvironmentFilter={setEnvironmentFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} typeFilter={typeFilter} setTypeFilter={setTypeFilter} pausedFilter={pausedFilter} setPausedFilter={setPausedFilter} filtered={filteredChecks.length} total={checks.length} />}
       {activeTab === 'targets' && <TargetsFilter environments={environments} targetSearch={targetSearch} setTargetSearch={setTargetSearch} targetEnvironmentFilter={targetEnvironmentFilter} setTargetEnvironmentFilter={setTargetEnvironmentFilter} targetTypeFilter={targetTypeFilter} setTargetTypeFilter={setTargetTypeFilter} targetEnabledFilter={targetEnabledFilter} setTargetEnabledFilter={setTargetEnabledFilter} filtered={filteredTargets.length} total={targets.length} />}
       {activeTab === 'issues' && <IssuesFilter targets={targets} checks={checks} issueStatusFilter={issueStatusFilter} setIssueStatusFilter={setIssueStatusFilter} issueSeverityFilter={issueSeverityFilter} setIssueSeverityFilter={setIssueSeverityFilter} issueTargetFilter={issueTargetFilter} setIssueTargetFilter={setIssueTargetFilter} issueCheckFilter={issueCheckFilter} setIssueCheckFilter={setIssueCheckFilter} filtered={filteredIssues.length} total={issues.length} />}
       {activeTab === 'recent' && <RecentFilter checks={checks} recentCheckFilter={recentCheckFilter} setRecentCheckFilter={setRecentCheckFilter} recentStatusFilter={recentStatusFilter} setRecentStatusFilter={setRecentStatusFilter} recentTypeFilter={recentTypeFilter} setRecentTypeFilter={setRecentTypeFilter} filtered={filteredObservations.length} />}
 
-      {activeTab !== 'locations' && <section className="card overflow-hidden">
+      {activeTab !== 'locations' && activeTab !== 'silences' && <section className="card overflow-hidden">
         {activeTab === 'checks' && <ChecksTable checks={checks} filteredChecks={filteredChecks} paginatedChecks={paginatedChecks} checkStart={checkStart} pageSize={pageSize} setPageSize={setPageSize} boundedCheckPage={boundedCheckPage} totalCheckPages={totalCheckPages} setCheckPage={setCheckPage} working={working} run={run} editCheck={editCheck} setPauseTarget={setPauseTarget} setHistoryCheck={setHistoryCheck} />}
         {activeTab === 'targets' && <TargetsList targets={filteredTargets} editTarget={editTarget} />}
         {activeTab === 'issues' && <IssuesTable issues={filteredIssues} checksById={checksById} expandedTargets={expandedIssueTargets} expandedIssues={expandedIssues} toggleTarget={toggleIssueTarget} toggleIssue={toggleIssue} working={working} run={run} setPauseTarget={setPauseTarget} closeStaleIssue={closeStaleIssue} deleteIssue={(issue) => void deleteIssue(issue)} />}

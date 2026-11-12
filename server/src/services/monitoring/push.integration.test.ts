@@ -4,12 +4,15 @@ import { closePool, getClient, query } from '../../db/connection.js';
 import { createAlertWebhook, deleteAlertWebhook } from '../../db/queries/alerts.js';
 import {
   createMonitoringCheck,
+  createMonitoringSilence,
   createMonitoringTarget,
+  endMonitoringSilence,
   evaluateMonitoringCheckLocations,
   getMonitoringCheck,
   getMonitoringCheckPushToken,
   pauseMonitoringCheck,
   pruneMonitoringHistory,
+  processExpiredMonitoringSilences,
   recordMonitoringCheckPing,
   recordMonitoringObservation,
   resumeMonitoringCheck,
@@ -52,6 +55,64 @@ describe.skipIf(!run)('cron push checks (PostgreSQL integration)', () => {
     expect(await getMonitoringCheck(created.id)).toMatchObject({
       currentStatus: 'unknown', pushScheduleCursor: null, lastError: expect.stringContaining('Waiting for'),
     });
+  });
+
+  it('keeps issues active through overlapping silences and notifies once they all end', async () => {
+    const created = await createCheck('Silenced maintenance');
+    await query("UPDATE monitoring_checks SET push_schedule_started_at = NOW() - INTERVAL '1 day' WHERE id = $1", [created.id]);
+    const now = new Date();
+    const first = await createMonitoringSilence({
+      name: 'Target upgrade', scopeType: 'target', targetId, reason: null,
+      startsAt: new Date(now.getTime() - 60_000), endsAt: new Date(now.getTime() + 60_000), createdBy: null,
+    });
+    const second = await createMonitoringSilence({
+      name: 'Check verification', scopeType: 'check', checkId: created.id, reason: null,
+      startsAt: new Date(now.getTime() - 30_000), endsAt: new Date(now.getTime() + 120_000), createdBy: null,
+    });
+    expect(first?.targetName).toBe('Cron integration');
+    expect(second?.targetName).toBe('Cron integration');
+
+    const webhook = await createAlertWebhook({
+      name: 'Silence integration alert', adapter: 'generic', webhookUrl: 'https://example.test/alerts', enabled: true,
+      subscriptions: [{ alertType: 'monitoring_issue', enabled: true }],
+    });
+    const previousSetting = await query<{ value: string }>("SELECT value FROM admin_config WHERE key = 'alertsEnabled'");
+    try {
+      await query(`INSERT INTO admin_config (key, value) VALUES ('alertsEnabled', 'true')
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+      await observe((await getMonitoringCheck(created.id))!);
+      const issue = await query<{ id: number; notification_suppressed: boolean }>(
+        'SELECT id, notification_suppressed FROM monitoring_issues WHERE check_id = $1 AND status = $2', [created.id, 'open'],
+      );
+      expect(issue.rows[0]?.notification_suppressed).toBe(true);
+      expect((await query('SELECT id FROM alert_deliveries WHERE monitoring_issue_id = $1', [issue.rows[0].id])).rowCount).toBe(0);
+
+      await query("UPDATE monitoring_issues SET severity = 'warning' WHERE id = $1", [issue.rows[0].id]);
+      await query(
+        "UPDATE monitoring_checks SET current_status = 'warning', status_since = NOW() - INTERVAL '5 minutes' WHERE id = $1",
+        [created.id],
+      );
+      await observe((await getMonitoringCheck(created.id))!);
+      expect((await query('SELECT id FROM alert_deliveries WHERE monitoring_issue_id = $1', [issue.rows[0].id])).rowCount).toBe(0);
+
+      await endMonitoringSilence(first!.id);
+      expect(await processExpiredMonitoringSilences()).toBe(0);
+      expect((await query('SELECT id FROM alert_deliveries WHERE monitoring_issue_id = $1', [issue.rows[0].id])).rowCount).toBe(0);
+
+      await endMonitoringSilence(second!.id);
+      expect(await processExpiredMonitoringSilences()).toBe(1);
+      expect((await getMonitoringCheck(created.id))?.currentStatus).toBe('down');
+      expect((await query('SELECT id FROM alert_deliveries WHERE monitoring_issue_id = $1 AND webhook_id = $2', [issue.rows[0].id, webhook.id])).rowCount).toBe(1);
+      expect((await query('SELECT notification_suppressed FROM monitoring_issues WHERE id = $1', [issue.rows[0].id])).rows[0].notification_suppressed).toBe(false);
+      expect(await processExpiredMonitoringSilences()).toBe(0);
+    } finally {
+      if (previousSetting.rows[0]) {
+        await query("UPDATE admin_config SET value = $1 WHERE key = 'alertsEnabled'", [previousSetting.rows[0].value]);
+      } else {
+        await query("DELETE FROM admin_config WHERE key = 'alertsEnabled'");
+      }
+      await deleteAlertWebhook(webhook.id);
+    }
   });
 
   it('opens a missed-run issue after grace and closes it after a successful ping', async () => {

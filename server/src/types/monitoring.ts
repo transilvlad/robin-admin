@@ -45,6 +45,22 @@ export interface MonitoringTarget {
   updatedAt: Date;
 }
 
+export interface MonitoringSilence {
+  id: number;
+  name: string;
+  scopeType: 'target' | 'check';
+  targetId: number | null;
+  targetName: string | null;
+  checkId: number | null;
+  checkName: string | null;
+  reason: string | null;
+  startsAt: Date;
+  endsAt: Date;
+  processedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface MonitoringCheck {
   id: number;
   targetId: number;

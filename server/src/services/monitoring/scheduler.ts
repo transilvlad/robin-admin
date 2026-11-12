@@ -14,6 +14,7 @@ import {
   isMonitoringCheckPlacedLocally,
   listDueMonitoringChecks,
   pruneMonitoringHistory,
+  processExpiredMonitoringSilences,
   recordMonitoringObservation,
   evaluateAllMonitoringChecks,
 } from '../../db/queries/monitoring.js';
@@ -24,6 +25,7 @@ import { reportError } from '../error-reporting.js';
 const SCHEDULER_INTERVAL_MS = 500;
 const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
 const LOCATION_EVALUATION_INTERVAL_MS = 30 * 1000;
+const SILENCE_EVALUATION_INTERVAL_MS = 30 * 1000;
 let policy = observabilityDefaults();
 
 type CheckResult = MonitoringObservation | null;
@@ -46,6 +48,16 @@ function capacityError(message: string): Error {
   const error = new Error(message);
   error.name = 'MonitoringCapacityError';
   return error;
+}
+
+async function runExpiredSilenceEvaluation(): Promise<void> {
+  try {
+    const count = await processExpiredMonitoringSilences();
+    if (count > 0) logger.info('Sent notifications for issues still active after maintenance', { issueCount: count });
+  } catch (error) {
+    logger.error('Monitoring silence evaluation failed', { error: (error as Error).message });
+    reportError(error, 'monitoring-silences');
+  }
 }
 
 function enqueueCheck(id: number, scheduled: boolean): Promise<CheckResult> {
@@ -116,6 +128,7 @@ async function executeCheck(item: PendingCheck): Promise<CheckResult> {
 let timer: NodeJS.Timeout | null = null;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let locationEvaluationTimer: NodeJS.Timeout | null = null;
+let silenceEvaluationTimer: NodeJS.Timeout | null = null;
 let claiming = false;
 let backlog = false;
 
@@ -134,8 +147,11 @@ export function startMonitoringScheduler(): void {
     });
   }, LOCATION_EVALUATION_INTERVAL_MS);
   locationEvaluationTimer.unref();
+  silenceEvaluationTimer = setInterval(() => void runExpiredSilenceEvaluation(), SILENCE_EVALUATION_INTERVAL_MS);
+  silenceEvaluationTimer.unref();
   void runOnce();
   void runMonitoringMaintenance();
+  void runExpiredSilenceEvaluation();
   logger.info('Monitoring scheduler started', {
     intervalMs: SCHEDULER_INTERVAL_MS,
     concurrency: policy.monitoringConcurrency,
@@ -152,6 +168,8 @@ export function stopMonitoringScheduler(): void {
   maintenanceTimer = null;
   if (locationEvaluationTimer) clearInterval(locationEvaluationTimer);
   locationEvaluationTimer = null;
+  if (silenceEvaluationTimer) clearInterval(silenceEvaluationTimer);
+  silenceEvaluationTimer = null;
   logger.info('Monitoring scheduler stopped');
 }
 

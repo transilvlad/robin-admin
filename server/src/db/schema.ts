@@ -2441,6 +2441,35 @@ export async function initializeSchema(): Promise<void> {
         CONSTRAINT valid_monitoring_issue_close CHECK ((status = 'open' AND closed_at IS NULL) OR (status = 'closed' AND closed_at IS NOT NULL))
       )
     `);
+    await client.query(`ALTER TABLE monitoring_issues
+      ADD COLUMN IF NOT EXISTS notification_suppressed BOOLEAN NOT NULL DEFAULT false`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS monitoring_silences (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(160) NOT NULL,
+        scope_type VARCHAR(12) NOT NULL,
+        target_id INTEGER REFERENCES monitoring_targets(id) ON DELETE CASCADE,
+        check_id INTEGER REFERENCES monitoring_checks(id) ON DELETE CASCADE,
+        reason VARCHAR(500),
+        starts_at TIMESTAMPTZ NOT NULL,
+        ends_at TIMESTAMPTZ NOT NULL,
+        processed_at TIMESTAMPTZ,
+        created_by INTEGER REFERENCES admins(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT valid_monitoring_silence_scope CHECK (
+          (scope_type = 'target' AND target_id IS NOT NULL AND check_id IS NULL)
+          OR (scope_type = 'check' AND check_id IS NOT NULL AND target_id IS NULL)
+        ),
+        CONSTRAINT valid_monitoring_silence_window CHECK (ends_at > starts_at)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_monitoring_silences_window
+      ON monitoring_silences (starts_at, ends_at)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_monitoring_silences_target
+      ON monitoring_silences (target_id, starts_at, ends_at) WHERE target_id IS NOT NULL`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_monitoring_silences_check
+      ON monitoring_silences (check_id, starts_at, ends_at) WHERE check_id IS NOT NULL`);
     await client.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_monitoring_one_open_issue
       ON monitoring_issues (check_id)

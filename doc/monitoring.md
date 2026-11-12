@@ -222,6 +222,22 @@ probe locations and are not included in configuration export or import because
 they are tied to their URL. Unknown tokens get a plain 404; the token is the
 only credential, so treat the URL as a secret.
 
+## Scheduled maintenance silences
+
+Administrators can schedule a silence for one check or every check on a
+monitoring target under **Monitoring -> Maintenance**. Windows start and end
+in the administrator's local time, last at most 30 days, and can be ended
+early. These silences affect Monitoring issue notifications only; checks,
+observations, issue state and status-page incidents continue to update.
+
+Opening and escalation notifications are held during a matching window. If an
+issue remains open after the last matching silence ends, Robin Admin queues a
+fresh opening notification once. If it recovers during the silence, a
+previously-notified issue still sends its recovery so external incidents can
+close; an issue whose opening notification was held does not send an orphan
+recovery. Overlapping windows are honored, so an issue is notified only after
+no matching silence remains active.
+
 ## Checks and assertions
 
 One `http` check supports both `http://` and `https://`. Existing HTTPS checks

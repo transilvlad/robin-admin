@@ -40,6 +40,7 @@ vi.mock('../middleware/rbac.js', () => ({
 
 vi.mock('../db/queries/monitoring.js', () => ({
   createMonitoringCheck: vi.fn(),
+  createMonitoringSilence: vi.fn(),
   createMonitoringTarget: vi.fn(),
   closeStaleMonitoringIssue: vi.fn(),
   deleteClosedMonitoringIssue: vi.fn(),
@@ -51,6 +52,9 @@ vi.mock('../db/queries/monitoring.js', () => ({
   getMonitoringCheckObservations: vi.fn(),
   requestMonitoringEvaluation: vi.fn(),
   getMonitoringSummary: vi.fn(),
+  listMonitoringSilences: vi.fn(),
+  endMonitoringSilence: vi.fn(),
+  processExpiredMonitoringSilences: vi.fn(),
   pauseMonitoringCheck: vi.fn(),
   resumeMonitoringCheck: vi.fn(),
   updateMonitoringCheck: vi.fn(),
@@ -224,6 +228,45 @@ describe('monitoring check configuration', () => {
     });
     expect(response.status).toBe(400);
     expect(monitoringQueries.createMonitoringCheck).not.toHaveBeenCalled();
+  });
+  it('creates a scoped maintenance silence and processes issues when it ends', async () => {
+    const now = new Date();
+    const silence = {
+      id: 12, name: 'DB maintenance', scopeType: 'target', targetId: 3, targetName: 'Database',
+      checkId: null, checkName: null, reason: 'Upgrade', startsAt: now, endsAt: new Date(now.getTime() + 60_000),
+      processedAt: null, createdAt: now, updatedAt: now,
+    };
+    vi.mocked(monitoringQueries.createMonitoringSilence).mockResolvedValueOnce(silence as never);
+    const created = await fetch(`${baseUrl}/monitoring/silences`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'DB maintenance', scopeType: 'target', targetId: 3, reason: 'Upgrade',
+        startsAt: now.toISOString(), endsAt: new Date(now.getTime() + 60_000).toISOString(),
+      }),
+    });
+    expect(created.status).toBe(201);
+    expect(monitoringQueries.createMonitoringSilence).toHaveBeenCalledWith(expect.objectContaining({
+      scopeType: 'target', targetId: 3, checkId: undefined, createdBy: null,
+    }));
+
+    vi.mocked(monitoringQueries.endMonitoringSilence).mockResolvedValueOnce({ ...silence, endsAt: now } as never);
+    vi.mocked(monitoringQueries.processExpiredMonitoringSilences).mockResolvedValueOnce(2);
+    const ended = await fetch(`${baseUrl}/monitoring/silences/12/end`, { method: 'POST' });
+    expect(ended.status).toBe(200);
+    expect(monitoringQueries.processExpiredMonitoringSilences).toHaveBeenCalledOnce();
+  });
+  it.each([
+    { scopeType: 'target', targetId: 0 },
+    { scopeType: 'check', checkId: 1, startsAt: 'bad-date' },
+    { scopeType: 'target', targetId: 1, startsAt: '2026-11-12T00:00:00Z', endsAt: '2027-01-15T00:00:00Z' },
+    { scopeType: 'other', targetId: 1 },
+  ])('rejects invalid maintenance-silence settings: %j', async patch => {
+    const response = await fetch(`${baseUrl}/monitoring/silences`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Maintenance', startsAt: new Date().toISOString(), endsAt: new Date(Date.now() + 60_000).toISOString(), ...patch }),
+    });
+    expect(response.status).toBe(400);
+    expect(monitoringQueries.createMonitoringSilence).not.toHaveBeenCalled();
   });
 });
 

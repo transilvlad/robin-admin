@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/rbac.js';
 import {
   createMonitoringCheck,
+  createMonitoringSilence,
   createMonitoringTarget,
   closeStaleMonitoringIssue,
   deleteClosedMonitoringIssue,
@@ -14,6 +15,9 @@ import {
   deleteMonitoringTarget,
   getMonitoringCheck,
   getMonitoringSummary,
+  listMonitoringSilences,
+  endMonitoringSilence,
+  processExpiredMonitoringSilences,
   pauseMonitoringCheck,
   resumeMonitoringCheck,
   updateMonitoringCheck,
@@ -91,6 +95,13 @@ function parseNumber(value: unknown, fieldName: string, min: number, max: number
 function parseRouteId(req: Request): number {
   const raw = routeParam(req, 'id');
   return parseNumber(/^\d{1,10}$/.test(raw) ? Number(raw) : Number.NaN, 'id', 1, 2_147_483_647)!;
+}
+
+function parseIsoDate(value: unknown, fieldName: string): Date {
+  if (typeof value !== 'string' || value.trim() === '') throw new MonitoringInputError(`${fieldName} is required`);
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) throw new MonitoringInputError(`${fieldName} must be a valid date`);
+  return parsed;
 }
 
 function parseNullableNumber(value: unknown, fieldName: string, min: number, max: number): number | null | undefined {
@@ -429,6 +440,80 @@ router.delete('/targets/:id', requireAuth, requireAdmin, async (req: Request, re
     res.json({ success: true });
   } catch (error) {
     routeError(res, 'Failed to delete monitoring target', error);
+  }
+});
+
+router.get('/silences', requireAuth, requireAdmin, async (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, data: await listMonitoringSilences() });
+  } catch (error) {
+    routeError(res, 'Failed to load monitoring silences', error);
+  }
+});
+
+router.post('/silences', requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const fields = ['name', 'scopeType', 'targetId', 'checkId', 'reason', 'startsAt', 'endsAt'];
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)
+      || Object.keys(req.body).some(key => !fields.includes(key))) {
+      throw new MonitoringInputError('Silence contains unsupported settings');
+    }
+    const scopeType = req.body.scopeType;
+    if (scopeType !== 'target' && scopeType !== 'check') throw new MonitoringInputError('scopeType must be target or check');
+    const targetId = scopeType === 'target' ? parseNumber(req.body.targetId, 'targetId', 1, 2_147_483_647) : undefined;
+    const checkId = scopeType === 'check' ? parseNumber(req.body.checkId, 'checkId', 1, 2_147_483_647) : undefined;
+    const startsAt = parseIsoDate(req.body.startsAt, 'startsAt');
+    const endsAt = parseIsoDate(req.body.endsAt, 'endsAt');
+    const now = Date.now();
+    if (startsAt.getTime() < now - 5 * 60_000) throw new MonitoringInputError('startsAt cannot be more than five minutes in the past');
+    if (endsAt <= startsAt) throw new MonitoringInputError('endsAt must be after startsAt');
+    if (endsAt.getTime() - startsAt.getTime() > 30 * 24 * 60 * 60_000) {
+      throw new MonitoringInputError('A maintenance silence cannot exceed 30 days');
+    }
+    if (endsAt.getTime() <= now) throw new MonitoringInputError('endsAt must be in the future');
+    const name = parseRequiredString(req.body.name, 'name');
+    const reason = parseOptionalString(req.body.reason, 'reason') ?? null;
+    if (name.length > 160) throw new MonitoringInputError('name must be at most 160 characters');
+    if (reason && reason.length > 500) throw new MonitoringInputError('reason must be at most 500 characters');
+    const silence = await createMonitoringSilence({
+      name,
+      scopeType,
+      targetId,
+      checkId,
+      reason,
+      startsAt,
+      endsAt,
+      createdBy: req.session?.admin?.id ?? null,
+    });
+    if (!silence) throw new MonitoringInputError(`${scopeType === 'target' ? 'Target' : 'Check'} not found`);
+    await logAudit(req, 'monitoring.silence_create', {
+      entityType: 'monitoring_silence',
+      entityId: String(silence.id),
+      newValues: { name: silence.name, scopeType, targetId: silence.targetId, checkId: silence.checkId, startsAt, endsAt },
+    });
+    res.status(201).json({ success: true, data: silence });
+  } catch (error) {
+    routeError(res, 'Failed to create monitoring silence', error);
+  }
+});
+
+router.post('/silences/:id/end', requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const id = parseRouteId(req);
+    const silence = await endMonitoringSilence(id);
+    if (!silence) {
+      res.status(404).json({ success: false, error: 'Active silence not found' });
+      return;
+    }
+    const notifiedIssues = await processExpiredMonitoringSilences();
+    await logAudit(req, 'monitoring.silence_end', {
+      entityType: 'monitoring_silence',
+      entityId: String(id),
+      newValues: { notifiedIssues },
+    });
+    res.json({ success: true, data: silence });
+  } catch (error) {
+    routeError(res, 'Failed to end monitoring silence', error);
   }
 });
 

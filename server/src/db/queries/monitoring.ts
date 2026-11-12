@@ -19,6 +19,7 @@ import type {
   MonitoringIssue,
   MonitoringIssueDelivery,
   MonitoringObservation,
+  MonitoringSilence,
   MonitoringStatus,
   MonitoringSummary,
   MonitoringTarget,
@@ -109,6 +110,22 @@ interface IssueRow {
   details_json: unknown;
   opened_at: Date;
   closed_at: Date | null;
+  updated_at: Date;
+}
+
+interface MonitoringSilenceRow {
+  id: number;
+  name: string;
+  scope_type: 'target' | 'check';
+  target_id: number | null;
+  target_name: string | null;
+  check_id: number | null;
+  check_name: string | null;
+  reason: string | null;
+  starts_at: Date;
+  ends_at: Date;
+  processed_at: Date | null;
+  created_at: Date;
   updated_at: Date;
 }
 
@@ -258,6 +275,102 @@ function mapIssueDelivery(row: IssueDeliveryRow): MonitoringIssueDelivery {
     createdAt: row.created_at,
     completedAt: row.completed_at,
   };
+}
+
+function mapMonitoringSilence(row: MonitoringSilenceRow): MonitoringSilence {
+  return {
+    id: row.id,
+    name: row.name,
+    scopeType: row.scope_type,
+    targetId: row.target_id,
+    targetName: row.target_name,
+    checkId: row.check_id,
+    checkName: row.check_name,
+    reason: row.reason,
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    processedAt: row.processed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+const MONITORING_SILENCE_COLUMNS = `
+  s.id, s.name, s.scope_type, s.target_id, t.name AS target_name,
+  s.check_id, c.name AS check_name, s.reason, s.starts_at, s.ends_at,
+  s.processed_at, s.created_at, s.updated_at
+`;
+
+export async function listMonitoringSilences(): Promise<MonitoringSilence[]> {
+  const result = await query<MonitoringSilenceRow>(
+    `SELECT ${MONITORING_SILENCE_COLUMNS}
+     FROM monitoring_silences s
+     LEFT JOIN monitoring_checks c ON c.id = s.check_id
+     LEFT JOIN monitoring_targets t ON t.id = COALESCE(s.target_id, c.target_id)
+     ORDER BY s.starts_at DESC, s.id DESC`,
+  );
+  return result.rows.map(mapMonitoringSilence);
+}
+
+export async function createMonitoringSilence(input: {
+  name: string;
+  scopeType: 'target' | 'check';
+  targetId?: number;
+  checkId?: number;
+  reason: string | null;
+  startsAt: Date;
+  endsAt: Date;
+  createdBy: number | null;
+}): Promise<MonitoringSilence | null> {
+  const result = await query<MonitoringSilenceRow>(
+    `WITH inserted AS (
+       INSERT INTO monitoring_silences (name, scope_type, target_id, check_id, reason, starts_at, ends_at, created_by)
+       SELECT $1, $2, CASE WHEN $2 = 'target' THEN $3 END, CASE WHEN $2 = 'check' THEN $4 END,
+              $5, $6, $7, $8
+       WHERE ($2 = 'target' AND EXISTS (SELECT 1 FROM monitoring_targets WHERE id = $3))
+          OR ($2 = 'check' AND EXISTS (SELECT 1 FROM monitoring_checks WHERE id = $4))
+       RETURNING id
+     )
+     SELECT ${MONITORING_SILENCE_COLUMNS}
+     FROM inserted i
+     JOIN monitoring_silences s ON s.id = i.id
+     LEFT JOIN monitoring_checks c ON c.id = s.check_id
+     LEFT JOIN monitoring_targets t ON t.id = COALESCE(s.target_id, c.target_id)`,
+    [input.name, input.scopeType, input.targetId ?? null, input.checkId ?? null, input.reason, input.startsAt, input.endsAt, input.createdBy],
+  );
+  return result.rows[0] ? mapMonitoringSilence(result.rows[0]) : null;
+}
+
+export async function endMonitoringSilence(id: number): Promise<MonitoringSilence | null> {
+  const result = await query<MonitoringSilenceRow>(
+    `WITH ended AS (
+       UPDATE monitoring_silences
+       SET starts_at = LEAST(starts_at, CURRENT_TIMESTAMP),
+           ends_at = LEAST(ends_at, CURRENT_TIMESTAMP), processed_at = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND ends_at > CURRENT_TIMESTAMP
+       RETURNING id
+     )
+     SELECT ${MONITORING_SILENCE_COLUMNS}
+     FROM ended e
+     JOIN monitoring_silences s ON s.id = e.id
+     LEFT JOIN monitoring_checks c ON c.id = s.check_id
+     LEFT JOIN monitoring_targets t ON t.id = COALESCE(s.target_id, c.target_id)`,
+    [id],
+  );
+  return result.rows[0] ? mapMonitoringSilence(result.rows[0]) : null;
+}
+
+async function isMonitoringCheckSilenced(checkId: number, targetId: number, client?: PoolClient): Promise<boolean> {
+  const result = await monitoringQuery<{ silenced: boolean }>(client,
+    `SELECT EXISTS (
+       SELECT 1 FROM monitoring_silences s
+       WHERE s.starts_at <= CURRENT_TIMESTAMP AND s.ends_at > CURRENT_TIMESTAMP
+         AND ((s.scope_type = 'check' AND s.check_id = $1)
+           OR (s.scope_type = 'target' AND s.target_id = $2))
+     ) AS silenced`,
+    [checkId, targetId],
+  );
+  return result.rows[0].silenced;
 }
 
 export async function listMonitoringTargets(): Promise<MonitoringTarget[]> {
@@ -853,10 +966,11 @@ function isCurrentPushScheduleObservation(check: MonitoringCheck, rawDetails: un
 
 async function openUnmeetableQuorumIssue(check: MonitoringCheck, observation: MonitoringObservation, error: string | null): Promise<void> {
   const summary = `${check.name} cannot reach quorum`.slice(0, 255);
+  const notificationSuppressed = await isMonitoringCheckSilenced(check.id, check.targetId);
   // Paused, disabled and disabled-target checks are not supposed to alert.
   const issue = await query<{ id: string }>(
-    `INSERT INTO monitoring_issues (check_id, status, severity, summary, details_json, opened_at, updated_at)
-     SELECT c.id, 'open', 'warning', $2, $3::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    `INSERT INTO monitoring_issues (check_id, status, severity, summary, details_json, opened_at, notification_suppressed, updated_at)
+     SELECT c.id, 'open', 'warning', $2, $3::jsonb, CURRENT_TIMESTAMP, $6, CURRENT_TIMESTAMP
      FROM monitoring_checks c JOIN monitoring_targets t ON t.id = c.target_id
      WHERE c.id = $1 AND c.enabled AND c.paused_at IS NULL AND t.enabled
        AND ($4::integer IS NULL OR (c.check_type = 'push' AND c.push_revision = $4
@@ -864,9 +978,10 @@ async function openUnmeetableQuorumIssue(check: MonitoringCheck, observation: Mo
      ON CONFLICT (check_id) WHERE status = 'open' DO NOTHING
      RETURNING id`,
     [check.id, summary, JSON.stringify({ error, details: observation.details }),
-      check.checkType === 'push' && check.pushCronExpression ? check.pushRevision : null, check.pushScheduleCursor ?? null],
+      check.checkType === 'push' && check.pushCronExpression ? check.pushRevision : null, check.pushScheduleCursor ?? null,
+      notificationSuppressed],
   );
-  if (!issue.rows[0]) return;
+  if (!issue.rows[0] || notificationSuppressed) return;
   // The issue is a warning, so notifications must report a warning rather than an unknown-status failure.
   await enqueueMonitoringIssueDeliveries({ check, observation: { ...observation, status: 'warning' }, issueId: Number(issue.rows[0].id), eventKind: 'failure', summary });
   await syncStatusPageReportsAfterIssueChange();
@@ -1176,8 +1291,8 @@ async function applyCheckState(
   client?: PoolClient,
 ): Promise<boolean> {
   const failure = observation.status === 'down' || observation.status === 'warning';
-  const activeIssue = await monitoringQuery<{ id: number; opened_at: Date; severity: string }>(client,
-    `SELECT id, opened_at, severity FROM monitoring_issues
+  const activeIssue = await monitoringQuery<{ id: number; opened_at: Date; severity: string; notification_suppressed: boolean }>(client,
+    `SELECT id, opened_at, severity, notification_suppressed FROM monitoring_issues
      WHERE check_id = $1 AND status = 'open'
      ORDER BY opened_at DESC
      LIMIT 1`,
@@ -1262,9 +1377,10 @@ async function applyCheckState(
 
   let issueChanged = false;
   if (failingLongEnough && activeIssue.rows.length === 0) {
+    const notificationSuppressed = await isMonitoringCheckSilenced(check.id, check.targetId, client);
     const issue = await monitoringQuery<{ id: string }>(client,
-      `INSERT INTO monitoring_issues (check_id, status, severity, summary, details_json, opened_at, updated_at)
-       VALUES ($1, 'open', $2, $3, $4::jsonb, $5, CURRENT_TIMESTAMP)
+      `INSERT INTO monitoring_issues (check_id, status, severity, summary, details_json, opened_at, notification_suppressed, updated_at)
+       VALUES ($1, 'open', $2, $3, $4::jsonb, $5, $6, CURRENT_TIMESTAMP)
        ON CONFLICT (check_id) WHERE status = 'open' DO NOTHING
        RETURNING id`,
       [
@@ -1277,10 +1393,11 @@ async function applyCheckState(
           observationId: observation.id,
         }),
         observation.observedAt,
+        notificationSuppressed,
       ]
     );
     // A concurrent evaluation may already have opened the issue and queued its deliveries.
-    if (issue.rows[0]) {
+    if (issue.rows[0] && !notificationSuppressed) {
       await enqueueMonitoringIssueDeliveries({
         check,
         observation,
@@ -1290,7 +1407,7 @@ async function applyCheckState(
         client,
       });
       issueChanged = true;
-    }
+    } else if (issue.rows[0]) issueChanged = true;
   } else if (failure && activeIssue.rows[0]) {
     const severity = observation.status === 'warning' ? 'warning' : 'critical';
     const escalated = failingLongEnough && severity === 'critical' && activeIssue.rows[0].severity !== 'critical';
@@ -1314,7 +1431,7 @@ async function applyCheckState(
       ]
     );
     // A quorum warning may already have used this issue's failure notification; a real outage still has to page.
-    if (escalated) {
+    if (escalated && !(await isMonitoringCheckSilenced(check.id, check.targetId, client))) {
       await enqueueMonitoringIssueDeliveries({
         check,
         observation,
@@ -1341,7 +1458,7 @@ async function applyCheckState(
         JSON.stringify({ recoveryObservationId: observation.id }),
       ]
     );
-    if (recovered.rows[0]) {
+    if (recovered.rows[0] && !activeIssue.rows[0].notification_suppressed) {
       await enqueueMonitoringIssueDeliveries({
         check,
         observation,
@@ -1351,7 +1468,7 @@ async function applyCheckState(
         client,
       });
       issueChanged = true;
-    }
+    } else if (recovered.rows[0]) issueChanged = true;
   }
   return issueChanged;
 }
@@ -1375,6 +1492,7 @@ async function enqueueMonitoringIssueDeliveries(input: {
   dedupeSuffix?: string;
   client?: PoolClient;
 }): Promise<void> {
+  if (input.eventKind === 'failure' && await isMonitoringCheckSilenced(input.check.id, input.check.targetId, input.client)) return;
   const setting = await monitoringQuery<{ value: string }>(input.client,
     `SELECT value FROM admin_config WHERE key = 'alertsEnabled'`
   );
@@ -1410,6 +1528,94 @@ async function enqueueMonitoringIssueDeliveries(input: {
     client: input.client,
   })));
   await enqueueMonitoringIssueAdminDeliveries(input);
+}
+
+export async function processExpiredMonitoringSilences(): Promise<number> {
+  const client = await getClient();
+  let issueCount = 0;
+  try {
+    await client.query('BEGIN');
+    const expired = await client.query<{ id: number }>(
+      `SELECT id FROM monitoring_silences
+       WHERE processed_at IS NULL AND ends_at <= CURRENT_TIMESTAMP
+       ORDER BY ends_at, id
+       LIMIT 1000
+       FOR UPDATE SKIP LOCKED`,
+    );
+    if (!expired.rows.length) {
+      await client.query('COMMIT');
+      return 0;
+    }
+    const silenceIds = expired.rows.map(row => row.id);
+    const issues = await client.query<{
+      silence_id: number;
+      issue_id: number;
+      check_id: number;
+      details_json: unknown;
+      opened_at: Date;
+      severity: 'warning' | 'critical';
+      summary: string;
+    }>(
+      `SELECT DISTINCT ON (i.id)
+         s.id AS silence_id, i.id AS issue_id, i.check_id, i.details_json, i.opened_at, i.severity, i.summary
+       FROM monitoring_silences s
+       JOIN monitoring_checks c ON (s.scope_type = 'check' AND c.id = s.check_id)
+          OR (s.scope_type = 'target' AND c.target_id = s.target_id)
+       JOIN monitoring_issues i ON i.check_id = c.id AND i.status = 'open'
+       WHERE s.id = ANY($1::int[])
+         AND NOT EXISTS (
+           SELECT 1 FROM monitoring_silences active
+           WHERE active.starts_at <= CURRENT_TIMESTAMP AND active.ends_at > CURRENT_TIMESTAMP
+             AND ((active.scope_type = 'check' AND active.check_id = c.id)
+               OR (active.scope_type = 'target' AND active.target_id = c.target_id))
+         )
+       ORDER BY i.id, s.ends_at DESC, s.id DESC`,
+      [silenceIds],
+    );
+    for (const issue of issues.rows) {
+      const check = await getMonitoringCheck(issue.check_id, client);
+      if (!check) continue;
+      const stored = recordValue(issue.details_json);
+      const status = issue.severity === 'warning' ? 'warning' : 'down';
+      const details = recordValue(stored.details);
+      const observation: MonitoringObservation = {
+        id: typeof stored.observationId === 'number' ? stored.observationId : 0,
+        checkId: issue.check_id,
+        locationId: null,
+        status,
+        errorCode: null,
+        responseTimeMs: null,
+        error: typeof stored.error === 'string' ? stored.error : null,
+        details,
+        observedAt: issue.opened_at,
+      };
+      await enqueueMonitoringIssueDeliveries({
+        check,
+        observation,
+        issueId: issue.issue_id,
+        eventKind: 'failure',
+        summary: `${issue.summary} (maintenance ended)`,
+        dedupeSuffix: `silence-ended:${issue.silence_id}`,
+        client,
+      });
+      await client.query(
+        'UPDATE monitoring_issues SET notification_suppressed = false WHERE id = $1 AND status = $2',
+        [issue.issue_id, 'open'],
+      );
+      issueCount += 1;
+    }
+    await client.query(
+      'UPDATE monitoring_silences SET processed_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])',
+      [silenceIds],
+    );
+    await client.query('COMMIT');
+    return issueCount;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function enqueueMonitoringIssueAdminDeliveries(input: {
