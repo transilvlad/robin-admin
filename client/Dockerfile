@@ -1,4 +1,4 @@
-FROM node:26.12.1-bookworm-slim AS builder
+FROM --platform=$BUILDPLATFORM node:26.13.1-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -16,10 +16,10 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM nginx:1.31.8-alpine@sha256:1ef7ca94d7879df82421428ce13bd1eaa412404953859cf7a5b6512c25e67a60 AS runtime
+FROM nginx:1.31.8-alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11 AS runtime
 
 # Patch Alpine OS packages (openssl et al.) so the release Trivy gate passes.
-RUN apk upgrade --no-cache && apk add --no-cache 'pcre2>=10.49-r0' 'curl>=8.23.0-r0' 'libcurl>=8.23.0-r0'
+RUN apk upgrade --no-cache && apk add --no-cache 'pcre2>=10.49-r0' 'curl>=8.23.0-r0' 'libcurl>=8.23.0-r0' 'libxslt>=1.1.43-r4'
 RUN sed -Ei 's|pid[[:space:]]+/run/nginx.pid;|pid /tmp/nginx.pid;|' /etc/nginx/nginx.conf
 
 ENV BASE_PATH=/

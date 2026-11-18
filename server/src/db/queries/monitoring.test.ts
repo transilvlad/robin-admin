@@ -231,7 +231,9 @@ describe('monitoring query state transitions', () => {
     mockQueryRows([]);
     mockQueryRows([]);
     mockQueryRows([]);
+    mockQueryRows([{ silenced: false }]);
     mockQueryRows([{ id: '55' }]);
+    mockQueryRows([{ silenced: false }]);
     mockQueryRows([{ value: 'true' }]);
     mockQueryRows(monitoringWebhookRows());
     mockQueryRows([]);
@@ -252,6 +254,7 @@ describe('monitoring query state transitions', () => {
       'Suite Robin SMTPS 465 is warning',
       expect.stringContaining('"observationId":31'),
       observedAt,
+      false,
     ]);
     expect(createAlertDelivery).toHaveBeenCalledTimes(1);
     expect(syncAutomaticStatusPageReports).toHaveBeenCalledTimes(1);
@@ -343,7 +346,9 @@ describe('monitoring query state transitions', () => {
     mockQueryRows([]);
     mockQueryRows([]);
     mockQueryRows([]);
-    mockQueryRows([]);
+    mockQueryRows([{ silenced: false }]);
+    mockQueryRows([{ silenced: false }]);
+    mockQueryRows([{ value: 'false' }]);
 
     await recordMonitoringObservation({ check, status: 'down', responseTimeMs: 5000, error: 'Connection timed out', details: {}, observedAt });
 
@@ -358,7 +363,9 @@ describe('monitoring query state transitions', () => {
     mockQueryRows([]);
     mockQueryRows([]);
     mockQueryRows([]);
+    mockQueryRows([{ silenced: false }]);
     mockQueryRows([{ id: '55' }]);
+    mockQueryRows([{ silenced: false }]);
     mockQueryRows([{ value: 'false' }]);
 
     await recordMonitoringObservation({

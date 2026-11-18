@@ -33,7 +33,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '26.12.1'
+  NODE_VERSION: '26.13.1'
 
 permissions:
   contents: read

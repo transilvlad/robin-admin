@@ -1,4 +1,4 @@
-FROM node:26.12.1-bookworm-slim AS builder
+FROM node:26.13.1-bookworm-slim AS builder
 
 WORKDIR /app
 ENV npm_config_update_notifier=false
@@ -12,13 +12,13 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM node:26.12.1-alpine3.23@sha256:bc2b334006f15c7167bbeb2f08f28c2df883f7594a0470e04454ebe7560cfe68 AS production-dependencies
+FROM node:26.13.1-alpine3.23@sha256:39d8c143e60e99ae98f014bebea1e72fc96d3c9bdf9504bc3a27af5c05bfa39f AS production-dependencies
 
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-FROM node:26.12.1-alpine3.23@sha256:bc2b334006f15c7167bbeb2f08f28c2df883f7594a0470e04454ebe7560cfe68 AS runtime
+FROM node:26.13.1-alpine3.23@sha256:39d8c143e60e99ae98f014bebea1e72fc96d3c9bdf9504bc3a27af5c05bfa39f AS runtime
 
 # Patch Alpine OS packages so the release Trivy gate passes.
 RUN apk upgrade --no-cache \
