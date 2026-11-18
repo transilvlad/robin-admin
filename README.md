@@ -321,6 +321,13 @@ selected branch. It runs CI, verifies package versions, and uploads archives and
 checksums without creating a GitHub Release or publishing images. Pushing a
 matching `v*` tag remains the explicit publication action.
 
+Client assets compile on Buildx's native `BUILDPLATFORM`; only the nginx runtime
+targets `linux/amd64` and `linux/arm64`. CI checks this boundary and requires all
+three versioned image jobs to succeed before creating the release. Run
+`node .github/scripts/check-release-build.mjs` locally to check these contracts.
+A successful native, SHA-tagged production build does not validate the
+multi-architecture release path, and fixing `main` does not change an existing tag.
+
 Image workflows refresh the `runtime` stage's OS packages on every build while
 retaining dependency and compilation caches. For a local security refresh, use
 `docker buildx build --no-cache-filter runtime --load -t robin-admin-client ./client`

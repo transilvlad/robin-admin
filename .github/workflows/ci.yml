@@ -63,6 +63,9 @@ jobs:
             client/package-lock.json
             server/package-lock.json
 
+      - name: Check native client compilation and release image gates
+        run: node .github/scripts/check-release-build.mjs
+
       - name: Install root dependencies
         run: npm ci
 

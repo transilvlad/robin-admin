@@ -1,3 +1,5 @@
+# Static assets are architecture-independent; never run Node/Rolldown under
+# target-platform emulation for the multi-arch release.
 FROM --platform=$BUILDPLATFORM node:26.13.1-bookworm-slim AS builder
 
 WORKDIR /app
