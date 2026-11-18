@@ -114,10 +114,11 @@ type CronScheduleState = Pick<MonitoringCheck, 'pushCronExpression' | 'pushTimez
 export function pushScheduledOccurrence(check: CronScheduleState, time: Date): Date | null {
   if (!check.pushCronExpression) return null;
   if (!check.pushTimezone || !check.pushScheduleStartedAt) throw new Error('Stored push cron schedule is incomplete');
-  // previousRuns excludes its reference second; adding one second makes a
-  // five-field occurrence exactly at the boundary inclusive.
+  // previousRuns excludes its reference time. Start at the next whole second
+  // to include occurrences in the current second without looking ahead.
+  const nextSecond = new Date(Math.floor(time.getTime() / 1000) * 1000 + 1000);
   const scheduled = cronSchedule(check.pushCronExpression, check.pushTimezone)
-    .previousRuns(1, new Date(time.getTime() + 1000))[0];
+    .previousRuns(1, nextSecond)[0];
   return scheduled && scheduled > check.pushScheduleStartedAt ? scheduled : null;
 }
 
