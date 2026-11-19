@@ -1,5 +1,8 @@
 # Deploying robin-agent
 
+For optional Linux inventory, security events, and authentication counters,
+see [Host security telemetry](host-security.md).
+
 `robin-agent` is a single dependency-free Go binary that runs on a mail-server
 host or container and **dials out** to robin-admin. Because the agent initiates
 the connection, it works behind NAT, firewalls, and inside containers with only

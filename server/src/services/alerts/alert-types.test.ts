@@ -4,6 +4,16 @@ import { ALERT_CATALOG, defaultAlertSubscriptions, normalizeAlertSubscriptions }
 describe('alert type catalog', () => {
   it('exposes the fixed defaults with all subscriptions initially disabled', () => {
     expect(ALERT_CATALOG.map((entry) => [entry.key, entry.defaultThreshold])).toEqual([
+      ['host_ssh_keys', null],
+      ['host_sshd', null],
+      ['host_network', null],
+      ['host_privilege', null],
+      ['host_integrity', null],
+      ['host_unknown_login', null],
+      ['host_password_login', null],
+      ['host_failed_auth_rate', null],
+      ['host_patching', null],
+      ['host_security_stale', null],
       ['availability', null],
       ['telemetry_stale', 180],
       ['postfix_queue', 1000],
@@ -32,7 +42,7 @@ describe('alert type catalog', () => {
     const subscriptions = normalizeAlertSubscriptions([
       { alertType: 'postfix_queue', enabled: true, threshold: 2000 },
     ]);
-    expect(subscriptions).toHaveLength(20);
+    expect(subscriptions).toHaveLength(ALERT_CATALOG.length);
     expect(subscriptions.find((item) => item.alertType === 'postfix_queue')).toMatchObject({
       enabled: true,
       threshold: 2000,

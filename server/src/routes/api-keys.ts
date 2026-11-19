@@ -39,6 +39,8 @@ const VALID_SCOPES = new Set([
   'logs:read',
   'logs:write',
   'logs:manage',
+  'security:read',
+  'security:manage',
   'rspamd:read',
   'rspamd:write',
   'rspamd:scan',

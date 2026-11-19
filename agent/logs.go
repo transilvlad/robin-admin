@@ -1699,6 +1699,11 @@ func journaldRead(ctx context.Context, unit, filter string, limited bool, positi
 				return nil, nil, "", false, errors.New("invalid journal tail line limit")
 			}
 			recent = true
+		} else if value, ok := strings.CutPrefix(arg, "robin-agent-line-limit="); ok {
+			maxLines, err = strconv.Atoi(value)
+			if err != nil || maxLines < 1 {
+				return nil, nil, "", false, errors.New("invalid journal line limit")
+			}
 		} else if value, ok := strings.CutPrefix(arg, "robin-agent-budget="); ok {
 			maxBytes, err = strconv.Atoi(value)
 			if err != nil || maxBytes < 1 {
@@ -1708,7 +1713,11 @@ func journaldRead(ctx context.Context, unit, filter string, limited bool, positi
 			args = append(args, arg)
 		}
 	}
-	argv := append([]string{"journalctl", "-u", unit, "--no-pager", "-o", "json"}, args...)
+	argv := []string{"journalctl", "--no-pager", "-o", "json"}
+	if unit != "" {
+		argv = append(argv, "-u", unit)
+	}
+	argv = append(argv, args...)
 	if filter != "" {
 		argv = append(argv, "--grep", filter)
 	}
@@ -1734,7 +1743,7 @@ func journaldRead(ctx context.Context, unit, filter string, limited bool, positi
 			}
 			return true
 		}
-		if limited && (len(lines) >= logBatchMaxLines || read >= logBatchMaxBytes) {
+		if limited && (len(lines) >= maxLines || read >= maxBytes) {
 			more = true
 			return false
 		}
@@ -1751,6 +1760,10 @@ func followJournal(ctx context.Context, key, unit, filter string, cur *logCursor
 }
 
 func followJournalWithTail(ctx context.Context, key, unit, filter string, cur *logCursor, tailLines, tailBytes int) (*logBatch, bool, error) {
+	return followJournalWithLimits(ctx, key, unit, filter, cur, tailLines, tailBytes, logBatchMaxLines, logBatchMaxBytes)
+}
+
+func followJournalWithLimits(ctx context.Context, key, unit, filter string, cur *logCursor, tailLines, tailBytes, maxLines, maxBytes int) (*logBatch, bool, error) {
 	source := "journalctl -u " + unit
 	if cur == nil {
 		lines, times, cursor, _, err := journaldRead(ctx, unit, filter, false, "-n", strconv.Itoa(tailLines),
@@ -1765,6 +1778,7 @@ func followJournalWithTail(ctx context.Context, key, unit, filter string, cur *l
 	if cur.Journal == "" {
 		position = []string{"--since", "@" + strconv.FormatInt(cur.Since.Unix(), 10)}
 	}
+	position = append(position, "robin-agent-line-limit="+strconv.Itoa(maxLines), "robin-agent-budget="+strconv.Itoa(maxBytes))
 	lines, times, cursor, more, err := journaldRead(ctx, unit, filter, true, position...)
 	if err != nil {
 		return nil, false, err

@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 
 export const appIcons = {
+  hostSecurity: ShieldCheck,
   dashboard: LayoutDashboard,
   users: Users,
   aliases: AtSign,

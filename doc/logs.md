@@ -1,5 +1,9 @@
 # Logs
 
+[Host security](host-security.md) sends masked authentication and account
+events through the Fleet log spool. Failed SSH authentications are aggregated
+into minute counters and excluded from the log store.
+
 Logs adds searchable history for service logs shipped by Fleet agents and
 external push integrations. Fleet keeps each service's recent tail
 ([log access](fleet-service-capabilities.md#log-access-and-limitations)); Logs

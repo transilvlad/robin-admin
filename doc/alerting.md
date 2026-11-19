@@ -1,5 +1,9 @@
 # Service alerts
 
+Each destination can also subscribe to [host security alerts](host-security.md),
+including unapproved drift, unexpected logins, overdue security maintenance,
+and stale host telemetry.
+
 Robin Admin evaluates the latest observations for every enabled fleet service and sends matching notifications to configured Slack, Microsoft Teams, PagerDuty, email, generic HTTPS webhook, or Sentry destinations.
 
 ## Webhook settings

@@ -1135,6 +1135,9 @@ func main() {
 	probeRuntime := newProbeRuntime(client, c, s, probeEnabled)
 	go probeRuntime.run(ctx)
 	go pollCommands(ctx, c, s, actions)
+	if security := loadSecurityConfig(); security.enabled {
+		go runHostSecurity(ctx, client, c, s, security)
+	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

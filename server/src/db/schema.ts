@@ -3678,6 +3678,89 @@ export async function initializeSchema(): Promise<void> {
     await syncTypeListConstraint(client, 'alert_deliveries', 'valid_alert_delivery_type', 'alert_type', ALERT_TYPES);
     await syncTypeListConstraint(client, 'alert_state', 'valid_alert_state_type', 'alert_type', ALERT_STATE_TYPES);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS host_security_snapshots (
+        id BIGSERIAL PRIMARY KEY,
+        agent_id VARCHAR(64) NOT NULL REFERENCES fleet_agents(agent_id) ON DELETE CASCADE,
+        hash CHAR(64) NOT NULL,
+        observed_at TIMESTAMPTZ NOT NULL,
+        received_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        sections JSONB NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS host_security_snapshots_by_host
+        ON host_security_snapshots (agent_id, observed_at DESC, id DESC);
+      CREATE TABLE IF NOT EXISTS host_security_hosts (
+        agent_id VARCHAR(64) PRIMARY KEY REFERENCES fleet_agents(agent_id) ON DELETE CASCADE,
+        snapshot_id BIGINT NOT NULL REFERENCES host_security_snapshots(id) ON DELETE CASCADE,
+        interval_seconds INTEGER NOT NULL,
+        baseline_revision INTEGER NOT NULL DEFAULT 0,
+        baseline JSONB NOT NULL DEFAULT '{}'::jsonb,
+        last_received_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS host_security_known_addresses (
+        id BIGSERIAL PRIMARY KEY,
+        network CIDR NOT NULL UNIQUE,
+        label VARCHAR(128) NOT NULL,
+        expires_at TIMESTAMPTZ
+      );
+      CREATE TABLE IF NOT EXISTS host_security_approvals (
+        agent_id VARCHAR(64) NOT NULL REFERENCES fleet_agents(agent_id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL,
+        snapshot_id BIGINT REFERENCES host_security_snapshots(id) ON DELETE SET NULL,
+        approver TEXT NOT NULL,
+        reason TEXT,
+        diff JSONB NOT NULL,
+        approved_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (agent_id, revision)
+      );
+      CREATE TABLE IF NOT EXISTS host_security_event_batches (
+        agent_id VARCHAR(64) NOT NULL REFERENCES fleet_agents(agent_id) ON DELETE CASCADE,
+        batch_id CHAR(64) NOT NULL,
+        received_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (agent_id, batch_id)
+      );
+      CREATE TABLE IF NOT EXISTS host_security_events (
+        agent_id VARCHAR(64) NOT NULL REFERENCES fleet_agents(agent_id) ON DELETE CASCADE,
+        event_id CHAR(64) NOT NULL,
+        observed_at TIMESTAMPTZ NOT NULL,
+        event JSONB NOT NULL,
+        snapshot_id BIGINT REFERENCES host_security_snapshots(id) ON DELETE SET NULL,
+        baseline_revision INTEGER,
+        known_address_id BIGINT,
+        PRIMARY KEY (agent_id, event_id)
+      );
+      CREATE INDEX IF NOT EXISTS host_security_events_by_host
+        ON host_security_events (agent_id, observed_at DESC, event_id DESC);
+      CREATE TABLE IF NOT EXISTS host_security_counters (
+        agent_id VARCHAR(64) NOT NULL REFERENCES fleet_agents(agent_id) ON DELETE CASCADE,
+        minute TIMESTAMPTZ NOT NULL,
+        invalid_user BIGINT NOT NULL,
+        failed_key BIGINT NOT NULL,
+        failed_password BIGINT NOT NULL,
+        successful BIGINT NOT NULL,
+        distinct_sources BIGINT NOT NULL,
+        PRIMARY KEY (agent_id, minute)
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE host_security_hosts ADD COLUMN IF NOT EXISTS security_upgrades_since TIMESTAMPTZ;
+      CREATE TABLE IF NOT EXISTS host_security_alert_states (
+        agent_id VARCHAR(64) NOT NULL REFERENCES fleet_agents(agent_id) ON DELETE CASCADE,
+        alert_type VARCHAR(64) NOT NULL,
+        issue_id CHAR(64) NOT NULL,
+        summary TEXT NOT NULL,
+        generation BIGINT NOT NULL,
+        active BOOLEAN NOT NULL,
+        changed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        source_section VARCHAR(32),
+        expires_at TIMESTAMPTZ,
+        PRIMARY KEY (agent_id, alert_type, issue_id)
+      );
+      ALTER TABLE host_security_alert_states ADD COLUMN IF NOT EXISTS source_section VARCHAR(32);
+      ALTER TABLE host_security_alert_states ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+    `);
+
     await client.query('COMMIT');
     await backfillObservationLocations(client);
     await ensureLargeTableIndexes(client);
