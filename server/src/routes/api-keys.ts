@@ -45,6 +45,7 @@ const VALID_SCOPES = new Set([
   'rspamd:write',
   'rspamd:scan',
   'audit:read',
+  'module-alerts:publish',
   'api:read',
   'api:write',
 ]);

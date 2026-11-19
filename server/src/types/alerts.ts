@@ -1,4 +1,5 @@
 import type { FleetServiceType } from '../services/service-types.js';
+import type { ModuleAlertSeverity } from '../services/alerts/module-alert-policy.js';
 
 export const ALERT_TYPES = [
   'availability',
@@ -31,6 +32,7 @@ export const ALERT_TYPES = [
   'host_failed_auth_rate',
   'host_patching',
   'host_security_stale',
+  'module_alert',
 ] as const;
 
 export type AlertType = (typeof ALERT_TYPES)[number];
@@ -44,6 +46,15 @@ export interface AlertSubscription {
   alertType: AlertType;
   enabled: boolean;
   threshold: number | null;
+  moduleSlug?: string;
+  moduleCategory?: string;
+}
+
+export interface ModuleAlertSource {
+  slug: string;
+  category: string;
+  publisherKeyId: number;
+  severity: ModuleAlertSeverity;
 }
 
 export interface AlertWebhook {
@@ -69,6 +80,8 @@ export interface AlertWebhook {
 
 export interface AlertCatalogEntry {
   key: AlertType;
+  moduleSlug?: string;
+  moduleCategory?: string;
   label: string;
   description: string;
   serviceTypes: AlertServiceType[];
@@ -87,6 +100,7 @@ export interface AlertDelivery {
   fleetServiceId: number | null;
   monitoringIssueId: number | null;
   telemetryAlertIssueId?: string | null;
+  moduleAlertSource?: ModuleAlertSource | null;
   serviceId: string;
   serviceName: string;
   serviceType: AlertServiceType;

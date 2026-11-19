@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { AlertEventKind, AlertType, JsonRecord } from '../../types/alerts.js';
+import { isModuleAlertSeverity } from './module-alert-policy.js';
 
 export const PAGERDUTY_EVENTS_URL = 'https://events.pagerduty.com/v2/enqueue';
 
@@ -89,6 +90,7 @@ export function buildPagerDutyAlert(notification: ChannelNotification, routingKe
   const monitoring = notification.payload.monitoring;
   const monitoringStatus = monitoring && typeof monitoring === 'object' && 'status' in monitoring ? monitoring.status : null;
   const severity = notification.eventKind === 'test' ? 'info'
+    : notification.alertType === 'module_alert' && isModuleAlertSeverity(notification.payload.severity) ? notification.payload.severity
     : ruleSeverity === 'warning' || monitoringStatus === 'warning' || notification.alertType.startsWith('logs_')
       || notification.alertType === 'email_delivery_failure' ? 'warning' : 'critical';
   return {

@@ -1,17 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { claimDueAlertDeliveries, completeAlertDelivery, expireStaleAlertDeliveries } from '../../db/queries/alerts.js';
+import { claimDueAlertDeliveries, completeAlertDelivery, expireStaleAlertDeliveries, getAlertWebhook } from '../../db/queries/alerts.js';
 import { applyOperationsSettings, operationsDefaults, operationsPolicy } from '../operations-settings.js';
 import { sendAlertWebhook } from './webhook-transport.js';
 import { getEmailSenderProfile } from '../../db/queries/email.js';
 import { resolveEmailRelays, sendEmailViaRelay } from '../email/transport.js';
 import { nextAlertRetryAt, processAlertDelivery, startAlertDeliveryWorker, stopAlertDeliveryWorker } from './delivery-worker.js';
+import { authorizeModuleAlert, subscribesToModuleAlert } from './module-alerts.js';
+import { ModuleAccessError } from '../modules.js';
 
 vi.mock('../../db/queries/alerts.js', () => ({
   claimDueAlertDeliveries: vi.fn(),
   completeAlertDelivery: vi.fn(),
   expireStaleAlertDeliveries: vi.fn(),
+  getAlertWebhook: vi.fn(),
 }));
 vi.mock('./webhook-transport.js', () => ({ sendAlertWebhook: vi.fn() }));
+vi.mock('./module-alerts.js', () => ({ authorizeModuleAlert: vi.fn(), subscribesToModuleAlert: vi.fn() }));
+vi.mock('../modules.js', () => ({ ModuleAccessError: class ModuleAccessError extends Error {} }));
 vi.mock('../../db/queries/email.js', () => ({ getEmailSenderProfile: vi.fn() }));
 vi.mock('../email/transport.js', () => ({ resolveEmailRelays: vi.fn(), sendEmailViaRelay: vi.fn() }));
 vi.mock('../../middleware/security.js', () => ({ validateOutboundUrl: vi.fn(() => null) }));
@@ -48,6 +53,23 @@ const delivery = {
 };
 
 describe('alert delivery worker', () => {
+  const moduleDelivery = { ...delivery, alertType: 'module_alert' as const, monitoringIssueId: null,
+    moduleAlertSource: { slug: 'example', category: 'finding', publisherKeyId: 42, severity: 'warning' as const } };
+
+  it('cancels pending module alerts if paid access was lost after queueing', async () => {
+    vi.mocked(authorizeModuleAlert).mockRejectedValueOnce(new ModuleAccessError('Expired'));
+    await processAlertDelivery(moduleDelivery);
+    expect(completeAlertDelivery).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled', error: 'Expired' }));
+    expect(sendAlertWebhook).not.toHaveBeenCalled();
+  });
+
+  it('cancels a pending module alert when its subscription is removed', async () => {
+    vi.mocked(getAlertWebhook).mockResolvedValue({ subscriptions: [] } as Awaited<ReturnType<typeof getAlertWebhook>>);
+    vi.mocked(subscribesToModuleAlert).mockReturnValue(false);
+    await processAlertDelivery(moduleDelivery);
+    expect(completeAlertDelivery).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled' }));
+    expect(sendAlertWebhook).not.toHaveBeenCalled();
+  });
   it('keeps its batch guard after a failed completion while another completion is pending', async () => {
     vi.useFakeTimers();
     const previous = { ...operationsPolicy() };

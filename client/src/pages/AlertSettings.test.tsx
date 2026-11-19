@@ -87,6 +87,31 @@ describe('AlertSettingsPage', () => {
 
   afterEach(cleanup);
 
+  it('edits subscriptions independently when modules share the same category ID', async () => {
+    const { data } = await alertsApi.listWebhooks();
+    const moduleType = (moduleSlug: string, label: string) => ({
+      ...catalog[0], key: 'module_alert', moduleSlug, moduleCategory: 'findings', label,
+    });
+    alertsApi.listWebhooks.mockResolvedValue({ data: {
+      ...data, catalog: [...catalog, moduleType('first-module', 'First module findings'), moduleType('second-module', 'Second module findings')],
+    } });
+    alertsApi.updateWebhook.mockResolvedValue({ data: webhook });
+    render(<AlertSettingsPage />);
+    await screen.findByText('Operations Slack');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const first = screen.getByRole('checkbox', { name: /First module findings/ });
+    const second = screen.getByRole('checkbox', { name: /Second module findings/ });
+    fireEvent.click(first);
+    expect(first).toBeChecked();
+    expect(second).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Save destination' }));
+    await waitFor(() => expect(alertsApi.updateWebhook).toHaveBeenCalledWith(webhook.id, expect.objectContaining({
+      subscriptions: expect.arrayContaining([
+        { alertType: 'module_alert', moduleSlug: 'first-module', moduleCategory: 'findings', threshold: null, enabled: true },
+      ]),
+    })));
+  });
+
   it('shows only current webhook settings and compact history', async () => {
     render(<AlertSettingsPage />);
     expect(await screen.findByRole('heading', { name: 'Alerts' })).toBeInTheDocument();

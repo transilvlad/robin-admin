@@ -18,6 +18,7 @@ import { logAudit, AuditActions } from '../middleware/audit.js';
 import { requireAdmin } from '../middleware/rbac.js';
 import { validateOutboundUrl } from '../middleware/security.js';
 import { ALERT_CATALOG, defaultAlertSubscriptions, normalizeAlertSubscriptions } from '../services/alerts/alert-types.js';
+import { moduleAlertCatalog } from '../services/alerts/module-alerts.js';
 import { alertDeliveryPolicy } from '../services/alerts/delivery-worker.js';
 import { operationsPolicy } from '../services/operations-settings.js';
 import type { AlertWebhookAdapter, JsonRecord } from '../types/alerts.js';
@@ -242,7 +243,7 @@ router.get('/alert-webhooks', requireAuth, requireAdmin, async (_req, res) => {
       success: true,
       data: {
         webhooks,
-        catalog: ALERT_CATALOG,
+        catalog: [...ALERT_CATALOG, ...moduleAlertCatalog()],
         runtime: {
           ...runtime,
           enabled: adminConfig.alertsEnabled,

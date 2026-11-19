@@ -1,5 +1,5 @@
 import { operationsPolicy } from '../operations-settings.js';
-import { completeAlertDelivery, claimDueAlertDeliveries, expireStaleAlertDeliveries, type ClaimedAlertDelivery } from '../../db/queries/alerts.js';
+import { completeAlertDelivery, claimDueAlertDeliveries, expireStaleAlertDeliveries, getAlertWebhook, type ClaimedAlertDelivery } from '../../db/queries/alerts.js';
 import { logger } from '../../logger.js';
 import { validateOutboundUrl } from '../../middleware/security.js';
 import { sendAlertWebhook } from './webhook-transport.js';
@@ -16,6 +16,8 @@ import {
   validPagerDutyKey,
 } from './channels.js';
 import type { AlertTransportResult } from './webhook-transport.js';
+import { ModuleAccessError } from '../modules.js';
+import { authorizeModuleAlert, subscribesToModuleAlert } from './module-alerts.js';
 
 export function alertDeliveryPolicy() {
   const policy = operationsPolicy();
@@ -90,6 +92,26 @@ async function runOnce(): Promise<void> {
 }
 
 export async function processAlertDelivery(delivery: ClaimedAlertDelivery): Promise<void> {
+  if (delivery.alertType === 'module_alert' && delivery.eventKind !== 'test') {
+    try {
+      const source = delivery.moduleAlertSource;
+      if (!source) throw new ModuleAccessError('Module alert publisher is missing');
+      await authorizeModuleAlert(source);
+      const webhook = delivery.webhookId === null ? null : await getAlertWebhook(delivery.webhookId);
+      if (!webhook || !subscribesToModuleAlert(webhook, source)) {
+        throw new ModuleAccessError('Destination is no longer subscribed to this module alert');
+      }
+    } catch (error) {
+      const cancelled = error instanceof ModuleAccessError;
+      const retry = !cancelled && delivery.attempts < operationsPolicy().alertDeliveryMaxAttempts;
+      await completeAlertDelivery({
+        id: delivery.id, claimToken: delivery.claimToken, status: cancelled ? 'cancelled' : retry ? 'pending' : 'failed',
+        error: cancelled ? error.message : 'Could not verify module alert delivery access',
+        nextAttemptAt: retry ? nextAlertRetryAt(delivery.attempts) : null,
+      });
+      return;
+    }
+  }
   if (delivery.claimError || !delivery.webhookUrl) {
     await completeAlertDelivery({
       id: delivery.id,

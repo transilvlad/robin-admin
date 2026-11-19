@@ -1,5 +1,6 @@
 import type { AlertCatalogEntry, AlertSubscription, AlertType } from '../../types/alerts.js';
 import { ALERT_TYPES } from '../../types/alerts.js';
+import { MODULE_ALERT_CATEGORY, MODULE_ALERT_SLUG } from './module-alert-policy.js';
 
 export const ALERT_CATALOG: readonly AlertCatalogEntry[] = [
   { key: 'host_ssh_keys', label: 'Authorized SSH keys', description: 'Alerts on unapproved authorized SSH key changes.', serviceTypes: ['monitoring'],
@@ -263,6 +264,7 @@ export function normalizeAlertSubscriptions(value: unknown): AlertSubscription[]
     throw new Error('subscriptions must be an array');
   }
   const byType = new Map<AlertType, AlertSubscription>();
+  const byModuleCategory = new Map<string, AlertSubscription>();
   for (const item of value) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       throw new Error('Each subscription must be an object');
@@ -271,10 +273,22 @@ export function normalizeAlertSubscriptions(value: unknown): AlertSubscription[]
     if (!isAlertType(candidate.alertType)) {
       throw new Error('Subscription alertType is invalid');
     }
-    const definition = catalogByKey.get(candidate.alertType)!;
     if (typeof candidate.enabled !== 'boolean') {
       throw new Error(`Subscription ${candidate.alertType} enabled must be boolean`);
     }
+    if (candidate.alertType === 'module_alert') {
+      const { moduleSlug, moduleCategory } = candidate;
+      if (
+        typeof moduleSlug !== 'string' || !MODULE_ALERT_SLUG.test(moduleSlug)
+        || typeof moduleCategory !== 'string' || !MODULE_ALERT_CATEGORY.test(moduleCategory)
+      ) throw new Error('A module alert subscription requires a valid module and category');
+      byModuleCategory.set(`${moduleSlug}:${moduleCategory}`, {
+        alertType: candidate.alertType, enabled: candidate.enabled, threshold: null,
+        moduleSlug, moduleCategory,
+      });
+      continue;
+    }
+    const definition = catalogByKey.get(candidate.alertType)!;
     const threshold = definition.defaultThreshold === null
       ? null
       : candidate.threshold;
@@ -293,9 +307,12 @@ export function normalizeAlertSubscriptions(value: unknown): AlertSubscription[]
       threshold: threshold as number | null,
     });
   }
-  return ALERT_CATALOG.map((entry) => byType.get(entry.key) ?? {
-    alertType: entry.key,
-    enabled: false,
-    threshold: entry.defaultThreshold,
-  });
+  return [
+    ...ALERT_CATALOG.map((entry) => byType.get(entry.key) ?? {
+      alertType: entry.key,
+      enabled: false,
+      threshold: entry.defaultThreshold,
+    }),
+    ...byModuleCategory.values(),
+  ];
 }

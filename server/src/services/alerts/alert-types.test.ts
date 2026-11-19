@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ALERT_CATALOG, defaultAlertSubscriptions, normalizeAlertSubscriptions } from './alert-types.js';
+import { parseModuleAlertPublishers } from './module-alert-policy.js';
 
 describe('alert type catalog', () => {
   it('exposes the fixed defaults with all subscriptions initially disabled', () => {
@@ -36,6 +37,24 @@ describe('alert type catalog', () => {
       ['logs_pipeline_health', null],
     ]);
     expect(defaultAlertSubscriptions().every((subscription) => !subscription.enabled)).toBe(true);
+  });
+
+  it('normalizes categories independently and keeps native defaults', () => {
+    const item = { alertType: 'module_alert', moduleSlug: 'example-module', enabled: true, threshold: null };
+    const security = { ...item, moduleCategory: 'security' };
+    const other = { ...item, moduleCategory: 'other' };
+    expect(normalizeAlertSubscriptions([security, other]).slice(-2)).toEqual([security, other]);
+    expect(() => normalizeAlertSubscriptions([item])).toThrow('requires a valid module and category');
+  });
+
+  it('validates publisher bindings and prevents arbitrary link targets', () => {
+    const registration = {
+      apiKeyId: 3, link: { path: 'reviews', parameter: 'id' },
+      categories: { finding: { label: 'Example finding', maxSeverity: 'warning' } },
+    };
+    expect(parseModuleAlertPublishers(JSON.stringify({ example: registration })).example.requirePaid).toBe(true);
+    expect(() => parseModuleAlertPublishers(JSON.stringify({ one: registration, other: registration }))).toThrow();
+    expect(() => parseModuleAlertPublishers(JSON.stringify({ example: { ...registration, link: { path: '../security', parameter: 'id' } } }))).toThrow();
   });
 
   it('fills omitted alert types and rejects invalid thresholds', () => {

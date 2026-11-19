@@ -49,6 +49,44 @@ PagerDuty events for the same alert subject are delivered in order, including re
 | Monitoring issue | External Monitoring checks | Issue opened or recovered |
 | Telemetry rule | Telemetry alert rules | A rule fires or recovers for a series |
 | Email delivery failure | Robin Admin outbound email | All relays failed |
+| Module alert | Operator-approved categories from installed modules | Explicit subscription |
+
+### Module alert publishers
+
+Create a dedicated viewer API key with the `module-alerts:publish` scope.
+Bind its numeric key ID to one installed module in
+`MODULE_ALERT_PUBLISHERS_JSON`. This setting contains IDs and policy.
+Store the bearer credential in that module's private configuration.
+
+```json
+{
+  "example-module": {
+    "apiKeyId": 42,
+    "requirePaid": true,
+    "link": {"path": "reviews", "parameter": "id"},
+    "categories": {
+      "advisory": {"label": "Example advisory", "maxSeverity": "warning"}
+    }
+  }
+}
+```
+
+The publisher's categories appear in **Administration → Alerts → Destinations**.
+Subscribe a destination to a specific module and category. The default is off.
+Each registered publisher can submit a JSON body to
+`POST /api/modules/:slug/alert-events`. Supply `id`, `category`, `severity`,
+`observedAt` (UTC), `resource`, a redacted single-line `summary` of up to
+240 characters, and an opaque `reference`. Admin resolves that reference
+under the installed module's route using the registered path and query key.
+Use fresh events and retain the same ID across retries.
+
+Admin checks the publisher, module access, and severity limit at intake and
+before delivery. `requirePaid` defaults to true. Admin routes through its
+existing destination, retry and delivery history mechanisms. Receipts
+deduplicate within each module, including when operator policy suppresses
+delivery. Module alerts report individual findings.
+Resolve any resulting PagerDuty or Sentry issue through that destination's
+normal workflow.
 
 Telemetry rules track each result series on its own. Editing a rule keeps that state: on the next evaluation, a firing series that no longer matches, or that the edited query no longer returns, recovers through the normal path (Slack recovery, Sentry issue resolved). Disabling or deleting a rule sends a recovery for each series it had firing.
 

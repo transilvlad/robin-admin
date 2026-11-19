@@ -50,6 +50,7 @@ import path from 'node:path';
 import { FLEET_SERVICE_TYPES, serviceTypeSqlList } from '../services/service-types.js';
 import { TAXONOMY_COLUMNS, rollupTaxonomyColumnDdl } from '../services/dmarc-taxonomy.js';
 import { ALERT_CATALOG } from '../services/alerts/alert-types.js';
+import { ALERT_TYPES } from '../types/alerts.js';
 import { STATUS_PAGE_REPORT_SOURCES } from '../types/status-page.js';
 import { TEMPLATES } from '../services/telemetry/dashboards/templates/index.js';
 import { DISCOVERY_DEFAULTS } from '../services/telemetry/discovery.js';
@@ -57,7 +58,6 @@ import { encryptStoredSecret } from './queries/secret-crypto.js';
 import { OPERATIONS_KEYS, OPERATIONS_SETTINGS, operationsDefaults, validateOperationsSettings } from '../services/operations-settings.js';
 
 const sqlList = (values: readonly string[]) => values.map((value) => `'${value}'`).join(', ');
-const ALERT_TYPES = ALERT_CATALOG.map((entry) => entry.key);
 // Monitoring alerts are delivered directly, without per-service alert state.
 const ALERT_STATE_TYPES = ALERT_CATALOG.filter((entry) => !entry.serviceTypes.includes('monitoring')).map((entry) => entry.key);
 const ALERT_TYPES_SQL = sqlList(ALERT_TYPES);
@@ -2935,6 +2935,14 @@ export async function initializeSchema(): Promise<void> {
       )
     `);
     await client.query(`
+      CREATE TABLE IF NOT EXISTS module_alert_receipts (
+        module_slug TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        received_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (module_slug, event_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_module_alert_receipts_received_at ON module_alert_receipts(received_at);
+      ALTER TABLE alert_deliveries ADD COLUMN IF NOT EXISTS module_alert_source JSONB;
       ALTER TABLE alert_deliveries DROP CONSTRAINT IF EXISTS valid_alert_delivery_adapter;
       ALTER TABLE alert_deliveries ADD CONSTRAINT valid_alert_delivery_adapter CHECK (adapter IN ('slack', 'generic', 'sentry', 'email', 'teams', 'pagerduty'))
     `);
@@ -3672,6 +3680,39 @@ export async function initializeSchema(): Promise<void> {
     }
 
     // Type lists grow between releases; bring existing tables' CHECKs up to date.
+    // Migrate records created by the private first staging beta.
+    await client.query(`
+      DO $migration$
+      BEGIN
+        IF to_regclass('sre_alert_events') IS NOT NULL THEN
+          INSERT INTO module_alert_receipts (module_slug, event_id, received_at)
+          SELECT 'robin-sre', id, received_at FROM sre_alert_events
+          WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '1 day'
+          ON CONFLICT DO NOTHING;
+        END IF;
+        IF EXISTS (SELECT 1 FROM alert_deliveries WHERE alert_type IN ('sre_advisory', 'sre_security')) THEN
+          ALTER TABLE alert_deliveries DROP CONSTRAINT IF EXISTS valid_alert_delivery_type;
+          UPDATE alert_deliveries SET
+            alert_type='module_alert',
+            status=CASE WHEN status IN ('pending', 'processing') THEN 'cancelled' ELSE status END,
+            error=CASE WHEN status IN ('pending', 'processing') THEN 'Legacy module publisher retired' ELSE error END,
+            completed_at=CASE WHEN status IN ('pending', 'processing') THEN CURRENT_TIMESTAMP ELSE completed_at END,
+            claim_token=NULL
+          WHERE alert_type IN ('sre_advisory', 'sre_security');
+        END IF;
+      END $migration$;
+      UPDATE alert_webhooks w SET subscriptions_json=(
+        SELECT jsonb_agg(CASE WHEN item->>'alertType' IN ('sre_advisory', 'sre_security')
+          THEN item || jsonb_build_object(
+            'alertType', 'module_alert',
+            'moduleSlug', 'robin-sre',
+            'moduleCategory', CASE WHEN item->>'alertType'='sre_security' THEN 'security' ELSE 'advisory' END
+          ) ELSE item END)
+        FROM jsonb_array_elements(w.subscriptions_json) AS item
+      )
+      WHERE w.subscriptions_json @> '[{"alertType":"sre_advisory"}]'::jsonb
+        OR w.subscriptions_json @> '[{"alertType":"sre_security"}]'::jsonb
+    `);
     await syncTypeListConstraint(client, 'fleet_agent_commands', 'valid_fleet_agent_command_service_type', 'service_type', FLEET_SERVICE_TYPES);
     await syncTypeListConstraint(client, 'fleet_services', 'valid_fleet_service_type', 'service_type', FLEET_SERVICE_TYPES);
     await syncTypeListConstraint(client, 'alert_deliveries', 'valid_alert_delivery_service_type', 'service_type', [...FLEET_SERVICE_TYPES, 'monitoring']);

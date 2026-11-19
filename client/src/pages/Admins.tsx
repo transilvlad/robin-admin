@@ -247,7 +247,7 @@ export function AdminsPage() {
     'users:read', 'users:write', 'aliases:read', 'aliases:write', 'queue:read', 'queue:write',
     'mail:send', 'fleet:read', 'fleet:write', 'metrics:read', 'reporting:read',
     'reporting:write', 'reports:read', 'reports:ingest', 'telemetry:read', 'telemetry:write', 'telemetry:manage',
-    'logs:read', 'logs:write', 'logs:manage', 'security:read', 'security:manage', 'audit:read', 'admin:*',
+    'logs:read', 'logs:write', 'logs:manage', 'security:read', 'security:manage', 'audit:read', 'module-alerts:publish', 'admin:*',
   ];
 
   const columns = [

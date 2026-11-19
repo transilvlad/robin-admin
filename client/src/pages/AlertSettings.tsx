@@ -51,17 +51,22 @@ const ADAPTER_LABELS: Record<AlertWebhookAdapter, string> = {
   slack: 'Slack', generic: 'Generic JSON', sentry: 'Sentry', email: 'Email', teams: 'Microsoft Teams', pagerduty: 'PagerDuty',
 };
 
+function subscriptionFor(entry: AlertCatalogEntry): AlertSubscription {
+  const { key, defaultThreshold, moduleSlug, moduleCategory } = entry;
+  return { alertType: key, enabled: false, threshold: defaultThreshold, moduleSlug, moduleCategory };
+}
+
+function matchesSubscription(item: AlertSubscription, entry: AlertCatalogEntry): boolean {
+  return item.alertType === entry.key && item.moduleSlug === entry.moduleSlug && item.moduleCategory === entry.moduleCategory;
+}
+
 const emptyForm = (catalog: AlertCatalogEntry[]): WebhookForm => ({
   id: null,
   name: '',
   adapter: 'slack',
   webhookUrl: '',
   enabled: false,
-  subscriptions: catalog.map((entry) => ({
-    alertType: entry.key,
-    enabled: false,
-    threshold: entry.defaultThreshold,
-  })),
+  subscriptions: catalog.map(subscriptionFor),
   consecutiveFailures: 3,
   repeatIntervalSeconds: 14400,
   notifyRecovery: true,
@@ -492,14 +497,14 @@ function WebhookEditor({ form, originalAdapter, catalog, setForm, working, onSav
         : form.adapter === 'teams' ? 'Teams Workflows webhook URL' : 'HTTPS webhook URL';
   const updateSubscription = (entry: AlertCatalogEntry, changes: Partial<AlertSubscription>) => {
     // A webhook saved before an alert type existed has no entry for it yet.
-    const existing = form.subscriptions.some((subscription) => subscription.alertType === entry.key);
+    const existing = form.subscriptions.some((subscription) => matchesSubscription(subscription, entry));
     setForm({
       ...form,
       subscriptions: existing
         ? form.subscriptions.map((subscription) => (
-          subscription.alertType === entry.key ? { ...subscription, ...changes } : subscription
+          matchesSubscription(subscription, entry) ? { ...subscription, ...changes } : subscription
         ))
-        : [...form.subscriptions, { alertType: entry.key, enabled: false, threshold: entry.defaultThreshold, ...changes }],
+        : [...form.subscriptions, { ...subscriptionFor(entry), ...changes }],
     });
   };
   return (
@@ -567,10 +572,10 @@ function WebhookEditor({ form, originalAdapter, catalog, setForm, working, onSav
         <legend className="text-sm font-semibold">Alert types</legend>
         <div className="mt-2 grid gap-3">
           {catalog.map((entry) => {
-            const subscription = form.subscriptions.find((item) => item.alertType === entry.key)
-              ?? { alertType: entry.key, enabled: false, threshold: entry.defaultThreshold };
+            const subscription = form.subscriptions.find((item) => matchesSubscription(item, entry))
+              ?? subscriptionFor(entry);
             return (
-              <div key={entry.key} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <div key={entry.moduleSlug ? `${entry.key}:${entry.moduleSlug}:${entry.moduleCategory}` : entry.key} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <label className="flex min-w-0 gap-2">
                     <input
@@ -582,7 +587,7 @@ function WebhookEditor({ form, originalAdapter, catalog, setForm, working, onSav
                     <span>
                       <span className="block font-medium">{entry.label}</span>
                       <span className="block text-sm text-gray-600 dark:text-gray-300">{entry.description}</span>
-                      <span className="block text-xs text-gray-500">Applies to {entry.serviceTypes.join(', ')}.</span>
+                      {entry.moduleSlug === undefined && <span className="block text-xs text-gray-500">Applies to {entry.serviceTypes.join(', ')}.</span>}
                     </span>
                   </label>
                   {entry.defaultThreshold !== null && (

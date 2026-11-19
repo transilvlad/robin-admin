@@ -59,6 +59,9 @@ vi.mock('../services/alerts/telemetry-rules.js', () => ({
   previewTelemetryAlertRule: vi.fn(),
   updateTelemetryAlertRuleWithRecoveries: vi.fn(),
 }));
+vi.mock('../services/alerts/module-alerts.js', () => ({
+  moduleAlertCatalog: () => [{ key: 'module_alert', moduleSlug: 'example-module', moduleCategory: 'findings' }],
+}));
 vi.mock('../db/queries/config.js', () => ({
   getConfig: vi.fn(() => Promise.resolve({ alertDeliveryRetentionDays: 30 })),
 }));
@@ -121,6 +124,7 @@ describe('alert webhook routes', () => {
     expect(body.data.catalog).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: 'availability' }),
       expect.objectContaining({ key: 'host_security_stale' }),
+      expect.objectContaining({ key: 'module_alert', moduleSlug: 'example-module', moduleCategory: 'findings' }),
     ]));
     expect(JSON.stringify(body)).not.toContain('encrypted_url');
   });

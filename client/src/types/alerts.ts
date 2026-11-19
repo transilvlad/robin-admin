@@ -28,7 +28,8 @@ export type AlertType =
   | 'host_password_login'
   | 'host_failed_auth_rate'
   | 'host_patching'
-  | 'host_security_stale';
+  | 'host_security_stale'
+  | 'module_alert';
 
 export type AlertServiceType = FleetServiceType | 'monitoring';
 
@@ -40,6 +41,8 @@ export interface AlertSubscription {
   alertType: AlertType;
   enabled: boolean;
   threshold: number | null;
+  moduleSlug?: string;
+  moduleCategory?: string;
 }
 
 export interface AlertWebhook {
@@ -64,6 +67,8 @@ export interface AlertWebhook {
 
 export interface AlertCatalogEntry {
   key: AlertType;
+  moduleSlug?: string;
+  moduleCategory?: string;
   label: string;
   description: string;
   serviceTypes: AlertServiceType[];

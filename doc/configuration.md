@@ -23,6 +23,7 @@ missing or left at a known default.
 | `ROBIN_ADMIN_PUBLIC_URL` | `https://localhost:3443` | The browser-facing URL, including any base path (for example `https://admin.example.com/admin`). Must be set explicitly in production; a localhost address is accepted when Robin Admin is only reached locally. Links in emails, feeds and alerts are built from it, never from request headers. |
 | `COOKIE_SECURE` | on in production | Must stay on. |
 | `MODULE_PROXY_SECRETS_JSON` | `{}` | JSON object of per-module proxy secrets, for example `{"robin-tools":"..."}`. Required when `MODULES_BOOTSTRAP_JSON` lists modules with a backend. |
+| `MODULE_ALERT_PUBLISHERS_JSON` | `{}` | Operator-approved module alert publisher policies, keyed by module slug. Contains API key IDs, category definitions, severity caps and link routes. See [Module alert publishers](alerting.md#module-alert-publishers). |
 | `FLEET_AGENTS_BOOTSTRAP_JSON`, `SUITE_AGENT_CREDENTIAL` | none | When set, agent credentials must not be the demo or placeholder values. |
 
 ## Server

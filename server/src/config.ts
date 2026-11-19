@@ -2,6 +2,8 @@
  * Environment configuration for Robin Admin server.
  */
 
+import { parseModuleAlertPublishers, type ModuleAlertPublisher } from './services/alerts/module-alert-policy.js';
+
 export interface Config {
   // Database
   postgres: {
@@ -69,6 +71,7 @@ export interface Config {
     signingSecret: string;
   };
   moduleProxySecrets: Record<string, string>;
+  moduleAlertPublishers: Record<string, ModuleAlertPublisher>;
   // Bootstrap-installed modules provided by deployment config
   modulesBootstrap: Array<{
     moduleSlug: string;
@@ -302,5 +305,6 @@ export const config: Config = {
     signingSecret: getEnvOptional('MODULE_INSTALLER_SIGNING_SECRET') ?? '',
   },
   moduleProxySecrets: getEnvJsonRecord('MODULE_PROXY_SECRETS_JSON'),
+  moduleAlertPublishers: parseModuleAlertPublishers(getEnv('MODULE_ALERT_PUBLISHERS_JSON', '')),
   modulesBootstrap: getEnvJsonArray<Config['modulesBootstrap'][number]>('MODULES_BOOTSTRAP_JSON'),
 };

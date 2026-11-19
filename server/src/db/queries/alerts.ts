@@ -13,6 +13,7 @@ import type {
   AlertWebhook,
   AlertWebhookAdapter,
   JsonRecord,
+  ModuleAlertSource,
 } from '../../types/alerts.js';
 type DbValue = string | number | boolean | Date | null;
 
@@ -44,6 +45,7 @@ interface DeliveryRow {
   fleet_service_id: number | null;
   monitoring_issue_id: number | null;
   telemetry_alert_issue_id: string | null;
+  module_alert_source: ModuleAlertSource | null;
   service_id: string;
   service_name: string;
   service_type: AlertServiceType;
@@ -80,7 +82,7 @@ const WEBHOOK_COLUMNS = `
 
 const DELIVERY_COLUMNS = `
   id, notification_id, webhook_id, webhook_name, fleet_service_id, monitoring_issue_id,
-  telemetry_alert_issue_id, telemetry_alert_issue_revision,
+  telemetry_alert_issue_id, telemetry_alert_issue_revision, module_alert_source,
   service_id, service_name, service_type, alert_type, event_kind, status, adapter, payload_json,
   attempts, next_attempt_at, last_attempt_at, claimed_at, claim_token, response_status, error,
   created_at, updated_at, completed_at
@@ -132,6 +134,7 @@ function mapDelivery(row: DeliveryRow): AlertDelivery {
     fleetServiceId: row.fleet_service_id,
     monitoringIssueId: row.monitoring_issue_id,
     telemetryAlertIssueId: row.telemetry_alert_issue_id,
+    ...(row.module_alert_source ? { moduleAlertSource: row.module_alert_source } : {}),
     serviceId: row.service_id,
     serviceName: row.service_name,
     serviceType: row.service_type,
@@ -148,10 +151,9 @@ function mapDelivery(row: DeliveryRow): AlertDelivery {
   };
 }
 
-export async function listAlertWebhooks(): Promise<AlertWebhook[]> {
-  const result = await query<WebhookRow>(
-    `SELECT ${WEBHOOK_COLUMNS} FROM alert_webhooks ORDER BY name ASC, id ASC`
-  );
+export async function listAlertWebhooks(client?: PoolClient): Promise<AlertWebhook[]> {
+  const sql = `SELECT ${WEBHOOK_COLUMNS} FROM alert_webhooks ORDER BY name ASC, id ASC`;
+  const result = client ? await client.query<WebhookRow>(sql) : await query<WebhookRow>(sql);
   return result.rows.map(mapWebhook);
 }
 
@@ -353,6 +355,7 @@ export async function createAlertDelivery(input: {
   eventKind: AlertEventKind;
   adapter: AlertWebhookAdapter;
   payload: JsonRecord;
+  moduleAlertSource?: ModuleAlertSource;
   client?: PoolClient;
 }): Promise<AlertDelivery> {
   const notificationId = input.notificationId ?? randomUUID();
@@ -360,9 +363,9 @@ export async function createAlertDelivery(input: {
        INSERT INTO alert_deliveries (
          notification_id, dedupe_key, webhook_id, webhook_name, fleet_service_id, monitoring_issue_id,
          telemetry_alert_issue_id, telemetry_alert_issue_revision,
-         service_id, service_name, service_type, alert_type, event_kind, adapter, payload_json
+         service_id, service_name, service_type, alert_type, event_kind, adapter, payload_json, module_alert_source
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb)
        ON CONFLICT (dedupe_key) DO NOTHING
        RETURNING ${DELIVERY_COLUMNS}
      )
@@ -386,6 +389,7 @@ export async function createAlertDelivery(input: {
       input.eventKind,
       input.adapter,
       JSON.stringify(input.payload),
+      input.moduleAlertSource ? JSON.stringify(input.moduleAlertSource) : null,
     ];
   const result = input.client
     ? await input.client.query<DeliveryRow>(text, values)

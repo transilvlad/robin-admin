@@ -77,6 +77,7 @@ import { hostSecurityAgentRoutes, hostSecurityRoutes } from './routes/host-secur
 import modulesRoutes from './routes/modules.js';
 import moduleIdentityRoutes from './routes/module-identity.js';
 import moduleBackendRoutes, { moduleAssetRoutes } from './routes/module-backends.js';
+import moduleAlertEventsRoutes from './routes/module-alert-events.js';
 import moduleDirectoryRoutes from './routes/module-directory.js';
 import { moduleRequestBody } from './middleware/module-body.js';
 import { requireAuth } from './middleware/auth.js';
@@ -384,6 +385,7 @@ app.use('/api', enforceIpJail);
 app.use('/api', enforceIpRestrictions);
 app.use('/api', enforceSessionPolicy);
 app.use('/api', csrfProtection);
+app.use('/api/modules', moduleAlertEventsRoutes);
 app.use('/api/modules', requireAuth, requireViewer, moduleRequestBody);
 app.use('/api/module-host', moduleDirectoryRoutes);
 app.use('/modules', requireModulesEnabled, moduleAssetRoutes);
