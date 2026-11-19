@@ -118,7 +118,10 @@ describe('alert webhook routes', () => {
     const body = await response.json();
     expect(response.status).toBe(200);
     expect(body.data.webhooks[0]).toMatchObject({ name: 'Operations', hasSecret: true });
-    expect(body.data.catalog).toHaveLength(20);
+    expect(body.data.catalog).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'availability' }),
+      expect.objectContaining({ key: 'host_security_stale' }),
+    ]));
     expect(JSON.stringify(body)).not.toContain('encrypted_url');
   });
 

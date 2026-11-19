@@ -73,6 +73,7 @@ import redisRoutes from './routes/redis.js';
 import postgresRoutes from './routes/postgres.js';
 import mariadbRoutes from './routes/mariadb.js';
 import logsRoutes from './routes/logs.js';
+import { hostSecurityAgentRoutes, hostSecurityRoutes } from './routes/host-security.js';
 import modulesRoutes from './routes/modules.js';
 import moduleIdentityRoutes from './routes/module-identity.js';
 import moduleBackendRoutes, { moduleAssetRoutes } from './routes/module-backends.js';
@@ -97,6 +98,7 @@ import { startAlertDeliveryWorker, stopAlertDeliveryWorker } from './services/al
 import { startAlertScheduler, stopAlertScheduler } from './services/alerts/scheduler.js';
 import { startTelemetryRuleScheduler, stopTelemetryRuleScheduler } from './services/alerts/telemetry-rule-scheduler.js';
 import { startLogsRuleScheduler, stopLogsRuleScheduler } from './services/alerts/logs-rule-scheduler.js';
+import { startHostSecurityScheduler, stopHostSecurityScheduler } from './services/alerts/host-security.js';
 import { startLogsDeliveryWorker, stopLogsDeliveryWorker } from './services/logs-delivery.js';
 import { reportIngestionBody } from './middleware/report-ingestion-body.js';
 import { startMonitoringScheduler, stopMonitoringScheduler } from './services/monitoring/scheduler.js';
@@ -270,6 +272,7 @@ app.use(PUBLIC_FORM_PATHS, express.urlencoded({ extended: false, limit: '64kb' }
 // Monitoring configuration cannot use the general ingestion-sized allowance.
 app.use('/api/monitoring', express.json({ limit: '1mb', inflate: false }));
 app.use('/api/monitoring', express.urlencoded({ extended: false, limit: '1mb', inflate: false }));
+app.use('/api/fleet/agent/host-security', express.json({ limit: '4mb', inflate: false }));
 const generalJson = express.json({ limit: config.bodyLimit });
 const generalForm = express.urlencoded({ extended: true, limit: config.bodyLimit });
 const isModuleApi = (req: Request) => req.path === '/api/modules' || req.path.startsWith('/api/modules/');
@@ -405,6 +408,7 @@ app.use('/api/profile', profileRoutes);
 app.use('/api/robin-config', robinConfigRoutes);
 app.use('/api/robin', robinRoutes);
 app.use('/api/metrics', metricsRoutes);
+app.use('/api/fleet/agent/host-security', hostSecurityAgentRoutes);
 app.use('/api/fleet/agent', fleetAgentRoutes);
 app.use('/api/fleet/agents', fleetAgentsRoutes);
 app.use('/api/fleet/services', fleetServicesRoutes);
@@ -412,6 +416,7 @@ app.use('/api/fleet/capabilities', fleetCapabilitiesRoutes);
 app.use('/api/reporting', reportingRoutes);
 app.use('/api/api-keys', apiKeyRoutes);
 app.use('/api/security/ip-jail', ipJailRoutes);
+app.use('/api/security', hostSecurityRoutes);
 app.use('/api/rspamd', rspamdRoutes);
 app.use('/api/clamav', clamavRoutes);
 app.use('/api/cyrus', cyrusRoutes);
@@ -504,6 +509,7 @@ async function shutdown() {
   // Let a running metrics cycle finish before the service pools close below.
   await stopMetricsPoller();
   stopAlertScheduler();
+  stopHostSecurityScheduler();
   stopTelemetryRuleScheduler();
   stopAlertDeliveryWorker();
   stopEmailDeliveryWorker();
@@ -552,6 +558,7 @@ async function start() {
       startAlertScheduler();
       startTelemetryRuleScheduler();
       startLogsRuleScheduler();
+      startHostSecurityScheduler();
       startLogsDeliveryWorker();
       startAlertDeliveryWorker();
       startEmailDeliveryWorker();
@@ -574,6 +581,7 @@ async function start() {
       stopAlertScheduler();
       stopTelemetryRuleScheduler();
       stopLogsRuleScheduler();
+      stopHostSecurityScheduler();
       stopLogsDeliveryWorker();
       stopAlertDeliveryWorker();
       stopEmailDeliveryWorker();

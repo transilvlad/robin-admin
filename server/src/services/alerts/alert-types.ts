@@ -2,6 +2,26 @@ import type { AlertCatalogEntry, AlertSubscription, AlertType } from '../../type
 import { ALERT_TYPES } from '../../types/alerts.js';
 
 export const ALERT_CATALOG: readonly AlertCatalogEntry[] = [
+  { key: 'host_ssh_keys', label: 'Authorized SSH keys', description: 'Alerts on unapproved authorized SSH key changes.', serviceTypes: ['monitoring'],
+    unit: 'none', direction: 'boolean', defaultThreshold: null, minimum: null, maximum: null },
+  { key: 'host_sshd', label: 'SSH configuration', description: 'Alerts on unapproved changes to effective SSH settings.', serviceTypes: ['monitoring'],
+    unit: 'none', direction: 'boolean', defaultThreshold: null, minimum: null, maximum: null },
+  { key: 'host_network', label: 'Network exposure', description: 'Alerts on new listeners and changes that allow inbound traffic by default.', serviceTypes: ['monitoring'],
+    unit: 'none', direction: 'boolean', defaultThreshold: null, minimum: null, maximum: null },
+  { key: 'host_privilege', label: 'Account and privilege changes', description: 'Alerts on new interactive accounts and unapproved privilege changes.', serviceTypes: ['monitoring'],
+    unit: 'none', direction: 'boolean', defaultThreshold: null, minimum: null, maximum: null },
+  { key: 'host_integrity', label: 'File integrity', description: 'Alerts on unapproved integrity changes.', serviceTypes: ['monitoring'],
+    unit: 'none', direction: 'boolean', defaultThreshold: null, minimum: null, maximum: null },
+  { key: 'host_unknown_login', label: 'Unknown-address login', description: 'Alerts on successful logins outside the known address list.', serviceTypes: ['monitoring'],
+    unit: 'none', direction: 'boolean', defaultThreshold: null, minimum: null, maximum: null },
+  { key: 'host_password_login', label: 'Password login', description: 'Alerts on successful password logins.', serviceTypes: ['monitoring'],
+    unit: 'none', direction: 'boolean', defaultThreshold: null, minimum: null, maximum: null },
+  { key: 'host_failed_auth_rate', label: 'Failed authentication rate', description: 'Alerts when the recent authentication failure rate exceeds the host\'s historical rate.', serviceTypes: ['monitoring'],
+    unit: 'none', direction: 'boolean', defaultThreshold: null, minimum: null, maximum: null },
+  { key: 'host_patching', label: 'Overdue security maintenance', description: 'Alerts when security upgrades or a reboot remain pending.', serviceTypes: ['monitoring'],
+    unit: 'none', direction: 'boolean', defaultThreshold: null, minimum: null, maximum: null },
+  { key: 'host_security_stale', label: 'Host security telemetry stale', description: 'Alerts when Robin Admin stops receiving host security snapshots or heartbeats.', serviceTypes: ['monitoring'],
+    unit: 'none', direction: 'boolean', defaultThreshold: null, minimum: null, maximum: null },
   {
     key: 'availability',
     label: 'Service availability',

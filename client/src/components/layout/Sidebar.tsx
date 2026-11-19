@@ -342,6 +342,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         { type: 'item', key: 'fleet-services', to: '/fleet', icon: appIcons.fleetInstances, label: 'Services', show: isAdmin, end: true },
         { type: 'item', key: 'fleet-agents', to: '/fleet/agents', icon: appIcons.fleetAgents, label: 'Agents', show: isAdmin },
         { type: 'item', key: 'fleet-metrics', to: '/fleet/metrics', icon: appIcons.fleetMetrics, label: 'Metrics', show: true },
+        { type: 'item', key: 'fleet-security', to: '/fleet/security', icon: appIcons.hostSecurity, label: 'Security', show: true },
         { type: 'item', key: 'fleet-docs', to: '/fleet/docs', icon: appIcons.fleetDocs, label: 'Docs', show: isAdmin },
         {
           type: 'group',

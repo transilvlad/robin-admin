@@ -185,6 +185,9 @@ export function requiredScopeForRequest(req: Request): string {
     }
     return 'admin:*';
   }
+  if (base === '/api/security' || base.startsWith('/api/security/hosts') || base.startsWith('/api/security/known-addresses')) {
+    return write ? 'security:manage' : 'security:read';
+  }
   if (base.startsWith('/api/security')) {
     return 'admin:*';
   }

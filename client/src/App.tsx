@@ -46,6 +46,9 @@ const FleetPage = lazy(() => import('./pages/Fleet').then((m) => ({ default: m.F
 const AgentsPage = lazy(() => import('./pages/Agents').then((m) => ({ default: m.AgentsPage })));
 const FleetDocsPage = lazy(() => import('./pages/FleetDocs').then((m) => ({ default: m.FleetDocsPage })));
 const FleetMetricsPage = lazy(() => import('./pages/FleetMetrics').then((m) => ({ default: m.FleetMetricsPage })));
+const FleetSecurityPage = lazy(() => import('./pages/HostSecurity').then((m) => ({ default: m.FleetSecurityPage })));
+const HostSecurityPage = lazy(() => import('./pages/HostSecurity').then((m) => ({ default: m.HostSecurityPage })));
+const HostSecurityAddressesPage = lazy(() => import('./pages/HostSecurity').then((m) => ({ default: m.HostSecurityAddressesPage })));
 const ReportingOverviewPage = lazy(() => import('./pages/ReportingOverview'));
 const SourcesPage = lazy(() => import('./pages/Sources'));
 const ExplorerPage = lazy(() => import('./pages/Explorer'));
@@ -328,6 +331,9 @@ export function App() {
                   <Route path="fleet/agents" element={<FleetRoute requireAdmin><Suspended><AgentsPage /></Suspended></FleetRoute>} />
                   <Route path="fleet/docs" element={<FleetRoute requireAdmin><Suspended><FleetDocsPage /></Suspended></FleetRoute>} />
                   <Route path="fleet/metrics" element={<FleetRoute><Suspended><FleetMetricsPage /></Suspended></FleetRoute>} />
+                  <Route path="fleet/security" element={<FleetRoute><Suspended><FleetSecurityPage /></Suspended></FleetRoute>} />
+                  <Route path="fleet/security/known-addresses" element={<FleetRoute><Suspended><HostSecurityAddressesPage /></Suspended></FleetRoute>} />
+                  <Route path="fleet/security/:hostId" element={<FleetRoute><Suspended><HostSecurityPage /></Suspended></FleetRoute>} />
                   <Route path="monitoring" element={<MonitoringRoute><Suspended><MonitoringPage /></Suspended></MonitoringRoute>} />
                   <Route path="monitoring/email-delivery" element={<MonitoringRoute><Suspended><MonitoringEmailDeliveryPage /></Suspended></MonitoringRoute>} />
                   <Route path="status-page" element={<MonitoringRoute><Suspended><StatusPageAdmin /></Suspended></MonitoringRoute>} />

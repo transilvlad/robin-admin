@@ -21,6 +21,16 @@ export const ALERT_TYPES = [
   'telemetry_rule',
   'logs_rule',
   'logs_pipeline_health',
+  'host_ssh_keys',
+  'host_sshd',
+  'host_network',
+  'host_privilege',
+  'host_integrity',
+  'host_unknown_login',
+  'host_password_login',
+  'host_failed_auth_rate',
+  'host_patching',
+  'host_security_stale',
 ] as const;
 
 export type AlertType = (typeof ALERT_TYPES)[number];

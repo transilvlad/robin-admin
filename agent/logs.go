@@ -1708,7 +1708,11 @@ func journaldRead(ctx context.Context, unit, filter string, limited bool, positi
 			args = append(args, arg)
 		}
 	}
-	argv := append([]string{"journalctl", "-u", unit, "--no-pager", "-o", "json"}, args...)
+	argv := []string{"journalctl", "--no-pager", "-o", "json"}
+	if unit != "" {
+		argv = append(argv, "-u", unit)
+	}
+	argv = append(argv, args...)
 	if filter != "" {
 		argv = append(argv, "--grep", filter)
 	}

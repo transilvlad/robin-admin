@@ -1,4 +1,8 @@
 import type { CyrusSession, CyrusQuotaResult, CyrusUserLookup, CyrusMetricsSnapshot, CyrusMetricsStats } from '../types';
+import type {
+  HostSecurityApproval, HostSecurityCounter, HostSecurityDiff, HostSecurityEvent, HostSecurityKnownAddress,
+  HostSecurityPage, HostSecurityPosture, HostSecuritySnapshot,
+} from '../types/host-security';
 /**
  * API client for Robin Admin backend.
  * 
@@ -2876,4 +2880,21 @@ export const cyrusApi = {
     });
     return response.text();
   }
+};
+export const hostSecurityApi = {
+  hosts: (cursor?: string) => request<ApiResponse<HostSecurityPage<HostSecurityPosture>>>(
+    `/security/hosts${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`),
+  snapshot: (id: string) => request<ApiResponse<HostSecuritySnapshot>>(`/security/hosts/${encodeURIComponent(id)}/snapshot`),
+  diff: (id: string) => request<ApiResponse<HostSecurityDiff>>(`/security/hosts/${encodeURIComponent(id)}/diff`),
+  events: (id: string) => request<ApiResponse<HostSecurityPage<HostSecurityEvent>>>(`/security/hosts/${encodeURIComponent(id)}/events`),
+  counters: (id: string) => request<ApiResponse<HostSecurityPage<HostSecurityCounter>>>(`/security/hosts/${encodeURIComponent(id)}/counters?limit=60`),
+  approve: (id: string, approval: HostSecurityApproval) => request<ApiResponse<{ baselineRevision: number }>>(
+    `/security/hosts/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify(approval) }),
+  addresses: (cursor?: string) => request<ApiResponse<HostSecurityPage<HostSecurityKnownAddress>>>(
+    `/security/known-addresses${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`),
+  saveAddress: (address: Omit<HostSecurityKnownAddress, 'id'>, id?: string) => request<ApiResponse<HostSecurityKnownAddress>>(
+    id ? `/security/known-addresses/${encodeURIComponent(id)}` : '/security/known-addresses',
+    { method: id ? 'PATCH' : 'POST', body: JSON.stringify(address) }),
+  deleteAddress: (id: string) => request<ApiResponse<null>>(
+    `/security/known-addresses/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };

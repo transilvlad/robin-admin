@@ -18,7 +18,17 @@ export type AlertType =
   | 'email_delivery_failure'
   | 'telemetry_rule'
   | 'logs_rule'
-  | 'logs_pipeline_health';
+  | 'logs_pipeline_health'
+  | 'host_ssh_keys'
+  | 'host_sshd'
+  | 'host_network'
+  | 'host_privilege'
+  | 'host_integrity'
+  | 'host_unknown_login'
+  | 'host_password_login'
+  | 'host_failed_auth_rate'
+  | 'host_patching'
+  | 'host_security_stale';
 
 export type AlertServiceType = FleetServiceType | 'monitoring';
 
