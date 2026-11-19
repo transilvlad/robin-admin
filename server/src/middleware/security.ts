@@ -163,7 +163,7 @@ export function hasApiKeyRole(req: Request, minRole: AdminRole): boolean {
 
 export function requiredScopeForRequest(req: Request): string {
   const method = req.method.toUpperCase();
-  if (method === 'POST' && /^\/api\/modules\/[a-z0-9][a-z0-9-]{0,62}\/alert-events\/?$/.test(req.originalUrl.split('?')[0])) {
+  if (method === 'POST' && /^\/api\/modules\/[a-z0-9][a-z0-9-]{0,62}\/alert-events\/?$/.test(req.originalUrl?.split('?')[0] ?? '')) {
     return 'module-alerts:publish';
   }
   const write = !['GET', 'HEAD', 'OPTIONS'].includes(method);

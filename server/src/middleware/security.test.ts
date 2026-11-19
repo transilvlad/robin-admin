@@ -69,6 +69,16 @@ describe('security middleware helpers', () => {
     expect(requiredScopeForRequest(request('POST', '/alerts'))).toBe('logs:manage');
   });
 
+  it('limits the module alert publish scope to the intake POST', () => {
+    const request = (method: string, originalUrl: string) => ({
+      method, originalUrl, baseUrl: '/api/modules', path: '/sample/alert-events',
+    }) as never;
+
+    expect(requiredScopeForRequest(request('POST', '/api/modules/sample/alert-events?ignored=1'))).toBe('module-alerts:publish');
+    expect(requiredScopeForRequest(request('GET', '/api/modules/sample/alert-events'))).toBe('api:read');
+    expect(requiredScopeForRequest(request('POST', '/api/modules/sample/backend/alert-events'))).toBe('api:write');
+  });
+
   it('blocks unsafe outbound URLs unless private URLs are explicitly allowed', () => {
     expect(validateOutboundUrl('ftp://example.com', false)).toBe('URL must use http or https');
     expect(validateOutboundUrl('http://127.0.0.1:8090', false)).toBe('Private, loopback, link-local, multicast, and reserved IP URLs are disabled');
