@@ -54,8 +54,10 @@ type securityLogState struct {
 	AgentID          string                            `json:"agentId"`
 	Cursor           *logCursor                        `json:"cursor,omitempty"`
 	Pending          *securityEventBatch               `json:"pending,omitempty"`
+	PendingQueue     []*securityEventBatch             `json:"pendingQueue,omitempty"`
 	Windows          map[string]*securityCounterWindow `json:"windows"`
 	LastClosedMinute time.Time                         `json:"lastClosedMinute,omitzero"`
+	InvalidUsers     map[string]time.Time              `json:"invalidUsers,omitempty"`
 }
 
 var securityLogMasks = []logMaskRule{
@@ -69,6 +71,7 @@ var securityKeyMaterial = regexp.MustCompile(`(?i)(ssh-(?:rsa|ed25519|dss)|ecdsa
 var sshAccepted = regexp.MustCompile(`(?i)\bAccepted (\S+) for (\S+) from (\S+) port \d+`)
 var sshFingerprint = regexp.MustCompile(`\bSHA256:[A-Za-z0-9+/]{43}\b`)
 var sshFailed = regexp.MustCompile(`(?i)\b(?:Failed (password|publickey) for (invalid user )?\S+|Invalid user \S+) from (\S+)`)
+var sshProcess = regexp.MustCompile(`\bsshd(?:-session)?\[(\d+)\]:`)
 var accountChanged = regexp.MustCompile(`\b(?:name|user)=['"]?([^,'";\s]+)`)
 var sudoActor = regexp.MustCompile(`sudo(?:\[\d+\])?:\s*(\S+)\s*:`)
 var auditRule = regexp.MustCompile(`\bkey=(?:"([^"]+)"|([^\s]+))`)
@@ -147,7 +150,7 @@ func classifySecurityLine(line string, keys map[string]bool) (securityEvent, str
 		e.Line = securityText(line)
 	case "sudo":
 		prefix, _, _ := strings.Cut(line, "COMMAND=")
-		e.Line = securityText(prefix) + " [command details redacted]"
+		e.Line = securityText(prefix + " [command details redacted]")
 	case "su", "user_change", "group_change", "password_change", "auditd":
 		e.Line = e.Process + " [" + e.Type + " details redacted]"
 	}
@@ -155,11 +158,13 @@ func classifySecurityLine(line string, keys map[string]bool) (securityEvent, str
 }
 
 const hostSecurityJournalFilter = `Accepted|Failed (password|publickey)|Invalid user|sudo|su\[|useradd|usermod|userdel|groupadd|groupmod|groupdel|passwd|fail2ban|SIGHUP|Reload|type=SYSCALL`
+const hostSecurityReadLines = 500
+const hostSecurityReadBytes = 256 << 10
 
 func readHostSecurityLog(ctx context.Context, cursor *logCursor) (*logBatch, bool, error) {
 	// Use one auth stream so journald and traditional syslog cannot double count.
 	if cursor == nil || cursor.Key == "host-journal" {
-		batch, more, err := followJournalWithTail(ctx, "host-journal", "", hostSecurityJournalFilter, cursor, 100, 32<<10)
+		batch, more, err := followJournalWithLimits(ctx, "host-journal", "", hostSecurityJournalFilter, cursor, 100, 32<<10, hostSecurityReadLines, hostSecurityReadBytes)
 		if err == nil && (cursor != nil || batch.Next.Journal != "") {
 			return batch, more, nil
 		}
@@ -169,7 +174,7 @@ func readHostSecurityLog(ctx context.Context, cursor *logCursor) (*logBatch, boo
 			if cursor != nil && cursor.Key != path {
 				cursor = nil
 			}
-			batch, more, err := followFileWithTail(path, path, "", cursor, 256<<10, 500, 100, 32<<10)
+			batch, more, err := followFileWithTail(path, path, "", cursor, hostSecurityReadBytes, hostSecurityReadLines, 100, 32<<10)
 			if err == nil {
 				return batch, more, nil
 			}
@@ -178,7 +183,7 @@ func readHostSecurityLog(ctx context.Context, cursor *logCursor) (*logBatch, boo
 	if cursor != nil && cursor.Key != "host-journal" {
 		cursor = nil
 	}
-	return followJournalWithTail(ctx, "host-journal", "", hostSecurityJournalFilter, cursor, 100, 32<<10)
+	return followJournalWithLimits(ctx, "host-journal", "", hostSecurityJournalFilter, cursor, 100, 32<<10, hostSecurityReadLines, hostSecurityReadBytes)
 }
 
 func saveHostSecurityLog(path string, data *securityLogState) error {
@@ -233,6 +238,27 @@ func securityRecordCounter(windows map[string]*securityCounterWindow, t time.Tim
 	}
 }
 
+func recordFailedHostLogin(data *securityLogState, line, kind, ip string, observed time.Time) {
+	if kind == "invalid_user" {
+		if match := sshProcess.FindStringSubmatch(line); match != nil {
+			if data.InvalidUsers == nil {
+				data.InvalidUsers = map[string]time.Time{}
+			}
+			key := match[1] + "|" + ip
+			if strings.Contains(strings.ToLower(line), "failed ") {
+				previous, seen := data.InvalidUsers[key]
+				delete(data.InvalidUsers, key)
+				if seen && !observed.Before(previous) && observed.Sub(previous) <= time.Minute {
+					return
+				}
+			} else if len(data.InvalidUsers) < 4096 {
+				data.InvalidUsers[key] = observed
+			}
+		}
+	}
+	securityRecordCounter(data.Windows, observed, kind, ip)
+}
+
 func securityPost(ctx context.Context, client *http.Client, c config, s state, endpoint string, body any) (int, error) {
 	return postJSONContext(ctx, client, c.adminURL+"/api/fleet/agent/host-security/"+endpoint, map[string]string{
 		"Authorization": "Bearer " + s.Credential, "X-Robin-Agent-Id": s.AgentID,
@@ -240,12 +266,20 @@ func securityPost(ctx context.Context, client *http.Client, c config, s state, e
 }
 
 func shipHostSecurityEvents(ctx context.Context, client *http.Client, c config, s state, cfg securityConfig, path string, data *securityLogState) error {
+	if data.Pending == nil && len(data.PendingQueue) > 0 {
+		data.Pending, data.PendingQueue = data.PendingQueue[0], data.PendingQueue[1:]
+	}
 	if data.Pending == nil {
 		input, more, err := readHostSecurityLog(ctx, data.Cursor)
 		if err != nil {
 			return err
 		}
 		now := time.Now().UTC()
+		for key, observed := range data.InvalidUsers {
+			if now.Sub(observed) > time.Minute {
+				delete(data.InvalidUsers, key)
+			}
+		}
 		if input == nil {
 			if data.Cursor == nil {
 				return nil
@@ -258,13 +292,13 @@ func shipHostSecurityEvents(ctx context.Context, client *http.Client, c config, 
 			for i, line := range input.Lines {
 				observed := now
 				if i < len(input.Times) {
-					if t, err := time.Parse(time.RFC3339Nano, input.Times[i]); err == nil {
+					if t, err := time.Parse(time.RFC3339Nano, input.Times[i]); err == nil && t.Before(now.Add(5*time.Minute)) {
 						observed = t.UTC()
 					}
 				}
 				event, failed, ip := classifySecurityLine(line, cfg.auditKeys)
 				if failed != "" {
-					securityRecordCounter(data.Windows, observed, failed, ip)
+					recordFailedHostLogin(data, line, failed, ip, observed)
 					continue
 				}
 				if event.Type == "" {
@@ -276,9 +310,7 @@ func shipHostSecurityEvents(ctx context.Context, client *http.Client, c config, 
 				}
 				position, _ := json.Marshal(input.Next)
 				event.ID = securityHash(append(position, []byte("|"+strconv.Itoa(i))...))
-				if len(events) < 500 {
-					events = append(events, event)
-				}
+				events = append(events, event)
 			}
 		}
 		counters := []securityCounter{}
@@ -322,11 +354,36 @@ func shipHostSecurityEvents(ctx context.Context, client *http.Client, c config, 
 	if err != nil {
 		return err
 	}
-	if code < 200 || code >= 300 {
+	switch {
+	case code >= 200 && code < 300:
+		data.Pending = nil
+	case code == http.StatusBadRequest || code == http.StatusRequestEntityTooLarge || code == http.StatusUnprocessableEntity:
+		left, right := splitHostSecurityBatch(data.Pending)
+		data.Pending = left
+		if right != nil {
+			data.PendingQueue = append([]*securityEventBatch{right}, data.PendingQueue...)
+		} else {
+			log.Printf("robin-agent: discarded one permanently rejected security record (status %d)", code)
+		}
+	default:
 		return errors.New("server did not acknowledge security events")
 	}
-	data.Pending = nil
 	return saveHostSecurityLog(path, data)
+}
+
+func splitHostSecurityBatch(batch *securityEventBatch) (*securityEventBatch, *securityEventBatch) {
+	count := len(batch.Events) + len(batch.Counters)
+	if count <= 1 {
+		return nil, nil
+	}
+	left, right := *batch, *batch
+	left.BatchID = securityHash([]byte(batch.BatchID + ":left"))
+	right.BatchID = securityHash([]byte(batch.BatchID + ":right"))
+	eventSplit := min(count/2, len(batch.Events))
+	counterSplit := count/2 - eventSplit
+	left.Events, right.Events = batch.Events[:eventSplit], batch.Events[eventSplit:]
+	left.Counters, right.Counters = batch.Counters[:counterSplit], batch.Counters[counterSplit:]
+	return &left, &right
 }
 
 func runHostSecurity(ctx context.Context, client *http.Client, c config, s state, cfg securityConfig) {

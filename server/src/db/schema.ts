@@ -3753,8 +3753,12 @@ export async function initializeSchema(): Promise<void> {
         generation BIGINT NOT NULL,
         active BOOLEAN NOT NULL,
         changed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        source_section VARCHAR(32),
+        expires_at TIMESTAMPTZ,
         PRIMARY KEY (agent_id, alert_type, issue_id)
       );
+      ALTER TABLE host_security_alert_states ADD COLUMN IF NOT EXISTS source_section VARCHAR(32);
+      ALTER TABLE host_security_alert_states ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
     `);
 
     await client.query('COMMIT');

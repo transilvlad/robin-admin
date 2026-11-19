@@ -96,7 +96,7 @@ const fieldValidators = {
     }),
   },
   sshd: { name: (v: unknown) => enums(v, allowedSetting), value: masked },
-  accounts: { user: text, uid: integer, home: text, shell: text },
+  accounts: { user: text, uid: (v: unknown) => integer(v, 0, 4_294_967_294), home: text, shell: text },
   privilegedGroups: { group: text, members: (v: unknown) => list(v, 1_000).map(member => text(member)) },
   sudoers: { file: text, rule: masked, nopasswd: bool },
   cron: { file: text, sha256: digest, lines: integer },
@@ -155,7 +155,7 @@ function parseSecurityEvent(raw: unknown): HostSecurityEventInput {
   if (Date.parse(observedAt) > Date.now() + 300_000) return fail('Event time is too far in the future');
   const sourceIp = optional(input.sourceIp, value => {
     const ip = text(value, 64);
-    if (!isIP(ip)) return fail('Invalid source IP');
+    if (ip.includes('%') || !isIP(ip)) return fail('Invalid source IP');
     return ip;
   });
   const keyFingerprint = optional(input.keyFingerprint, fieldValidators.sshKeys.fingerprint);
@@ -243,7 +243,8 @@ hostSecurityAgentRoutes.post('/events', (req, res, next) => handle(async () => {
           saved.rows.map(row => row.event.line), saved.rows.map(row => row.event.observedAt)),
         maxBytes: config.logs.spoolMaxBytes,
       }, client);
-      if (outcome === 'full' || outcome === 'too_large') throw new HostSecurityError(503, 'Host security log queue is full');
+      if (outcome === 'full') throw new HostSecurityError(503, 'Host security log queue is full');
+      if (outcome === 'too_large') throw new HostSecurityError(413, 'Host security log batch exceeds the queue capacity');
     }
     for (const bucket of counters) {
       await client.query(`
@@ -295,33 +296,45 @@ hostSecurityRoutes.get('/hosts', (req, res, next) => handle(async () => {
   const options = pageOptions(req);
   const { rows } = await query<{
     hostId: string; name: string; lastReceivedAt: Date; stale: boolean; unknownLogins24h: number; patchAgeDays: number | null;
+    snapshotId: string; baselinePending: boolean; unapprovedDrift: number; passwordLoginEnabled: boolean | null;
   }>(`
     SELECT h.agent_id AS "hostId", a.name, h.last_received_at AS "lastReceivedAt",
+      h.snapshot_id::text AS "snapshotId", (h.baseline_revision = 0) AS "baselinePending",
+      CASE WHEN h.baseline_revision = 0 THEN 0 ELSE (
+        SELECT count(*)::int
+        FROM jsonb_each(s.sections) section
+        CROSS JOIN LATERAL (
+          SELECT new.item, old.item AS previous
+          FROM jsonb_array_elements(section.value->'items') new(item)
+          FULL JOIN jsonb_array_elements(h.baseline->section.key->'items') old(item)
+            ON new.item->>'id' = old.item->>'id'
+        ) item
+        WHERE (item.item IS NOT NULL OR (section.value->>'complete')::boolean)
+          AND item.item->'value' IS DISTINCT FROM item.previous->'value'
+      ) END AS "unapprovedDrift",
+      CASE WHEN s.sections->'sshd'->>'status' = 'ok' THEN EXISTS (
+        SELECT 1 FROM jsonb_array_elements(s.sections->'sshd'->'items') setting
+        WHERE setting->>'id' = 'passwordauthentication' AND setting->'value'->>'value' = 'yes'
+      ) END AS "passwordLoginEnabled",
       floor(EXTRACT(epoch FROM CURRENT_TIMESTAMP - h.security_upgrades_since) / 86400)::int AS "patchAgeDays",
       (h.last_received_at < CURRENT_TIMESTAMP - make_interval(secs => h.interval_seconds * 3)) AS stale,
       (SELECT count(*)::int FROM host_security_events e WHERE e.agent_id = h.agent_id
        AND e.observed_at > CURRENT_TIMESTAMP - interval '24 hours'
        AND e.event->>'type' = 'login' AND e.known_address_id IS NULL) AS "unknownLogins24h"
     FROM host_security_hosts h JOIN fleet_agents a ON a.agent_id = h.agent_id
+    JOIN host_security_snapshots s ON s.id = h.snapshot_id
     ORDER BY h.agent_id LIMIT $1 OFFSET $2`, [options.sqlLimit, options.offset]);
-  return page(await Promise.all(rows.map(async row => {
-    const { snapshot, diff } = await getHostSecurityState(row.hostId);
-    return {
-      ...row, snapshotId: snapshot.id, baselinePending: diff.baselinePending,
-      unapprovedDrift: diff.baselinePending ? 0 : diff.items.length,
-      passwordLoginEnabled: snapshot.sections.sshd.items.find(item => item.id === 'passwordauthentication')?.value.value === 'yes'
-        || (snapshot.sections.sshd.status === 'ok' ? false : null),
-    };
-  })), options);
+  return page(rows, options);
 }, res, next));
 
 hostSecurityRoutes.get('/hosts/:hostId/snapshots', (req, res, next) => handle(async () => {
   const options = pageOptions(req);
-  const { rows } = await query<Parameters<typeof serializeHostSnapshot>[0]>(`
-    SELECT ${hostSecuritySnapshotColumns} FROM host_security_snapshots
+  const { rows } = await query(`
+    SELECT id::text, agent_id AS "hostId", hash, observed_at AS "observedAt", received_at AS "receivedAt"
+    FROM host_security_snapshots
     WHERE agent_id = $1 ORDER BY observed_at DESC, id DESC LIMIT $2 OFFSET $3`,
   [routeParam(req, 'hostId'), options.sqlLimit, options.offset]);
-  return page(rows.map(serializeHostSnapshot), options);
+  return page(rows, options);
 }, res, next));
 
 hostSecurityRoutes.get('/hosts/:hostId/snapshots/:snapshotId', (req, res, next) => handle(async () => {
@@ -437,7 +450,7 @@ function addressInput(raw: unknown) {
   const [address, prefix, extra] = value.split('/');
   const family = isIP(address);
   const max = family === 4 ? 32 : 128;
-  if (!family || extra !== undefined || (prefix !== undefined && (!/^\d{1,3}$/.test(prefix) || Number(prefix) > max))) {
+  if (!family || address.includes('%') || extra !== undefined || (prefix !== undefined && (!/^\d{1,3}$/.test(prefix) || Number(prefix) > max))) {
     return fail('Known address must be an IP address or CIDR');
   }
   const label = masked(input.label).trim();

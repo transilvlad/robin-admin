@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type securityItem struct {
@@ -110,6 +111,19 @@ func securityText(raw string) string {
 }
 
 func readSecurityFile(path string, maxBytes int64) ([]byte, error) {
+	file, err := openCheckedSecurityFile(path, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if int64(len(raw)) > maxBytes {
+		return nil, fmt.Errorf("file exceeds collection limits")
+	}
+	return raw, err
+}
+
+func openCheckedSecurityFile(path string, maxBytes int64) (*os.File, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -121,16 +135,12 @@ func readSecurityFile(path string, maxBytes int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
 	actual, err := file.Stat()
 	if err != nil || !os.SameFile(info, actual) {
+		file.Close()
 		return nil, fmt.Errorf("file changed before collection")
 	}
-	raw, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
-	if int64(len(raw)) > maxBytes {
-		return nil, fmt.Errorf("file exceeds collection limits")
-	}
-	return raw, err
+	return file, nil
 }
 
 func securityCommand(ctx context.Context, timeout time.Duration, argv ...string) (string, error) {
@@ -151,10 +161,61 @@ func securityHash(raw []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
+func securityIntegrityHash(ctx context.Context, path string, budget int64, buffer []byte) (string, int64, error) {
+	name := filepath.Base(path)
+	if name == "shadow" || name == "gshadow" || (strings.HasPrefix(name, "ssh_host_") && strings.HasSuffix(name, "_key")) {
+		return "", 0, nil
+	}
+	file, err := openCheckedSecurityFile(path, budget)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+	reader := io.LimitReader(file, budget+1)
+	digest := sha256.New()
+	const marker = "PRIVATE KEY-----"
+	var total int64
+	var carry int
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", total, err
+		}
+		count, err := reader.Read(buffer[carry:])
+		total += int64(count)
+		if total > budget {
+			return "", budget, errors.New("integrity file grew beyond the read budget")
+		}
+		end := carry + count
+		if bytes.Contains(buffer[:end], []byte(marker)) {
+			return "", total, nil
+		}
+		digest.Write(buffer[carry:end])
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", total, err
+		}
+		carry = min(end, len(marker)-1)
+		copy(buffer[:carry], buffer[end-carry:end])
+	}
+	return hex.EncodeToString(digest.Sum(nil)), total, nil
+}
+
+func securityManifestRoot(items []securityItem) string {
+	digest := sha256.New()
+	encoder := json.NewEncoder(digest)
+	for _, item := range items {
+		_ = encoder.Encode(item) // Inventory values contain only JSON scalars and objects.
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
 func securityIntegrity(ctx context.Context, roots []string, count int, budget int64) securitySection {
 	var items []securityItem
 	var detail error
 	visited := map[string]bool{}
+	buffer := make([]byte, 32<<10)
 	limited := errors.New("integrity limits reached")
 	for _, root := range roots {
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
@@ -171,21 +232,26 @@ func securityIntegrity(ctx context.Context, roots []string, count int, budget in
 			if !entry.Type().IsRegular() || visited[path] {
 				return nil
 			}
+			if !securitySnapshotValueFits(path) {
+				if detail == nil {
+					detail = limited
+				}
+				return nil
+			}
 			if len(items) >= count || budget <= 0 {
 				return limited
 			}
 			visited[path] = true
-			raw, err := readSecurityFile(path, budget)
+			digest, read, err := securityIntegrityHash(ctx, path, budget, buffer)
+			budget -= read
 			if err != nil {
 				detail = errors.Join(detail, err)
 				return nil
 			}
-			budget -= int64(len(raw))
-			if bytes.Contains(raw, []byte("PRIVATE KEY-----")) ||
-				filepath.Base(path) == "shadow" || filepath.Base(path) == "gshadow" {
+			if digest == "" {
 				return nil
 			}
-			items = append(items, securityItem{path, map[string]string{"path": path, "sha256": securityHash(raw)}})
+			items = append(items, securityItem{path, map[string]string{"path": path, "sha256": digest}})
 			return nil
 		})
 		detail = errors.Join(detail, err)
@@ -194,8 +260,7 @@ func securityIntegrity(ctx context.Context, roots []string, count int, budget in
 		}
 	}
 	section := securitySectionResult(items, detail)
-	encoded, _ := json.Marshal(section.Items)
-	section.RootHash = securityHash(encoded)
+	section.RootHash = securityManifestRoot(section.Items)
 	return section
 }
 
@@ -302,6 +367,48 @@ func sshKeyFields(line string) []string {
 	return fields
 }
 
+func securityKeyOptions(raw string) []string {
+	options := []string{}
+	start := 0
+	quoted, escaped := false, false
+	appendOption := func(option string) {
+		switch {
+		case option == "restrict":
+			options = append(options, option)
+		case strings.HasPrefix(option, "command="):
+			options = append(options, "command=[redacted]")
+		case strings.HasPrefix(option, "from="):
+			value := strings.TrimPrefix(option, "from=")
+			if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+				value = value[1 : len(value)-1]
+			}
+			options = append(options, "from="+securityText(value))
+		}
+	}
+	for index, char := range raw {
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch char {
+		case '\\':
+			escaped = true
+		case '"':
+			quoted = !quoted
+		case ',':
+			if !quoted {
+				appendOption(raw[start:index])
+				start = index + 1
+			}
+		}
+	}
+	if !quoted {
+		appendOption(raw[start:])
+	}
+	sort.Strings(options)
+	return options
+}
+
 func sshWirePart(blob []byte) ([]byte, []byte) {
 	if len(blob) < 4 {
 		return nil, nil
@@ -362,22 +469,7 @@ func parseSecurityKey(line, user, file string) (securityItem, bool) {
 		fingerprint := "SHA256:" + base64.RawStdEncoding.EncodeToString(digest[:])
 		options := []string{}
 		if i == 1 {
-			for _, opt := range strings.Split(fields[0], ",") {
-				if strings.HasPrefix(opt, "command=") {
-					options = append(options, "command=[redacted]")
-				}
-				if opt == "restrict" {
-					options = append(options, opt)
-				}
-			}
-			if strings.Contains(fields[0], "from=") {
-				_, after, _ := strings.Cut(fields[0], "from=")
-				if strings.HasPrefix(after, "\"") {
-					if value, _, ok := strings.Cut(after[1:], "\""); ok {
-						options = append(options, "from="+securityText(value))
-					}
-				}
-			}
+			options = securityKeyOptions(fields[0])
 		}
 		comment := securityText(strings.ReplaceAll(strings.Join(fields[i+2:], " "), fields[i+1], "[REDACTED]"))
 		return securityItem{user + "|" + file + "|" + fingerprint, map[string]any{"user": user, "file": file, "fingerprint": fingerprint, "type": keyType, "bits": bits, "comment": comment, "options": options}}, true
@@ -388,6 +480,8 @@ func parseSecurityKey(line, user, file string) (securityItem, bool) {
 func securityKeys(ctx context.Context, accounts []securityAccount, patterns []string, initial error) securitySection {
 	items := []securityItem{}
 	detail := initial
+	budget := int64(8 << 20)
+	const keyLimit = 5000
 	for _, account := range accounts {
 		if ctx.Err() != nil {
 			detail = errors.Join(detail, ctx.Err())
@@ -411,7 +505,10 @@ func securityKeys(ctx context.Context, accounts []securityAccount, patterns []st
 				continue
 			}
 			seen[path] = true
-			raw, err := readSecurityFile(path, 1<<20)
+			if budget <= 0 || len(items) >= keyLimit {
+				return securitySectionResult(items, errors.Join(detail, errors.New("authorized key inventory limit reached")))
+			}
+			raw, err := readSecurityFile(path, min(budget, 1<<20))
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
@@ -419,9 +516,13 @@ func securityKeys(ctx context.Context, accounts []securityAccount, patterns []st
 				detail = errors.Join(detail, err)
 				continue
 			}
+			budget -= int64(len(raw))
 			duplicates := map[string]int{}
 			for _, line := range strings.Split(string(raw), "\n") {
 				if item, ok := parseSecurityKey(line, account.user, path); ok {
+					if len(items) >= keyLimit {
+						return securitySectionResult(items, errors.Join(detail, errors.New("authorized key inventory limit reached")))
+					}
 					duplicates[item.ID]++
 					if duplicates[item.ID] > 1 {
 						item.ID += "|" + strconv.Itoa(duplicates[item.ID])
@@ -563,32 +664,41 @@ func securityFirewall(ctx context.Context) securitySection {
 					NFTables []struct {
 						Chain struct {
 							Hook   string
+							Family string
 							Policy string
 						}
 					}
 				}
 				if json.Unmarshal([]byte(output), &rules) == nil {
+					coverage := map[string]bool{}
 					for _, entry := range rules.NFTables {
-						if entry.Chain.Hook != "input" {
+						chain := entry.Chain
+						if chain.Hook != "input" || (chain.Family != "ip" && chain.Family != "ip6" && chain.Family != "inet") {
 							continue
 						}
-						if entry.Chain.Policy == "drop" {
-							policy = "drop"
+						if policy != "" && policy != chain.Policy {
+							policy = "unknown"
 							break
 						}
-						if entry.Chain.Policy == "accept" {
-							policy = "accept"
-						}
+						policy = chain.Policy
+						coverage[chain.Family] = true
+					}
+					if policy != "" && !coverage["inet"] && !(coverage["ip"] && coverage["ip6"]) {
+						policy = "unknown"
 					}
 				}
 			}
 		case "iptables":
-			output, err = securityCommand(ctx, time.Second, "iptables", "-S", "INPUT")
-			if strings.Contains(output, "-P INPUT DROP") {
-				policy = "drop"
-			}
-			if strings.Contains(output, "-P INPUT ACCEPT") {
-				policy = "accept"
+			v4, err4 := securityCommand(ctx, time.Second, "iptables", "-S", "INPUT")
+			v6, err6 := securityCommand(ctx, time.Second, "ip6tables", "-S", "INPUT")
+			err = errors.Join(err4, err6)
+			for _, candidate := range []string{"drop", "accept"} {
+				prefix := "-P INPUT " + strings.ToUpper(candidate)
+				if strings.Contains(v4, prefix) && strings.Contains(v6, prefix) && err == nil {
+					policy = candidate
+				} else if policy == "" && (strings.Contains(v4, prefix) || strings.Contains(v6, prefix)) {
+					policy = "unknown"
+				}
 			}
 		case "ufw":
 			output, err = securityCommand(ctx, time.Second, "ufw", "status", "verbose")
@@ -600,8 +710,12 @@ func securityFirewall(ctx context.Context) securitySection {
 			}
 		}
 		detail = errors.Join(detail, err)
-		if policy != "" {
+		if policy == "accept" || policy == "drop" {
 			return securitySectionResult([]securityItem{{"default", map[string]string{"backend": backend, "inbound": policy}}}, nil)
+		}
+		if policy == "unknown" {
+			return securitySectionResult([]securityItem{{"default", map[string]string{"backend": backend, "inbound": policy}}},
+				errors.Join(err, errors.New("firewall policies differ or are unavailable for one address family")))
 		}
 	}
 	if detail == nil {
@@ -632,8 +746,13 @@ func securityPatching(ctx context.Context) securitySection {
 	for _, line := range strings.Split(output, "\n") {
 		if strings.HasPrefix(line, "Inst ") {
 			pending++
-			if strings.Contains(strings.ToLower(line), "security") {
-				security++
+			_, origin, _ := strings.Cut(line, "(")
+			for _, field := range strings.Fields(origin) {
+				suite := strings.ToLower(strings.Trim(field, "[],)"))
+				if strings.HasSuffix(suite, "-security") || strings.Contains(suite, "-security:") {
+					security++
+					break
+				}
 			}
 		}
 	}
@@ -664,5 +783,74 @@ func collectSecuritySnapshot(ctx context.Context, cfg securityConfig) map[string
 	result["firewall"] = securityFirewall(ctx)
 	result["patching"] = securityPatching(ctx)
 	result["integrity"] = securityIntegrity(ctx, cfg.roots, cfg.fileCap, cfg.byteCap)
-	return result
+	return fitSecuritySnapshot(result)
+}
+
+// Bound the serialized heartbeat below the server's request limit. Removing
+// unreadable or oversized records leaves their section explicitly incomplete.
+func fitSecuritySnapshot(sections map[string]securitySection) map[string]securitySection {
+	keys := []string{"sshKeys", "sshd", "accounts", "privilegedGroups", "sudoers", "cron", "systemd", "listeners", "firewall", "patching", "integrity"}
+	remaining := 3 << 20
+	for _, name := range keys {
+		section := sections[name]
+		limit, sectionBudget := 5000, min(remaining, 192<<10)
+		if name == "integrity" {
+			limit, sectionBudget = 20000, remaining
+		}
+		accepted := section.Items[:0]
+		for _, item := range section.Items {
+			if len(item.ID) > 1024 || len(accepted) >= limit || !securitySnapshotValueFits(item.Value) ||
+				strings.IndexFunc(item.ID, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
+				section.Complete = false
+				continue
+			}
+			encoded, err := json.Marshal(item)
+			if err != nil || len(encoded)+1 > sectionBudget {
+				section.Complete = false
+				continue
+			}
+			sectionBudget -= len(encoded) + 1
+			remaining -= len(encoded) + 1
+			accepted = append(accepted, item)
+		}
+		section.Items = accepted
+		if section.RootHash != "" {
+			section.RootHash = securityManifestRoot(accepted)
+		}
+		sections[name] = section
+	}
+	return sections
+}
+
+func securitySnapshotValueFits(value any) bool {
+	switch input := value.(type) {
+	case string:
+		return len(input) <= 512 && utf8.ValidString(input) &&
+			strings.IndexFunc(input, func(r rune) bool { return r < 32 || r == 127 }) < 0
+	case []string:
+		for _, item := range input {
+			if !securitySnapshotValueFits(item) {
+				return false
+			}
+		}
+		return len(input) <= 1000
+	case map[string]string:
+		for _, item := range input {
+			if !securitySnapshotValueFits(item) {
+				return false
+			}
+		}
+	case map[string]any:
+		for name, item := range input {
+			if !securitySnapshotValueFits(item) {
+				return false
+			}
+			if name == "options" {
+				if options, ok := item.([]string); !ok || len(options) > 16 {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }

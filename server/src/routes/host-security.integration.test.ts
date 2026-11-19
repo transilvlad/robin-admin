@@ -78,6 +78,7 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
       status: 'ok', complete: true, items: [],
     }])) as HostSecuritySections;
     sections.sshd.items.push({ id: 'passwordauthentication', value: { name: 'passwordauthentication', value: 'no' } });
+    sections.firewall = { status: 'not_permitted', complete: false, items: [] };
     const snapshot = (hash: string) => ({
       version: 1, hash: hash.repeat(64), observedAt: new Date(Date.now() - 2000).toISOString(), intervalSeconds: 60, sections,
     });
@@ -101,7 +102,7 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
     });
     sections.sshd.items[0].value.value = 'yes';
     sections.listeners.items.push({ id: 'listener', value: { protocol: 'tcp', address: '0.0.0.0', port: 8080, process: null } });
-    sections.accounts.items.push({ id: 'fixture', value: { user: 'fixture', uid: 1000, shell: '/bin/bash', home: '/home/fixture' } });
+    sections.accounts.items.push({ id: 'fixture', value: { user: 'fixture', uid: 3_000_000_000, shell: '/bin/bash', home: '/home/fixture' } });
     sections.integrity.items.push({ id: '/fixture', value: { path: '/fixture', sha256: '1'.repeat(64) } });
     sections.patching.items.push({ id: 'system', value: {
       os: 'Fixture Linux', kernel: 'fixture', rebootRequired: true,
@@ -110,6 +111,12 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
     expect((await send(agent + '/snapshot', agentToken, 'POST', snapshot('2'))).status).toBe(200);
     const current = (await send(host + '/diff', readToken)).data;
     expect(current.items.length).toBeGreaterThanOrEqual(5);
+    expect((await send('/security/hosts', readToken)).data.items[0]).toMatchObject({
+      unapprovedDrift: current.items.length, passwordLoginEnabled: true,
+    });
+    const history = (await send(host + '/snapshots', readToken)).data.items;
+    expect(history[0]).toHaveProperty('id', current.snapshotId);
+    expect(history[0]).not.toHaveProperty('sections');
     expect((await send('/security/known-addresses', manageToken, 'POST', { network: '192.0.2.0/24', label: 'Fixture' })).status).toBe(200);
     const observedAt = new Date().toISOString();
     const login = { id: '3'.repeat(64), observedAt, type: 'login', process: 'sshd', user: 'fixture',
@@ -130,6 +137,9 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
     await query("UPDATE host_security_hosts SET last_received_at = NOW() - interval '1 hour' WHERE agent_id = $1", [hostId]);
     const webhooks = await listAlertWebhooks();
     await evaluateHostSecurity(hostId, webhooks, true);
+    await evaluateHostSecurity(hostId, webhooks, true);
+    const premature = await query("SELECT 1 FROM alert_deliveries WHERE event_kind = 'recovery'");
+    expect(premature.rowCount).toBe(0);
     const fired = await query<{ alert_type: string }>("SELECT DISTINCT alert_type FROM alert_deliveries WHERE event_kind = 'failure'");
     expect(fired.rows.map(row => row.alert_type).sort()).toEqual([
       'host_failed_auth_rate',
@@ -149,6 +159,7 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
     const historical = await send(host + '/diff?snapshotId=' + current.snapshotId + '&baselineRevision=' + current.baselineRevision, readToken);
     expect(historical.data.items).toEqual(current.items);
     await query("UPDATE host_security_events SET observed_at = NOW() - interval '25 hours' WHERE agent_id = $1", [hostId]);
+    await query("UPDATE host_security_alert_states SET expires_at = NOW() - interval '1 minute' WHERE agent_id = $1 AND expires_at IS NOT NULL", [hostId]);
     await query("UPDATE host_security_counters SET failed_password = 1 WHERE agent_id = $1", [hostId]);
     sections.patching.items[0].value.rebootRequired = false;
     sections.patching.items[0].value.rebootSince = null;

@@ -5,7 +5,7 @@ import { createAlertDelivery, listAlertWebhooks } from '../../db/queries/alerts.
 import { getConfig } from '../../db/queries/config.js';
 import { logger } from '../../logger.js';
 import type { AlertType, AlertWebhook, JsonRecord } from '../../types/alerts.js';
-import type { HostSecurityDiff, HostSecuritySections } from '../../types/host-security.js';
+import type { HostSecurityDiff, HostSecuritySectionName } from '../../types/host-security.js';
 import { getHostSecurityState, hostSecurityTransaction } from '../host-security.js';
 import { buildSentryAlertPayload } from './sentry.js';
 
@@ -23,7 +23,23 @@ const securityTypes = [
 ] as const satisfies readonly AlertType[];
 
 type SecurityType = typeof securityTypes[number];
-type Signal = { key: string; type: SecurityType; summary: string };
+type Signal = {
+  key: string;
+  type: SecurityType;
+  summary: string;
+  section?: HostSecuritySectionName;
+  eventId?: string;
+  expiresAt?: Date;
+};
+type StoredSignal = {
+  alert_type: SecurityType;
+  issue_id: string;
+  summary: string;
+  active: boolean;
+  generation: string;
+  source_section: HostSecuritySectionName | null;
+  expires_at: Date | null;
+};
 
 export function hostSecurityDriftSignals(diff: HostSecurityDiff): Signal[] {
   if (diff.baselinePending) return [];
@@ -75,7 +91,7 @@ export function hostSecurityDriftSignals(diff: HostSecurityDiff): Signal[] {
         summary = `Monitored path ${item.itemId} ${item.change}`;
         break;
     }
-    if (type && summary) signals.push({ type, key: item.id, summary });
+    if (type && summary) signals.push({ type, key: item.id, summary, section: item.section });
   }
   return signals;
 }
@@ -83,18 +99,6 @@ export function hostSecurityDriftSignals(diff: HostSecurityDiff): Signal[] {
 export function unusualHostAuthRate(recent: number, historical: number, historicalMinutes: number): boolean {
   if (historicalMinutes < 15) return false;
   return recent / 5 >= 5 * ((historical + 1) / historicalMinutes);
-}
-
-function preserveWhileUnavailable(type: SecurityType, sections: HostSecuritySections): boolean {
-  switch (type) {
-    case 'host_ssh_keys': return sections.sshKeys.status !== 'ok' || !sections.sshKeys.complete;
-    case 'host_sshd': return sections.sshd.status !== 'ok' || !sections.sshd.complete;
-    case 'host_network': return !sections.listeners.complete || !sections.firewall.complete;
-    case 'host_privilege': return !sections.accounts.complete || !sections.privilegedGroups.complete || !sections.sudoers.complete;
-    case 'host_integrity': return !sections.integrity.complete;
-    case 'host_patching': return !sections.patching.complete;
-    default: return false;
-  }
 }
 
 function applicableWebhooks(webhooks: AlertWebhook[], type: SecurityType, recovery: boolean, now: Date) {
@@ -124,24 +128,38 @@ export async function evaluateHostSecurity(hostId: string, webhooks: AlertWebhoo
       signals.push({ type: 'host_security_stale', key: 'heartbeat', summary: 'Host security telemetry is stale' });
     }
     if (patching?.rebootSince && now.getTime() - Date.parse(patching.rebootSince) >= patchAge) {
-      signals.push({ type: 'host_patching', key: 'reboot', summary: 'A system reboot has been pending past the configured deadline' });
+      signals.push({ type: 'host_patching', key: 'reboot', section: 'patching', summary: 'A system reboot has been pending past the configured deadline' });
     }
     const securitySince = state.rows[0].securitySince;
     if (securitySince && now.getTime() - securitySince.getTime() >= patchAge) {
-      signals.push({ type: 'host_patching', key: 'upgrades', summary: 'Security upgrades have been pending past the configured deadline' });
+      signals.push({ type: 'host_patching', key: 'upgrades', section: 'patching', summary: 'Security upgrades have been pending past the configured deadline' });
     }
 
-    const logins = await client.query<{ event: { user?: string; sourceIp?: string; authMethod?: string }; id: string; known: boolean }>(`
-      SELECT event, event_id AS id, known_address_id IS NOT NULL AS known
-      FROM host_security_events
-      WHERE agent_id = $1 AND observed_at >= CURRENT_TIMESTAMP - interval '24 hours' AND event->>'type' = 'login'
-        AND (known_address_id IS NULL OR event->>'authMethod' = 'password')
-      ORDER BY observed_at DESC, event_id DESC LIMIT 1000`, [hostId]);
+    const logins = await client.query<{
+      event: { user?: string; sourceIp?: string };
+      id: string;
+      type: 'host_unknown_login' | 'host_password_login';
+      expiresAt: Date;
+    }>(`
+      SELECT e.event, e.event_id AS id, alert.type, e.observed_at + interval '24 hours' AS "expiresAt"
+      FROM host_security_events e
+      CROSS JOIN LATERAL (
+        SELECT 'host_unknown_login' AS type WHERE e.known_address_id IS NULL
+        UNION ALL
+        SELECT 'host_password_login' AS type WHERE e.event->>'authMethod' = 'password'
+      ) alert
+      WHERE e.agent_id = $1 AND e.observed_at >= CURRENT_TIMESTAMP - interval '24 hours'
+        AND e.event->>'type' = 'login'
+        AND NOT EXISTS (
+          SELECT 1 FROM host_security_alert_states s
+          WHERE s.agent_id = e.agent_id AND s.alert_type = alert.type AND s.issue_id = e.event_id
+        )
+      ORDER BY e.observed_at, e.event_id, alert.type LIMIT 1000`, [hostId]);
     // These alerts stay active for the 24-hour observation window.
-    for (const { event, id, known } of logins.rows) {
+    for (const { event, id, type, expiresAt } of logins.rows) {
       const summary = `Successful login for ${event.user ?? 'unknown user'} from ${event.sourceIp ?? 'unknown address'}`;
-      if (!known) signals.push({ type: 'host_unknown_login', key: id, summary });
-      if (event.authMethod === 'password') signals.push({ type: 'host_password_login', key: id, summary: `Password login. ${summary}` });
+      signals.push({ type, key: id, eventId: id, expiresAt,
+        summary: type === 'host_password_login' ? `Password login. ${summary}` : summary });
     }
     const auth = await client.query<{ recent: number; historical: number; minutes: number }>(`
       SELECT COALESCE(sum(invalid_user + failed_key + failed_password) FILTER
@@ -155,30 +173,47 @@ export async function evaluateHostSecurity(hostId: string, webhooks: AlertWebhoo
       signals.push({ type: 'host_failed_auth_rate', key: 'failures', summary: `${recent} failed authentications over five minutes exceeds the host's rolling rate` });
     }
 
-    const existing = await client.query<{ alert_type: SecurityType; issue_id: string; summary: string; active: boolean; generation: string }>(
-      'SELECT alert_type, issue_id, summary, active, generation::text FROM host_security_alert_states WHERE agent_id = $1',
+    const existing = await client.query<StoredSignal>(
+      `SELECT alert_type, issue_id, summary, active, generation::text, source_section, expires_at
+       FROM host_security_alert_states WHERE agent_id = $1 AND (expires_at IS NULL OR (active AND expires_at <= CURRENT_TIMESTAMP))`,
       [hostId],
     );
     const byIdentity = new Map(existing.rows.map(entry => [`${entry.alert_type}:${entry.issue_id}`, entry]));
     const current = new Map<string, Signal & { id: string }>(signals.map(signal => {
-      const id = createHash('sha256').update(signal.key).digest('hex');
+      const id = signal.eventId ?? createHash('sha256').update(signal.key).digest('hex');
       return [`${signal.type}:${id}`, { ...signal, id }] as const;
     }));
+    const observedIds = new Map<HostSecuritySectionName, Set<string>>();
+    function recoverable(source: StoredSignal) {
+      if (source.expires_at) return source.expires_at <= now;
+      const name = source.source_section;
+      if (!name) return true;
+      const section = snapshot.sections[name];
+      if (section.status !== 'ok') return false;
+      if (section.complete) return true;
+      let ids = observedIds.get(name);
+      if (!ids) {
+        ids = new Set(section.items.map(item => createHash('sha256').update(`${name}:${item.id}`).digest('hex')));
+        observedIds.set(name, ids);
+      }
+      return ids.has(source.issue_id);
+    }
     const transitions = [
       ...[...current].filter(([id]) => !byIdentity.get(id)?.active)
         .map(([id, value]) => ({ ...value, old: byIdentity.get(id), kind: 'failure' as const })),
-      ...[...byIdentity].filter(([id, old]) => old.active && !current.has(id) && !preserveWhileUnavailable(old.alert_type, snapshot.sections))
-        .map(([, old]) => ({ id: old.issue_id, type: old.alert_type, summary: old.summary, old, kind: 'recovery' as const })),
+      ...[...byIdentity].filter(([id, old]) => old.active && !current.has(id) && recoverable(old))
+        .map(([, old]) => ({ id: old.issue_id, type: old.alert_type, summary: old.summary, old,
+        section: old.source_section ?? undefined, expiresAt: old.expires_at ?? undefined, kind: 'recovery' as const })),
     ];
     for (const signal of transitions) {
       const generation = (BigInt(signal.old?.generation ?? now.getTime()) + 1n).toString();
       await client.query(`
-        INSERT INTO host_security_alert_states (agent_id, alert_type, issue_id, summary, generation, active)
-        VALUES ($1,$2,$3,$4,$5,$6)
+        INSERT INTO host_security_alert_states (agent_id, alert_type, issue_id, summary, generation, active, source_section, expires_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
         ON CONFLICT (agent_id, alert_type, issue_id) DO UPDATE
         SET summary = EXCLUDED.summary, generation = EXCLUDED.generation, active = EXCLUDED.active,
             changed_at = CURRENT_TIMESTAMP`,
-      [hostId, signal.type, signal.id, signal.summary, generation, signal.kind === 'failure']);
+      [hostId, signal.type, signal.id, signal.summary, generation, signal.kind === 'failure', signal.section ?? null, signal.expiresAt ?? null]);
       if (!alertsEnabled) continue;
       const summary = signal.kind === 'failure' ? signal.summary : `Recovered: ${signal.summary}`;
       const linkPath = `/fleet/security/${encodeURIComponent(hostId)}`;

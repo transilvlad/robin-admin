@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +39,104 @@ func TestHostSecurityAuthorizedKey(t *testing.T) {
 	output := fmt.Sprint(value)
 	if strings.Contains(output, material) || strings.Contains(output, "demo") || !strings.Contains(output, "from=192.0.2.1,192.0.2.2") {
 		t.Fatalf("incorrect key redaction or options: %s", output)
+	}
+}
+
+func TestHostSecuritySplitPreservesRecordsAndBatchIdentity(t *testing.T) {
+	batch := &securityEventBatch{Version: 1, BatchID: strings.Repeat("a", 64),
+		Events:   []securityEvent{{ID: "first"}, {ID: "second"}, {ID: "third"}},
+		Counters: []securityCounter{{Successful: 2}},
+	}
+	left, right := splitHostSecurityBatch(batch)
+	if left.BatchID == right.BatchID || left.BatchID == batch.BatchID || right.BatchID == batch.BatchID {
+		t.Fatal("split batches must have independent receipt keys")
+	}
+	if len(left.Events) != 2 || left.Events[1].ID != "second" || len(right.Events) != 1 ||
+		right.Events[0].ID != "third" || right.Counters[0].Successful != 2 {
+		t.Fatalf("split changed record order or counters: %+v %+v", left, right)
+	}
+	single, rest := splitHostSecurityBatch(&securityEventBatch{Events: []securityEvent{{ID: "first"}}})
+	if single != nil || rest != nil {
+		t.Fatal("single record cannot be split further")
+	}
+}
+
+func TestHostSecurityResumesSplitBatchAfterRestart(t *testing.T) {
+	sent := make(chan securityEventBatch, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var batch securityEventBatch
+		if err := json.NewDecoder(req.Body).Decode(&batch); err != nil {
+			http.Error(w, "invalid test payload", http.StatusBadRequest)
+			return
+		}
+		sent <- batch
+		if len(batch.Events) > 1 {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "events.json")
+	log := securityLogState{Pending: &securityEventBatch{
+		Version: 1, BatchID: strings.Repeat("a", 64),
+		Events: []securityEvent{{ID: "first"}, {ID: "second"}}, Counters: []securityCounter{},
+	}}
+	send := func() {
+		t.Helper()
+		if err := shipHostSecurityEvents(context.Background(), server.Client(), config{adminURL: server.URL},
+			state{AgentID: "fixture"}, securityConfig{}, path, &log); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log = securityLogState{}
+	if err := json.Unmarshal(raw, &log); err != nil {
+		t.Fatal(err)
+	}
+	send()
+	send()
+	if len(sent) != 3 || log.Pending != nil || len(log.PendingQueue) != 0 {
+		t.Fatal("split records were not delivered after the retry")
+	}
+	<-sent
+	first, second := <-sent, <-sent
+	if len(first.Events) != 1 || first.Events[0].ID != "first" ||
+		len(second.Events) != 1 || second.Events[0].ID != "second" {
+		t.Fatal("split records were delivered out of order")
+	}
+}
+
+func TestHostSecurityOmitsOversizedInventoryWithoutInventingRemovals(t *testing.T) {
+	sections := map[string]securitySection{"integrity": securitySectionResult([]securityItem{
+		{ID: "/short", Value: map[string]string{"path": "/short", "sha256": strings.Repeat("a", 64)}},
+		{ID: "/long", Value: map[string]string{"path": "/" + strings.Repeat("a", 512), "sha256": strings.Repeat("b", 64)}},
+	}, nil)}
+	section := fitSecuritySnapshot(sections)["integrity"]
+	if section.Complete || len(section.Items) != 1 || section.Items[0].ID != "/short" {
+		t.Fatalf("unexpected bounded inventory: %+v", section)
+	}
+}
+
+func TestHostSecurityForcedCommandCannotInjectOptions(t *testing.T) {
+	options := securityKeyOptions(`command="fixture,restrict,from=ignored",from="192.0.2.0/24"`)
+	if len(options) != 2 || options[0] != "command=[redacted]" || options[1] != "from=192.0.2.0/24" {
+		t.Fatalf("unexpected options: %v", options)
+	}
+}
+
+func TestHostSecurityCountsOneInvalidLoginPair(t *testing.T) {
+	state := &securityLogState{Windows: map[string]*securityCounterWindow{}}
+	at := time.Now().UTC().Truncate(time.Minute)
+	recordFailedHostLogin(state, "sshd[1]: Invalid user fixture from 192.0.2.10", "invalid_user", "192.0.2.10", at)
+	recordFailedHostLogin(state, "sshd[1]: Failed password for invalid user fixture from 192.0.2.10", "invalid_user", "192.0.2.10", at.Add(time.Second))
+	recordFailedHostLogin(state, "sshd[1]: Failed password for invalid user fixture from 192.0.2.10", "invalid_user", "192.0.2.10", at.Add(2*time.Second))
+	if count := state.Windows[at.Format(time.RFC3339)].Counter.InvalidUser; count != 2 {
+		t.Fatalf("wanted two attempts, got %d", count)
 	}
 }
 
@@ -87,6 +188,24 @@ func TestHostSecurityIntegrityDetectsChanges(t *testing.T) {
 	degraded := securitySectionResult(nil, errors.Join(fs.ErrPermission, fs.ErrNotExist))
 	if degraded.Status != "not_permitted" || degraded.Complete {
 		t.Fatalf("unexpected degraded result: %+v", degraded)
+	}
+}
+
+func TestHostSecurityIntegritySkipsPrivateMarkerAcrossChunks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fixture")
+	const chunk = 32 << 10
+	contents := strings.Repeat("a", chunk-5) + "PRIVATE KEY-----"
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	digest, read, err := securityIntegrityHash(context.Background(), path, 2*chunk, make([]byte, chunk))
+	if err != nil || digest != "" || read != int64(len(contents)) {
+		t.Fatalf("private marker was not excluded: digest=%q bytes=%d err=%v", digest, read, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := securityIntegrityHash(ctx, path, 2*chunk, make([]byte, chunk)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled integrity collection returned %v", err)
 	}
 }
 

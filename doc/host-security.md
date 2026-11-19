@@ -38,6 +38,10 @@ record for the hash. Each content transition receives a snapshot ID, including
 a transition back to earlier content. Retries of the current hash refresh
 the heartbeat without duplicating history.
 
+Collection limits mark an inventory section incomplete. Long paths, excess
+entries, and large inventories are bounded before transmission. This lets the
+agent continue to send the other sections when one exceeds its limits.
+
 The first snapshot is shown as baseline pending until approval. Approvals are
 scoped to the current snapshot ID and baseline revision, so stale approvals
 return HTTP 409. An approval records the approver, time, reason, snapshot and
@@ -52,6 +56,9 @@ masked line. Server responses link each event to its host and the snapshot
 and baseline revision in effect at that time. The supported event types are
 login, sudo, su, user/group/password change, sshd reload, fail2ban ban/unban
 and configured auditd keys.
+Fail2ban and auditd events are reported when they appear in the selected
+journal or authentication log. Dedicated log files for those daemons are
+outside this source.
 
 Failed authentications produce only counters, across invalid user, failed
 key and failed password categories. The counters also record accepted logins
@@ -66,6 +73,8 @@ Never transmit key material, password material or file contents. Key comments,
 SSH command options and sudo rules are treated as potentially sensitive and
 sanitized before sending. Logs masking is mandatory. A degraded collector
 must not silently report an empty complete inventory.
+Forced-command arguments are omitted from SSH key metadata. A change confined
+to those arguments is outside key-option drift detection.
 
 ## Operator API
 
@@ -77,7 +86,7 @@ view and management permissions.
 | Method and path | Result |
 | --- | --- |
 | GET `/hosts` | Host posture, latest snapshot ID, baseline state and last receipt time |
-| GET `/hosts/:hostId/snapshots` | Snapshot history, newest first |
+| GET `/hosts/:hostId/snapshots` | Snapshot IDs, hashes, and timestamps, newest first |
 | GET `/hosts/:hostId/snapshots/:snapshotId` | Snapshot by stable ID |
 | GET `/hosts/:hostId/snapshot?at=...` | Latest snapshot at or before a UTC time |
 | GET `/hosts/:hostId/diff` | Current snapshot versus approved baseline, or an event's diff with `snapshotId` and `baselineRevision` |
