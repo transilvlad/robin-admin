@@ -1,6 +1,6 @@
 {
   "name": "robin-admin-server",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "private": true,
   "description": "Robin Admin API Server",
   "license": "Apache-2.0",
