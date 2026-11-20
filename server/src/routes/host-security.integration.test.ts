@@ -89,6 +89,10 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
     expect(initial.status).toBe(200);
     const heartbeat = { ...snapshot('1'), sections: undefined };
     expect((await send(agent + '/snapshot', agentToken, 'POST', heartbeat)).data.snapshotId).toBe(initial.data.snapshotId);
+    expect((await send(host + '/snapshot', readToken)).data).toMatchObject({
+      id: initial.data.snapshotId, name: 'Fixture host', lastReceivedAt: expect.any(String), stale: false,
+    });
+    expect((await send('/security/hosts', readToken)).data.items[0].passwordLoginEnabled).toBe(false);
     expect((await send(host + '/diff', otherToken)).status).toBe(403);
     expect((await send(host + '/diff', readToken)).data.baselinePending).toBe(true);
     const firstApproval = { snapshotId: initial.data.snapshotId, baselineRevision: 0, reason: 'Fixture baseline' };
@@ -135,6 +139,7 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
       SELECT $1, date_trunc('minute', NOW()) - make_interval(mins => n), 0, 0,
         CASE WHEN n <= 5 THEN 10 ELSE 1 END, 0, 1 FROM generate_series(1, 30) n`, [hostId]);
     await query("UPDATE host_security_hosts SET last_received_at = NOW() - interval '1 hour' WHERE agent_id = $1", [hostId]);
+    expect((await send(host + '/snapshot', readToken)).data.stale).toBe(true);
     const webhooks = await listAlertWebhooks();
     await evaluateHostSecurity(hostId, webhooks, true);
     await evaluateHostSecurity(hostId, webhooks, true);
@@ -171,5 +176,9 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
     const audit = await query<{ new_values: { reason: string } }>(
       "SELECT new_values FROM admin_audit_log WHERE action = 'host_security.baseline_approve' ORDER BY id DESC");
     expect(audit.rows.map(row => row.new_values.reason)).toEqual(['Fixture verified', 'Fixture baseline']);
+
+    sections.sshd = { status: 'ok', complete: false, items: [] };
+    expect((await send(agent + '/snapshot', agentToken, 'POST', snapshot('7'))).status).toBe(200);
+    expect((await send('/security/hosts', readToken)).data.items[0].passwordLoginEnabled).toBeNull();
   }, 30000);
 });

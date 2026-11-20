@@ -88,6 +88,7 @@ view and management permissions.
 | GET `/hosts` | Host posture, latest snapshot ID, baseline state and last receipt time |
 | GET `/hosts/:hostId/snapshots` | Snapshot IDs, hashes, and timestamps, newest first |
 | GET `/hosts/:hostId/snapshots/:snapshotId` | Snapshot by stable ID |
+| GET `/hosts/:hostId/snapshot` | Current snapshot, host name, last heartbeat and staleness |
 | GET `/hosts/:hostId/snapshot?at=...` | Latest snapshot at or before a UTC time |
 | GET `/hosts/:hostId/diff` | Current snapshot versus approved baseline, or an event's diff with `snapshotId` and `baselineRevision` |
 | POST `/hosts/:hostId/approve` | Approve all or selected item IDs, with optional reason |

@@ -2881,12 +2881,25 @@ export const cyrusApi = {
     return response.text();
   }
 };
+interface HostSecurityCurrentSnapshot extends HostSecuritySnapshot {
+  name?: string;
+  lastReceivedAt?: string;
+  stale?: boolean;
+}
+
 export const hostSecurityApi = {
   hosts: (cursor?: string) => request<ApiResponse<HostSecurityPage<HostSecurityPosture>>>(
     `/security/hosts${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`),
-  snapshot: (id: string) => request<ApiResponse<HostSecuritySnapshot>>(`/security/hosts/${encodeURIComponent(id)}/snapshot`),
+  snapshot: (id: string) => request<ApiResponse<HostSecurityCurrentSnapshot>>(`/security/hosts/${encodeURIComponent(id)}/snapshot`),
   diff: (id: string) => request<ApiResponse<HostSecurityDiff>>(`/security/hosts/${encodeURIComponent(id)}/diff`),
-  events: (id: string) => request<ApiResponse<HostSecurityPage<HostSecurityEvent>>>(`/security/hosts/${encodeURIComponent(id)}/events`),
+  events: (id: string, { cursor, signInsOnly }: { cursor?: string; signInsOnly?: boolean } = {}) => {
+    const params = new URLSearchParams();
+    if (cursor) params.set('cursor', cursor);
+    if (signInsOnly) params.set('type', 'login');
+    return request<ApiResponse<HostSecurityPage<HostSecurityEvent>>>(
+      withQueryString(`/security/hosts/${encodeURIComponent(id)}/events`, params),
+    );
+  },
   counters: (id: string) => request<ApiResponse<HostSecurityPage<HostSecurityCounter>>>(`/security/hosts/${encodeURIComponent(id)}/counters?limit=60`),
   approve: (id: string, approval: HostSecurityApproval) => request<ApiResponse<{ baselineRevision: number }>>(
     `/security/hosts/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify(approval) }),

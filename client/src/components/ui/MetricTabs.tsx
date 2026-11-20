@@ -19,6 +19,7 @@ export function MetricTabs<T extends string>({ tabs, activeTab, onChange }: Metr
         <button
           key={id}
           type="button"
+          aria-pressed={activeTab === id}
           onClick={() => onChange(id)}
           className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
             activeTab === id

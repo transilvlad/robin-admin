@@ -312,9 +312,11 @@ hostSecurityRoutes.get('/hosts', (req, res, next) => handle(async () => {
         WHERE (item.item IS NOT NULL OR (section.value->>'complete')::boolean)
           AND item.item->'value' IS DISTINCT FROM item.previous->'value'
       ) END AS "unapprovedDrift",
-      CASE WHEN s.sections->'sshd'->>'status' = 'ok' THEN EXISTS (
-        SELECT 1 FROM jsonb_array_elements(s.sections->'sshd'->'items') setting
-        WHERE setting->>'id' = 'passwordauthentication' AND setting->'value'->>'value' = 'yes'
+      CASE WHEN s.sections->'sshd'->>'status' = 'ok' THEN (
+        SELECT CASE setting->'value'->>'value' WHEN 'yes' THEN TRUE WHEN 'no' THEN FALSE END
+        FROM jsonb_array_elements(s.sections->'sshd'->'items') setting
+        WHERE setting->>'id' = 'passwordauthentication'
+        LIMIT 1
       ) END AS "passwordLoginEnabled",
       floor(EXTRACT(epoch FROM CURRENT_TIMESTAMP - h.security_upgrades_since) / 86400)::int AS "patchAgeDays",
       (h.last_received_at < CURRENT_TIMESTAMP - make_interval(secs => h.interval_seconds * 3)) AS stale,
@@ -346,7 +348,20 @@ hostSecurityRoutes.get('/hosts/:hostId/snapshots/:snapshotId', (req, res, next) 
 }, res, next));
 
 hostSecurityRoutes.get('/hosts/:hostId/snapshot', (req, res, next) => handle(async () => {
-  if (req.query.at === undefined) return (await getHostSecurityState(routeParam(req, 'hostId'))).snapshot;
+  if (req.query.at === undefined) {
+    const { rows } = await query<Parameters<typeof serializeHostSnapshot>[0] & {
+      name: string; lastReceivedAt: Date; stale: boolean;
+    }>(`
+      SELECT s.id::text, h.agent_id AS "hostId", s.hash, s.observed_at AS "observedAt",
+        s.received_at AS "receivedAt", s.sections, a.name, h.last_received_at AS "lastReceivedAt",
+        (h.last_received_at < CURRENT_TIMESTAMP - make_interval(secs => h.interval_seconds * 3)) AS stale
+      FROM host_security_hosts h JOIN fleet_agents a ON a.agent_id = h.agent_id
+      JOIN host_security_snapshots s ON s.id = h.snapshot_id
+      WHERE h.agent_id = $1`, [routeParam(req, 'hostId')]);
+    if (!rows[0]) throw new HostSecurityError(404, 'Host security telemetry not found');
+    const { name, lastReceivedAt, stale, ...snapshot } = rows[0];
+    return { ...serializeHostSnapshot(snapshot), name, lastReceivedAt: lastReceivedAt.toISOString(), stale };
+  }
   const { rows } = await query<Parameters<typeof serializeHostSnapshot>[0]>(`
     SELECT ${hostSecuritySnapshotColumns} FROM host_security_snapshots
     WHERE agent_id = $1 AND observed_at <= $2 ORDER BY observed_at DESC, id DESC LIMIT 1`,

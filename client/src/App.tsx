@@ -49,7 +49,7 @@ const FleetDocsPage = lazy(() => import('./pages/FleetDocs').then((m) => ({ defa
 const FleetMetricsPage = lazy(() => import('./pages/FleetMetrics').then((m) => ({ default: m.FleetMetricsPage })));
 const FleetSecurityPage = lazy(() => import('./pages/HostSecurity').then((m) => ({ default: m.FleetSecurityPage })));
 const HostSecurityPage = lazy(() => import('./pages/HostSecurity').then((m) => ({ default: m.HostSecurityPage })));
-const HostSecurityAddressesPage = lazy(() => import('./pages/HostSecurity').then((m) => ({ default: m.HostSecurityAddressesPage })));
+const HostSecurityAddressesPage = lazy(() => import('./pages/HostSecurityAddresses').then((m) => ({ default: m.HostSecurityAddressesPage })));
 const ReportingOverviewPage = lazy(() => import('./pages/ReportingOverview'));
 const SourcesPage = lazy(() => import('./pages/Sources'));
 const ExplorerPage = lazy(() => import('./pages/Explorer'));
