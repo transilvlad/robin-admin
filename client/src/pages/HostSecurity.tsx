@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Clock3, FileCheck2, FileDiff, ListTree, LogIn, RefreshCw, Server } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
@@ -16,12 +16,18 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Spinner } from '../components/ui/Spinner';
 import { Table, type Column } from '../components/ui/Table';
 import { appIcons } from '../constants/appIcons';
-import type { HostSecurityPosture, HostSecuritySectionName, HostSecuritySnapshot } from '../types/host-security';
+import type { HostSecurityPosture, HostSecuritySectionName, HostSecuritySnapshot, HostSecurityStatus } from '../types/host-security';
+
+const sectionNames = Object.keys(hostSecuritySectionLabels) as HostSecuritySectionName[];
+
+function hostSecurityPath(hostId: string) {
+  return '/fleet/security/' + encodeURIComponent(hostId);
+}
 
 const fleetColumns: Column<HostSecurityPosture>[] = [
   {
     key: 'name', header: 'Host',
-    render: host => <Link className="font-medium text-robin-orange hover:underline" to={'/fleet/security/' + encodeURIComponent(host.hostId)}>{host.name}</Link>,
+    render: host => <Link className="font-medium text-robin-orange hover:underline" to={hostSecurityPath(host.hostId)}>{host.name}</Link>,
   },
   {
     key: 'lastReceivedAt', header: 'Security telemetry',
@@ -35,9 +41,19 @@ const fleetColumns: Column<HostSecurityPosture>[] = [
   {
     key: 'baseline', header: 'Baseline',
     render: host => {
-      if (host.baselinePending) return <SecurityBadge tone="info">Baseline pending</SecurityBadge>;
-      if (host.unapprovedDrift > 0) return <SecurityBadge tone="warning">{host.unapprovedDrift} unapproved</SecurityBadge>;
-      return <span className="text-gray-500 dark:text-gray-400">No reported changes</span>;
+      const reviewLabel = host.baselinePending ? 'Review baseline' : `${host.unapprovedDrift} to review`;
+      return (
+        <div className="flex flex-wrap gap-1">
+          {host.baselinePending || host.unapprovedDrift > 0 ? (
+            <Link className="rounded-full hover:underline" to={hostSecurityPath(host.hostId)} aria-label={`${reviewLabel} for ${host.name}`}>
+              <SecurityBadge tone={host.baselinePending ? 'info' : 'warning'}>{reviewLabel}</SecurityBadge>
+            </Link>
+          ) : <span className="text-gray-500 dark:text-gray-400">No reported changes</span>}
+          {host.coverageGapCount > 0 && (
+            <SecurityBadge tone="neutral">{host.coverageGapCount} coverage {host.coverageGapCount === 1 ? 'gap' : 'gaps'}</SecurityBadge>
+          )}
+        </div>
+      );
     },
   },
   {
@@ -113,6 +129,7 @@ export function HostSecurityPage() {
 function HostSecurityDetails({ hostId }: { hostId: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = tabs.find(entry => entry.id === searchParams.get('tab'))?.id ?? 'changes';
+  const inventorySection = sectionNames.find(name => name === searchParams.get('section'));
   const snapshot = useQuery({
     queryKey: ['host-security', 'host', hostId, 'snapshot'],
     queryFn: async () => (await hostSecurityApi.snapshot(hostId)).data,
@@ -121,14 +138,22 @@ function HostSecurityDetails({ hostId }: { hostId: string }) {
     queryKey: ['host-security', 'host', hostId, 'diff'],
     queryFn: async () => (await hostSecurityApi.diff(hostId)).data,
   });
-  const name = snapshot.data?.name ?? hostId;
-  const coverage = snapshot.data ? Object.values(snapshot.data.sections) : [];
-  const completeSections = coverage.filter(section => section.status === 'ok' && section.complete).length;
+  const currentSnapshot = snapshot.data;
+  const currentDiff = diff.data;
+  const coverage = currentSnapshot ? sectionNames.map(name => ({
+    name, status: currentSnapshot.sections[name].status, complete: currentSnapshot.sections[name].complete,
+  })) : [];
+  const gaps = coverage.filter(section => section.status !== 'ok' || !section.complete);
+  const changes = currentSnapshot && currentDiff?.snapshotId === currentSnapshot.id
+    ? currentDiff.items.filter(item => currentSnapshot.sections[item.section].status === 'ok')
+    : undefined;
+  const readyCount = changes?.length ?? 0;
   const changeTab = (next: SecurityTab) => {
     setSearchParams(previous => {
       const params = new URLSearchParams(previous);
       if (next === 'changes') params.delete('tab');
       else params.set('tab', next);
+      params.delete('section');
       return params;
     }, { replace: true });
   };
@@ -152,34 +177,63 @@ function HostSecurityDetails({ hostId }: { hostId: string }) {
           tone={snapshot.data?.stale ? 'warning' : 'neutral'}
           sub={snapshot.data?.lastReceivedAt && <>Last received <SecurityTime value={snapshot.data.lastReceivedAt} /></>} />
         <MetricCard icon={<FileDiff className="h-5 w-5" />} label="Baseline"
-          value={diff.data ? (diff.data.baselinePending ? 'Pending' : diff.data.items.length ? diff.data.items.length : 'No reported changes') : 'Unknown'}
-          tone={diff.data?.baselinePending || diff.data?.items.length ? 'warning' : 'neutral'}
-          sub={diff.data?.baselinePending ? 'First snapshot awaits approval' : diff.data?.items.length ? 'Unapproved changes' : undefined} />
+          value={currentDiff?.baselinePending ? 'Pending' : !changes ? 'Unknown' : readyCount || 'No reported changes'}
+          tone={currentDiff?.baselinePending || readyCount ? 'warning' : 'neutral'}
+          sub={currentDiff?.baselinePending ? 'First snapshot awaits approval' : readyCount ? `${readyCount === 1 ? 'Change' : 'Changes'} ready for review` : undefined} />
         <MetricCard icon={<FileCheck2 className="h-5 w-5" />} label="Inventory coverage"
-          value={coverage.length ? completeSections + ' of ' + coverage.length : 'Unknown'}
-          tone={coverage.length && completeSections < coverage.length ? 'warning' : 'neutral'}
-          sub={coverage.length > 0 && 'Sections collected completely'} />
+          value={coverage.length ? `${coverage.length - gaps.length} of ${coverage.length}` : 'Unknown'}
+          tone={gaps.length ? 'warning' : 'neutral'}
+          sub={coverage.length > 0 && (gaps.length ? `${gaps.length} coverage ${gaps.length === 1 ? 'gap' : 'gaps'}` : 'Sections collected completely')} />
       </div>
       <MetricTabs tabs={tabs} activeTab={tab} onChange={changeTab} />
       {tab === 'changes' && (
         <div className="space-y-4">
+          {gaps.length > 0 && <HostSecurityCoverageGaps gaps={gaps} />}
           <SecurityError error={diff.error} label="Could not load baseline changes" retry={() => void diff.refetch()} isRetrying={diff.isFetching} />
           {diff.isPending && <div className="card flex justify-center p-8"><Spinner label="Loading baseline changes" /></div>}
-          {diff.data && <HostSecurityChanges hostId={hostId} hostName={name} diff={diff.data} snapshot={snapshot.data} />}
+          {currentDiff && <HostSecurityChanges hostId={hostId} hostName={currentSnapshot?.name ?? hostId} diff={currentDiff}
+            changes={changes} canSetBaseline={!!changes && coverage.some(section => section.status === 'ok')} completeCoverage={gaps.length === 0} />}
         </div>
       )}
       {tab === 'sign-ins' && <HostSecuritySignIns hostId={hostId} />}
       {tab === 'inventory' && (
         <>
           {snapshot.isPending && <div className="card flex justify-center p-8"><Spinner label="Loading host inventory" /></div>}
-          {snapshot.data && <HostSecurityInventory snapshot={snapshot.data} />}
+          {currentSnapshot && <HostSecurityInventory key={inventorySection ?? ''} snapshot={currentSnapshot} selectedSection={inventorySection} />}
         </>
       )}
     </div>
   );
 }
 
-function HostSecurityInventory({ snapshot }: { snapshot: HostSecuritySnapshot }) {
+function HostSecurityCoverageGaps({ gaps }: {
+  gaps: { name: HostSecuritySectionName; status: HostSecurityStatus; complete: boolean }[];
+}) {
+  return (
+    <section aria-labelledby="coverage-gaps-heading" className="card overflow-hidden">
+      <h2 id="coverage-gaps-heading" className="border-b border-gray-200 px-4 py-3 font-semibold dark:border-robin-gray-700">Coverage gaps</h2>
+      <ul className="divide-y divide-gray-200 dark:divide-robin-gray-700">
+        {gaps.map(({ name, status, complete }) => (
+          <li key={name} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm">
+            <div>
+              <div className="mb-1 flex items-center gap-2">
+                <span className="font-medium">{hostSecuritySectionLabels[name]}</span>
+                <CoverageBadge status={status} complete={complete} />
+              </div>
+              <p className="text-gray-600 dark:text-gray-300">
+                {status === 'ok' ? 'Review covers reported items only.' : 'Approval is blocked until the agent can read this section.'}
+              </p>
+            </div>
+            <Link className="text-robin-orange hover:underline" to={{ search: `?tab=inventory&section=${name}` }}
+              aria-label={`View ${hostSecuritySectionLabels[name]} inventory`}>View inventory</Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function HostSecurityInventory({ snapshot, selectedSection }: { snapshot: HostSecuritySnapshot; selectedSection?: HostSecuritySectionName }) {
   return (
     <section aria-labelledby="host-inventory-heading" className="card overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-robin-gray-700">
@@ -187,19 +241,27 @@ function HostSecurityInventory({ snapshot }: { snapshot: HostSecuritySnapshot })
         <p className="text-sm text-gray-500 dark:text-gray-400">Observed <SecurityTime value={snapshot.observedAt} /></p>
       </div>
       <div className="divide-y divide-gray-200 dark:divide-robin-gray-700">
-        {(Object.keys(hostSecuritySectionLabels) as HostSecuritySectionName[]).map(name => (
-          <InventorySection key={name} name={name} section={snapshot.sections[name]} />
+        {sectionNames.map(name => (
+          <InventorySection key={name} name={name} section={snapshot.sections[name]} highlighted={selectedSection === name} />
         ))}
       </div>
     </section>
   );
 }
 
-function InventorySection({ name, section }: { name: HostSecuritySectionName; section: HostSecuritySnapshot['sections'][HostSecuritySectionName] }) {
-  const [expanded, setExpanded] = useState(false);
+function InventorySection({ name, section, highlighted }: {
+  name: HostSecuritySectionName; section: HostSecuritySnapshot['sections'][HostSecuritySectionName]; highlighted: boolean;
+}) {
+  const [expanded, setExpanded] = useState(highlighted);
   const [limit, setLimit] = useState(100);
+  const details = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (!highlighted) return;
+    details.current?.querySelector('summary')?.focus({ preventScroll: true });
+    details.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [highlighted]);
   return (
-    <details onToggle={event => setExpanded(event.currentTarget.open)}>
+    <details ref={details} open={expanded} onToggle={event => setExpanded(event.currentTarget.open)}>
       <summary className="cursor-pointer px-4 py-3 hover:bg-gray-50 dark:hover:bg-robin-gray-900/40">
         <span className="ml-2 inline-flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="font-medium">{hostSecuritySectionLabels[name]}</span>

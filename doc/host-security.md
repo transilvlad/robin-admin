@@ -42,11 +42,22 @@ Collection limits mark an inventory section incomplete. Long paths, excess
 entries, and large inventories are bounded before transmission. This lets the
 agent continue to send the other sections when one exceeds its limits.
 
-The first snapshot is shown as baseline pending until approval. Approvals are
-scoped to the current snapshot ID and baseline revision, so stale approvals
-return HTTP 409. An approval records the approver, time, reason, snapshot and
-items in the audit log. Partial approval applies only the referenced diffs.
-Sections that have a degraded read status cannot establish a baseline.
+Open **Fleet → Security** and follow the baseline link for the host. Use
+**Review baseline** for the first snapshot. For an existing baseline, review
+one change or use the **Review** button with the change count to select
+several. Expand each comparison to see what will become expected. The host
+page shows the last approval's time, approver, and recorded reason to
+administrators.
+
+Coverage gaps show sections that are unavailable, permission denied, or
+partially collected. Follow **View inventory** to inspect the affected
+section. A partially collected section can contribute observed changes.
+Sections with an unavailable or permission-denied status cannot be approved.
+
+Approvals are scoped to the current snapshot ID and baseline revision, so
+stale approvals return HTTP 409. An approval records the approver, time,
+reason, snapshot and items in the audit log. Partial approval applies only
+the referenced diffs.
 
 ## Events and counters
 
@@ -85,12 +96,12 @@ view and management permissions.
 
 | Method and path | Result |
 | --- | --- |
-| GET `/hosts` | Host posture, latest snapshot ID, baseline state and last receipt time |
+| GET `/hosts` | Host posture, latest snapshot ID, baseline state, reviewable drift count, coverage gap count and last receipt time |
 | GET `/hosts/:hostId/snapshots` | Snapshot IDs, hashes, and timestamps, newest first |
 | GET `/hosts/:hostId/snapshots/:snapshotId` | Snapshot by stable ID |
 | GET `/hosts/:hostId/snapshot` | Current snapshot, host name, last heartbeat and staleness |
 | GET `/hosts/:hostId/snapshot?at=...` | Latest snapshot at or before a UTC time |
-| GET `/hosts/:hostId/diff` | Current snapshot versus approved baseline, or an event's diff with `snapshotId` and `baselineRevision` |
+| GET `/hosts/:hostId/diff` | Current snapshot versus approved baseline, with the last approval for administrators, or an event's diff with `snapshotId` and `baselineRevision` |
 | POST `/hosts/:hostId/approve` | Approve all or selected item IDs, with optional reason |
 | GET `/hosts/:hostId/events` | Events filtered by type, user, source IP and time |
 | GET `/hosts/:hostId/counters` | Minute counters filtered by time |

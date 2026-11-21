@@ -1,6 +1,6 @@
 import { isIP } from 'node:net';
 import { Router, type Request, type Response, type NextFunction } from 'express';
-import type { HostSecurityCounter, HostSecurityDiffItem, HostSecurityEventInput, HostSecurityHeartbeat, HostSecuritySections } from '../types/host-security.js';
+import type { HostSecurityCounter, HostSecurityDiffItem, HostSecurityEventInput, HostSecurityHeartbeat, HostSecurityPosture, HostSecuritySections } from '../types/host-security.js';
 import { config } from '../config.js';
 import { query } from '../db/connection.js';
 import { getConfig } from '../db/queries/config.js';
@@ -294,10 +294,7 @@ function page<T>(items: T[], { limit, offset }: ReturnType<typeof pageOptions>) 
 
 hostSecurityRoutes.get('/hosts', (req, res, next) => handle(async () => {
   const options = pageOptions(req);
-  const { rows } = await query<{
-    hostId: string; name: string; lastReceivedAt: Date; stale: boolean; unknownLogins24h: number; patchAgeDays: number | null;
-    snapshotId: string; baselinePending: boolean; unapprovedDrift: number; passwordLoginEnabled: boolean | null;
-  }>(`
+  const { rows } = await query<Omit<HostSecurityPosture, 'lastReceivedAt'> & { lastReceivedAt: Date }>(`
     SELECT h.agent_id AS "hostId", a.name, h.last_received_at AS "lastReceivedAt",
       h.snapshot_id::text AS "snapshotId", (h.baseline_revision = 0) AS "baselinePending",
       CASE WHEN h.baseline_revision = 0 THEN 0 ELSE (
@@ -309,9 +306,13 @@ hostSecurityRoutes.get('/hosts', (req, res, next) => handle(async () => {
           FULL JOIN jsonb_array_elements(h.baseline->section.key->'items') old(item)
             ON new.item->>'id' = old.item->>'id'
         ) item
-        WHERE (item.item IS NOT NULL OR (section.value->>'complete')::boolean)
+        WHERE section.value->>'status' = 'ok'
+          AND (item.item IS NOT NULL OR (section.value->>'complete')::boolean)
           AND item.item->'value' IS DISTINCT FROM item.previous->'value'
       ) END AS "unapprovedDrift",
+      (SELECT count(*)::int FROM jsonb_each(s.sections) section
+        WHERE section.value->>'status' <> 'ok' OR NOT (section.value->>'complete')::boolean
+      ) AS "coverageGapCount",
       CASE WHEN s.sections->'sshd'->>'status' = 'ok' THEN (
         SELECT CASE setting->'value'->>'value' WHEN 'yes' THEN TRUE WHEN 'no' THEN FALSE END
         FROM jsonb_array_elements(s.sections->'sshd'->'items') setting
@@ -372,7 +373,10 @@ hostSecurityRoutes.get('/hosts/:hostId/snapshot', (req, res, next) => handle(asy
 
 hostSecurityRoutes.get('/hosts/:hostId/diff', (req, res, next) => handle(async () => {
   const hostId = routeParam(req, 'hostId');
-  if (req.query.snapshotId === undefined && req.query.baselineRevision === undefined) return (await getHostSecurityState(hostId)).diff;
+  if (req.query.snapshotId === undefined && req.query.baselineRevision === undefined) {
+    const { row, diff } = await getHostSecurityState(hostId);
+    return { ...diff, lastApproval: getCurrentAdmin(req)?.role === 'admin' ? row.lastApproval : null };
+  }
   const id = idParam(req.query.snapshotId);
   const revision = integer(Number(text(req.query.baselineRevision, 10)));
   return hostSecurityTransaction(async client => {

@@ -21,6 +21,7 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
   let listener: Server;
   let readToken: string;
   let manageToken: string;
+  let viewerToken: string;
   let otherToken: string;
 
   beforeAll(async () => {
@@ -29,11 +30,12 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
     }
     await initializeSchema();
     await provisionFleetAgent({ agentId: hostId, name: 'Fixture host', credential: agentToken });
-    const key = (name: string, scope: string) => createApiKey({
-      name, role: 'admin', scopes: [scope], allowedCidrs: [], createdBy: null, expiresAt: null,
+    const key = (name: string, scope: string, role: 'admin' | 'viewer' = 'admin') => createApiKey({
+      name, role, scopes: [scope], allowedCidrs: [], createdBy: null, expiresAt: null,
     });
     readToken = (await key('fixture-read', 'security:read')).plainText;
     manageToken = (await key('fixture-manage', 'security:manage')).plainText;
+    viewerToken = (await key('fixture-viewer', 'security:read', 'viewer')).plainText;
     otherToken = (await key('fixture-other', 'logs:read')).plainText;
     await createAlertWebhook({
       name: 'Fixture alert destination', adapter: 'generic', webhookUrl: 'https://alerts.example.test/security',
@@ -92,9 +94,9 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
     expect((await send(host + '/snapshot', readToken)).data).toMatchObject({
       id: initial.data.snapshotId, name: 'Fixture host', lastReceivedAt: expect.any(String), stale: false,
     });
-    expect((await send('/security/hosts', readToken)).data.items[0].passwordLoginEnabled).toBe(false);
+    expect((await send('/security/hosts', readToken)).data.items[0]).toMatchObject({ passwordLoginEnabled: false, coverageGapCount: 1 });
     expect((await send(host + '/diff', otherToken)).status).toBe(403);
-    expect((await send(host + '/diff', readToken)).data.baselinePending).toBe(true);
+    expect((await send(host + '/diff', readToken)).data).toMatchObject({ baselinePending: true, lastApproval: null });
     const firstApproval = { snapshotId: initial.data.snapshotId, baselineRevision: 0, reason: 'Fixture baseline' };
     expect((await send(host + '/approve', readToken, 'POST', firstApproval)).status).toBe(403);
     expect((await send(host + '/approve', manageToken, 'POST', firstApproval)).status).toBe(200);
@@ -105,6 +107,7 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
         type: 'ssh-ed25519', bits: 256, options: [], comment: 'Fixture' },
     });
     sections.sshd.items[0].value.value = 'yes';
+    sections.firewall.items.push({ id: 'default', value: { backend: 'nftables', inbound: 'unknown' } });
     sections.listeners.items.push({ id: 'listener', value: { protocol: 'tcp', address: '0.0.0.0', port: 8080, process: null } });
     sections.accounts.items.push({ id: 'fixture', value: { user: 'fixture', uid: 3_000_000_000, shell: '/bin/bash', home: '/home/fixture' } });
     sections.integrity.items.push({ id: '/fixture', value: { path: '/fixture', sha256: '1'.repeat(64) } });
@@ -116,8 +119,11 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
     const current = (await send(host + '/diff', readToken)).data;
     expect(current.items.length).toBeGreaterThanOrEqual(5);
     expect((await send('/security/hosts', readToken)).data.items[0]).toMatchObject({
-      unapprovedDrift: current.items.length, passwordLoginEnabled: true,
+      unapprovedDrift: current.items.length - 1, passwordLoginEnabled: true, coverageGapCount: 1,
     });
+    expect(current.items).toContainEqual(expect.objectContaining({ id: 'firewall:default' }));
+    expect(current.lastApproval).toEqual({ revision: 1, approver: 'api-key:fixture-manage', approvedAt: expect.any(String), reason: 'Fixture baseline' });
+    expect((await send(host + '/diff', viewerToken)).data.lastApproval).toBeNull();
     const history = (await send(host + '/snapshots', readToken)).data.items;
     expect(history[0]).toHaveProperty('id', current.snapshotId);
     expect(history[0]).not.toHaveProperty('sections');
@@ -159,8 +165,13 @@ describe.skipIf(process.env.HOST_SECURITY_IT_DB !== '1')('host security with dis
       'host_unknown_login',
     ]);
     const approveDiff = { snapshotId: current.snapshotId, baselineRevision: current.baselineRevision, reason: 'Fixture verified' };
+    expect((await send(host + '/approve', manageToken, 'POST', { ...approveDiff, itemIds: ['firewall:default'] })).status).toBe(400);
     expect((await send(host + '/approve', manageToken, 'POST', approveDiff)).status).toBe(200);
-    expect((await send(host + '/diff', readToken)).data.items).toEqual([]);
+    expect((await send(host + '/diff', readToken)).data).toMatchObject({
+      items: [expect.objectContaining({ id: 'firewall:default' })],
+      lastApproval: { revision: 2, approver: 'api-key:fixture-manage', reason: 'Fixture verified' },
+    });
+    expect((await send('/security/hosts', readToken)).data.items[0]).toMatchObject({ unapprovedDrift: 0, coverageGapCount: 1 });
     const historical = await send(host + '/diff?snapshotId=' + current.snapshotId + '&baselineRevision=' + current.baselineRevision, readToken);
     expect(historical.data.items).toEqual(current.items);
     await query("UPDATE host_security_events SET observed_at = NOW() - interval '25 hours' WHERE agent_id = $1", [hostId]);

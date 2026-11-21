@@ -67,6 +67,17 @@ export interface HostSecurityDiff {
   items: HostSecurityDiffItem[];
 }
 
+export interface HostSecurityApprovalSummary {
+  revision: number;
+  approvedAt: string;
+  approver: string;
+  reason: string | null;
+}
+
+export interface HostSecurityCurrentDiff extends HostSecurityDiff {
+  lastApproval: HostSecurityApprovalSummary | null;
+}
+
 export interface HostSecurityApproval {
   snapshotId: string;
   baselineRevision: number;
@@ -126,6 +137,7 @@ export interface HostSecurityPosture {
   snapshotId: string;
   baselinePending: boolean;
   unapprovedDrift: number;
+  coverageGapCount: number;
   passwordLoginEnabled: boolean | null;
   unknownLogins24h: number;
   patchAgeDays: number | null;

@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import type { HostSecurityDiff, HostSecurityDiffItem, HostSecurityHeartbeat, HostSecuritySections, HostSecuritySnapshot } from '../types/host-security.js';
+import type { HostSecurityApprovalSummary, HostSecurityDiff, HostSecurityDiffItem, HostSecurityHeartbeat, HostSecuritySections, HostSecuritySnapshot } from '../types/host-security.js';
 import { getClient, query } from '../db/connection.js';
 
 export const hostSecuritySections = [
@@ -159,14 +159,19 @@ export async function acceptHostSecuritySnapshot(agentId: string, input: HostSec
 
 export async function getHostSecurityState(agentId: string, client?: PoolClient) {
   const run = client ? client.query.bind(client) : query;
-  const { rows } = await run<HostSecurityRow & SnapshotRow>(`
+  const { rows } = await run<HostSecurityRow & SnapshotRow & { lastApproval: HostSecurityApprovalSummary | null }>(`
     SELECT a.name, h.snapshot_id::text AS "snapshotId", h.baseline,
         h.baseline_revision AS "baselineRevision", h.last_received_at AS "lastReceivedAt",
         h.interval_seconds AS "intervalSeconds",
         s.id::text, h.agent_id AS "hostId", s.hash, s.observed_at AS "observedAt",
-        s.received_at AS "receivedAt", s.sections
+        s.received_at AS "receivedAt", s.sections,
+        CASE WHEN approval.revision IS NOT NULL THEN jsonb_build_object(
+          'revision', approval.revision, 'approvedAt', approval.approved_at,
+          'approver', approval.approver, 'reason', approval.reason
+        ) END AS "lastApproval"
     FROM host_security_hosts h JOIN fleet_agents a ON a.agent_id = h.agent_id
     JOIN host_security_snapshots s ON s.id = h.snapshot_id
+    LEFT JOIN host_security_approvals approval ON approval.agent_id = h.agent_id AND approval.revision = h.baseline_revision
     WHERE h.agent_id = $1 ${client ? 'FOR UPDATE OF h' : ''}`, [agentId]);
   const row = rows[0];
   if (!row) throw new HostSecurityError(404, 'Host security telemetry not found');

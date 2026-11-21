@@ -1,6 +1,6 @@
 import type { CyrusSession, CyrusQuotaResult, CyrusUserLookup, CyrusMetricsSnapshot, CyrusMetricsStats } from '../types';
 import type {
-  HostSecurityApproval, HostSecurityCounter, HostSecurityDiff, HostSecurityEvent, HostSecurityKnownAddress,
+  HostSecurityApproval, HostSecurityCounter, HostSecurityCurrentDiff, HostSecurityEvent, HostSecurityKnownAddress,
   HostSecurityPage, HostSecurityPosture, HostSecuritySnapshot,
 } from '../types/host-security';
 /**
@@ -2891,7 +2891,7 @@ export const hostSecurityApi = {
   hosts: (cursor?: string) => request<ApiResponse<HostSecurityPage<HostSecurityPosture>>>(
     `/security/hosts${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`),
   snapshot: (id: string) => request<ApiResponse<HostSecurityCurrentSnapshot>>(`/security/hosts/${encodeURIComponent(id)}/snapshot`),
-  diff: (id: string) => request<ApiResponse<HostSecurityDiff>>(`/security/hosts/${encodeURIComponent(id)}/diff`),
+  diff: (id: string) => request<ApiResponse<HostSecurityCurrentDiff>>(`/security/hosts/${encodeURIComponent(id)}/diff`),
   events: (id: string, { cursor, signInsOnly }: { cursor?: string; signInsOnly?: boolean } = {}) => {
     const params = new URLSearchParams();
     if (cursor) params.set('cursor', cursor);
