@@ -3220,6 +3220,13 @@ export async function initializeSchema(): Promise<void> {
       ON logs_ingest_spool (completed_at)
       WHERE status <> 'pending'
     `);
+    // Admission and status sum pending and rejected rows. Delivered receipts
+    // far outnumber them, so without this every admitted batch scans them all.
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_logs_ingest_spool_open
+      ON logs_ingest_spool (status) INCLUDE (bytes, line_count)
+      WHERE status IN ('pending', 'rejected')
+    `);
     await client.query(`
       CREATE TABLE IF NOT EXISTS logs_pipeline_health_state (
         id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),

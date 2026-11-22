@@ -22,7 +22,7 @@ describe('requestContext', () => {
 
     expect(req.requestId).toBe('edge-request-123');
     expect(res.setHeader).toHaveBeenCalledWith('X-Request-ID', 'edge-request-123');
-    expect(logger.info).toHaveBeenCalledWith('HTTP request completed', expect.objectContaining({
+    expect(logger.debug).toHaveBeenCalledWith('HTTP request completed', expect.objectContaining({
       requestId: 'edge-request-123',
       path: '/api/users',
       status: 200,
@@ -41,6 +41,18 @@ describe('requestContext', () => {
     requestContext(req, res, vi.fn());
 
     expect(req.requestId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('logs client errors at info', () => {
+    let finish: (() => void) | undefined;
+    const req = { header: vi.fn().mockReturnValue(undefined), method: 'GET', originalUrl: '/api/fleet/agent/commands' } as any;
+    const res = { statusCode: 403, setHeader: vi.fn(), on: vi.fn((_event, callback) => { finish = callback; }) } as any;
+    vi.mocked(logger.info).mockClear();
+
+    requestContext(req, res, vi.fn());
+    finish?.();
+
+    expect(logger.info).toHaveBeenCalledWith('HTTP request completed', expect.objectContaining({ status: 403 }));
   });
 
   it('logs slow requests as warnings, except the agent command long-poll', () => {

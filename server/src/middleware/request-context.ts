@@ -30,10 +30,14 @@ export function requestContext(req: Request, res: Response, next: NextFunction):
       durationMs: Date.now() - startedAt,
     };
     const slow = metadata.durationMs >= 1000 && !LONG_POLL_PATHS.has(metadata.path);
+    // Successful requests are mostly UI and agent polling, so they log at
+    // debug; client errors stay visible at info.
     if (res.statusCode >= 500 || slow) {
       logger.warn('HTTP request completed', metadata);
-    } else {
+    } else if (res.statusCode >= 400) {
       logger.info('HTTP request completed', metadata);
+    } else {
+      logger.debug('HTTP request completed', metadata);
     }
   });
 

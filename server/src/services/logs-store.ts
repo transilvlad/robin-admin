@@ -534,16 +534,17 @@ export async function storedBatchSequences(batchId: string, rows: LogsStoreRow[]
 async function oldestLogTimestamp(): Promise<string | null> {
   const end = new Date();
   const start = new Date(end.getTime() - (appConfig.logs.retentionDays + 1) * 24 * 60 * 60 * 1000);
+  // A min() aggregate keeps one value; sorting every line in the retention
+  // window to take the first one exceeds the store's query memory limit.
   const params = new URLSearchParams({
-    query: '* | sort by (_time) asc | fields _time',
+    query: '* | stats min(_time) as oldest',
     start: start.toISOString(),
     end: end.toISOString(),
-    limit: '1',
   });
   const response = await storeFetch(`/select/logsql/query?${params}`, HEALTH_TIMEOUT_MS);
   if (response.status !== 200) return null;
   const row = parseJsonLines(response.body)[0];
-  return typeof row?._time === 'string' ? row._time : null;
+  return typeof row?.oldest === 'string' && row.oldest ? row.oldest : null;
 }
 
 export async function getLogsSources(windowDays = 7): Promise<LogsSourcesResult> {

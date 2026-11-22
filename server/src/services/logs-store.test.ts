@@ -373,7 +373,7 @@ describe('getLogsStoreStatus', () => {
         status: 'success',
         data: { resultType: 'vector', result: [{ metric: { __name__: 'count(*)' }, value: [1, '25'] }] },
       })))
-      .mockResolvedValueOnce(respond(200, '{"_time":"2026-10-25T00:00:00Z"}\n'));
+      .mockResolvedValueOnce(respond(200, '{"oldest":"2026-10-25T00:00:00Z"}\n'));
     await expect(getLogsStoreStatus()).resolves.toMatchObject({
       enabled: true,
       reachable: true,
@@ -385,7 +385,7 @@ describe('getLogsStoreStatus', () => {
       metrics: { rowsIngestedTotal: 40, bytesIngestedTotal: 4000, rowsDroppedTotal: 2, streamsCreatedTotal: 6 },
     });
     const oldestRequest = new URL(fetchMock.mock.calls[3][0] as string);
-    expect(oldestRequest.searchParams.get('query')).toBe('* | sort by (_time) asc | fields _time');
+    expect(oldestRequest.searchParams.get('query')).toBe('* | stats min(_time) as oldest');
     expect(oldestRequest.searchParams.get('start')).toMatch(/^\d{4}-\d\d-\d\dT/);
     expect(oldestRequest.searchParams.get('end')).toMatch(/^\d{4}-\d\d-\d\dT/);
   });
