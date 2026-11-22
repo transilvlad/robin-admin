@@ -69,6 +69,17 @@ describe('security middleware helpers', () => {
     expect(requiredScopeForRequest(request('POST', '/alerts'))).toBe('logs:manage');
   });
 
+  it('maps Telemetry alert rules and issues under the /api mount to telemetry scopes', () => {
+    const request = (method: string, path: string) => ({ method, baseUrl: '/api', path }) as never;
+
+    expect(requiredScopeForRequest(request('GET', '/telemetry-alert-issues'))).toBe('telemetry:read');
+    expect(requiredScopeForRequest(request('GET', '/telemetry-alert-issues/11a00195-51c9-49a8-812a-31ae48541c23'))).toBe('telemetry:read');
+    expect(requiredScopeForRequest(request('POST', '/telemetry-alert-issues/11a00195-51c9-49a8-812a-31ae48541c23/dismiss'))).toBe('telemetry:manage');
+    expect(requiredScopeForRequest(request('GET', '/telemetry-alert-rules'))).toBe('telemetry:read');
+    expect(requiredScopeForRequest(request('PUT', '/telemetry-alert-rules/3'))).toBe('telemetry:manage');
+    expect(requiredScopeForRequest(request('GET', '/alert-webhooks'))).toBe('api:read');
+  });
+
   it('limits the module alert publish scope to the intake POST', () => {
     const request = (method: string, originalUrl: string) => ({
       method, originalUrl, baseUrl: '/api/modules', path: '/sample/alert-events',

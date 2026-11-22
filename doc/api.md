@@ -99,7 +99,7 @@ Common scopes:
 | `metrics:read` | Metrics and dashboard reads |
 | `reporting:read`, `reporting:write` | Reporting intelligence API |
 | `reports:read`, `reports:ingest` | Raw report reads and ingestion |
-| `telemetry:read`, `telemetry:write`, `telemetry:manage` | Telemetry reads, metric ingestion and dashboard changes ([Telemetry](telemetry.md)) |
+| `telemetry:read`, `telemetry:write`, `telemetry:manage` | Telemetry reads, metric ingestion, and dashboard, alert rule and alert issue changes ([Telemetry](telemetry.md)) |
 | `audit:read` | Audit log reads |
 | `admin:*` | Admin-only settings, admins, config, domain/sender policy writes, and API-key management |
 
@@ -136,7 +136,7 @@ Errors:
 | Fleet | `GET /fleet/services`, `GET /fleet/services/enabled`, `GET /fleet/services/:serviceId` plus create/update/delete and health checks |
 | Fleet capabilities | `GET /fleet/capabilities` (per service: each feature's `available` and `reason`; per type: what any enabled service can do), `GET /fleet/capabilities/matrix` (the same rules for every setup, for Fleet → Docs) |
 | Fleet sync | `GET /fleet/services/:serviceId/sync`, `POST /fleet/services/:serviceId/sync/request`, and agent manifest/file/status routes (agent-credential auth) |
-| Telemetry alert issues | Admin-only `GET /telemetry-alert-issues[?status=&limit=&offset=]`, `GET /telemetry-alert-issues/:id`, `POST /telemetry-alert-issues/:id/dismiss` and `/resume`; mutations require `expectedRevision`, return `409` for stale state, and are CSRF-protected |
+| Telemetry alert issues | Admin-only `GET /telemetry-alert-issues[?status=&limit=&offset=]`, `GET /telemetry-alert-issues/:id`, `POST /telemetry-alert-issues/:id/dismiss` and `/resume`; API keys need `telemetry:read` to read and `telemetry:manage` to change; mutations require `expectedRevision`, return `409` for stale state, and are CSRF-protected |
 | Fleet agent channel | `GET /fleet/agent/commands?actions=&ack=` (agent long-poll for queued actions; `ack` lists the previous poll's command ids), `POST /fleet/agent/commands/:commandId/result`, plus enroll/heartbeat/metrics/logs pushes — agent-credential auth |
 | Modules | Catalog, activation, installation lifecycle, runtime status, and authenticated module-backend proxy routes |
 | Rspamd | `GET /rspamd/status`, `GET/PUT /rspamd/settings`, `GET/PUT /rspamd/config`, `GET /rspamd/config/scopes`, `PUT/DELETE /rspamd/config/files/:key`, `POST /rspamd/reload`, `GET /rspamd/rules`, `POST /rspamd/rules/preview`, `PUT /rspamd/rules`, `GET/PUT /rspamd/classifiers`, `POST /rspamd/scan`, `POST /rspamd/scan-file`, `GET /rspamd/scans`, `GET /rspamd/scans/:id`, `POST /rspamd/scans/:id/replay`, `POST /rspamd/scans/:id/learn`, `POST /rspamd/scans/:id/fuzzy`, DKIM domain/selector endpoints, training corpus endpoints |

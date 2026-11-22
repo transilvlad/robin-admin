@@ -226,6 +226,11 @@ export function requiredScopeForRequest(req: Request): string {
     if (!write) return 'telemetry:read';
     return path === '/write' || path === '/import' ? 'telemetry:write' : 'telemetry:manage';
   }
+  // The alerting router is mounted at /api, so its Telemetry alert rules and
+  // issues arrive with base /api rather than /api/telemetry.
+  if (base === '/api' && (path.startsWith('/telemetry-alert-issues') || path.startsWith('/telemetry-alert-rules'))) {
+    return write ? 'telemetry:manage' : 'telemetry:read';
+  }
   if (base.startsWith('/api/logs')) {
     return path === '/ingest' ? 'logs:write' : write ? 'logs:manage' : 'logs:read';
   }

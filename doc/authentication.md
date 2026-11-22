@@ -146,7 +146,7 @@ Representative scopes:
 | `reporting:read` / `reporting:write` | Reporting intelligence reads and actions |
 | `reports:read` | Raw report reads |
 | `reports:ingest` | DMARC, TLSRPT, and forensic report ingestion |
-| `telemetry:read` / `telemetry:write` / `telemetry:manage` | Telemetry reads, metric ingestion, and dashboard changes |
+| `telemetry:read` / `telemetry:write` / `telemetry:manage` | Telemetry reads, metric ingestion, and dashboard, alert rule and alert issue changes |
 | `admin:*` | Admin-only settings and management APIs |
 
 API keys still pass through role checks. For example, a key with an admin-only scope also needs an `admin` role ceiling for admin routes.
