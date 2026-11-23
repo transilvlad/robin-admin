@@ -288,7 +288,7 @@ export function ModuleHostPage() {
   }
 
   if (!routePath && moduleDefaultPath) {
-    return <Navigate to={`${basePath}/${moduleDefaultPath}`} replace />;
+    return <Navigate to={{ pathname: `${basePath}/${moduleDefaultPath}`, search: location.search, hash: location.hash }} replace />;
   }
 
   return (

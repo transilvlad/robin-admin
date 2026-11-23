@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, CircleHelp, History, ListChecks, MapPin, Pause, PauseCircle, Play, Plus, RefreshCw, Search, Server, Settings, ShieldAlert, Trash2, Zap } from 'lucide-react';
 import { ApiError, monitoringApi } from '../api/client';
 import { useConfirm } from '../context/ConfirmContext';
@@ -29,6 +29,8 @@ function loadMonitoringTab(): MonitoringTab { try { const raw = localStorage.get
 function saveMonitoringTab(tab: MonitoringTab): void { try { localStorage.setItem(STORAGE_KEYS.tab, JSON.stringify(tab)); } catch {} }
 
 export function MonitoringPage() {
+  const [params, setParams] = useSearchParams();
+  const linkedIssue = Number(params.get('issue')) || null;
   const [summary, setSummary] = useState<MonitoringSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
@@ -43,7 +45,7 @@ export function MonitoringPage() {
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<MonitoringTab>(() => loadMonitoringTab());
+  const [activeTab, setActiveTab] = useState<MonitoringTab>(() => linkedIssue ? 'issues' : loadMonitoringTab());
   const [checkPage, setCheckPage] = useState(1);
   const [pageSize, setPageSize] = useState<PageSize>(25);
   const [targetFilter, setTargetFilter] = useState('all');
@@ -63,7 +65,7 @@ export function MonitoringPage() {
   const [issueTargetFilter, setIssueTargetFilter] = useState('all');
   const [issueCheckFilter, setIssueCheckFilter] = useState('all');
   const [expandedIssueTargets, setExpandedIssueTargets] = useState<Record<string, boolean>>({});
-  const [expandedIssues, setExpandedIssues] = useState<Record<number, boolean>>({});
+  const [expandedIssues, setExpandedIssues] = useState<Record<number, boolean>>(() => linkedIssue ? { [linkedIssue]: true } : {});
 
   const load = useCallback(async (showSpinner = false) => {
     if (showSpinner) setLoading(true); else setRefreshing(true);
@@ -97,13 +99,14 @@ export function MonitoringPage() {
   }, [checks, environmentFilter, pausedFilter, statusFilter, targetFilter, targets, typeFilter]);
   const checksById = useMemo(() => new Map(checks.map((check) => [check.id, check])), [checks]);
   const filteredIssues = useMemo(() => issues.filter((issue) => {
+    if (linkedIssue && issue.id !== linkedIssue) return false;
     const check = checksById.get(issue.checkId);
     if (issueStatusFilter !== 'all' && issue.status !== issueStatusFilter) return false;
     if (issueSeverityFilter !== 'all' && issue.severity !== issueSeverityFilter) return false;
     if (issueTargetFilter !== 'all' && check?.targetId !== Number(issueTargetFilter)) return false;
     if (issueCheckFilter !== 'all' && issue.checkId !== Number(issueCheckFilter)) return false;
     return true;
-  }), [checksById, issueCheckFilter, issueSeverityFilter, issueStatusFilter, issueTargetFilter, issues]);
+  }), [checksById, issueCheckFilter, issueSeverityFilter, issueStatusFilter, issueTargetFilter, issues, linkedIssue]);
   const filteredObservations = useMemo(() => (summary?.recentObservations ?? []).filter((observation) => {
     const check = checksById.get(observation.checkId);
     if (recentCheckFilter !== 'all' && observation.checkId !== Number(recentCheckFilter)) return false;
@@ -193,6 +196,9 @@ export function MonitoringPage() {
 
       {openIssues.length > 0 && <OpenIssuesPanel issues={openIssues} />}
       <MetricTabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
+      {activeTab === 'issues' && linkedIssue && <Button variant="secondary" onClick={() => setParams(previous => {
+        previous.delete('issue'); return previous;
+      })}>Show all issues</Button>}
 
       {activeTab === 'locations' && <MonitoringLocations />}
       {activeTab === 'silences' && <MonitoringSilences targets={targets} checks={checks} onChanged={() => void load(false)} />}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, BellOff, ExternalLink, RefreshCw } from 'lucide-react';
 import { alertsApi, ApiError } from '../api/client';
 import { Button } from '../components/ui/Button';
@@ -54,6 +54,8 @@ function eventLabel(eventType: TelemetryAlertIssue['events'][number]['eventType'
 }
 
 export function TelemetryIssuesPage() {
+  const [params, setParams] = useSearchParams();
+  const linked = params.get('issue');
   const [status, setStatus] = useState<TelemetryAlertIssueStatus>('active');
   const [issues, setIssues] = useState<TelemetryAlertIssue[]>([]);
   const [total, setTotal] = useState(0);
@@ -72,6 +74,15 @@ export function TelemetryIssuesPage() {
     const version = ++requestVersion.current;
     setLoading(true);
     try {
+      if (linked) {
+        const response = await alertsApi.getTelemetryIssue(linked);
+        if (version !== requestVersion.current) return;
+        setIssues(response.data ? [response.data] : []);
+        setTotal(response.data ? 1 : 0);
+        if (response.data) setStatus(response.data.status);
+        setError('');
+        return;
+      }
       const response = await alertsApi.listTelemetryIssues(status, PAGE_SIZE, offset);
       if (requestVersion.current !== version) return;
       setIssues(response.data?.issues ?? []);
@@ -83,7 +94,7 @@ export function TelemetryIssuesPage() {
     } finally {
       if (requestVersion.current === version) setLoading(false);
     }
-  }, [status, offset]);
+  }, [status, offset, linked]);
 
   useEffect(() => {
     void load();
@@ -92,6 +103,7 @@ export function TelemetryIssuesPage() {
   }, [load]);
 
   const changeStatus = (next: TelemetryAlertIssueStatus) => {
+    if (linked) setParams(previous => { previous.delete('issue'); return previous; });
     setStatus(next);
     setOffset(0);
     setNotice('');
