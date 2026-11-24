@@ -250,6 +250,18 @@ func TestHostSecurityListenerOwnerIgnoresInheritingWorkers(t *testing.T) {
 			t.Fatalf("listener owner = %+v", items)
 		}
 	}
+	parents[413335] = 1
+	for _, raw := range []string{
+		`tcp LISTEN 0 4096 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=413335,fd=3),("systemd",pid=1,fd=115))`,
+		`tcp LISTEN 0 4096 0.0.0.0:22 0.0.0.0:* users:(("systemd",pid=1,fd=115),("sshd",pid=413335,fd=3))`,
+	} {
+		if got := listenerOwner(raw); got != "sshd" {
+			t.Fatalf("socket-activated owner = %q", got)
+		}
+	}
+	if got := listenerOwner(`tcp LISTEN 0 4096 0.0.0.0:22 0.0.0.0:* users:(("systemd",pid=1,fd=115))`); got != "systemd" {
+		t.Fatalf("idle socket-activated owner = %q", got)
+	}
 	if got := listenerOwner(`tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",fd=3))`); got != "sshd" {
 		t.Fatalf("owner without a PID = %q", got)
 	}

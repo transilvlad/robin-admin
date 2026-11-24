@@ -636,6 +636,8 @@ var processParent = func(pid int) (int, bool) {
 // process whose parent is not also listed. Workers that inherit the socket,
 // such as Postfix smtpd under master, come and go, so taking the first listed
 // process made the name flap. PIDs wrap, so their order cannot decide it.
+// Init, which holds sockets it activates (sshd under ssh.socket), names the
+// listener only when it is the sole process listed.
 func listenerOwner(line string) string {
 	_, users, ok := strings.Cut(line, "users:((")
 	if !ok {
@@ -662,14 +664,21 @@ func listenerOwner(line string) string {
 			pid, _ = strconv.Atoi(digits)
 		}
 		listed = append(listed, user{name, pid})
-		if pid > 0 {
+		if pid > 1 {
 			pids[pid] = true
 		}
 	}
 	if len(listed) == 0 {
 		return ""
 	}
+	fallback := ""
 	for _, u := range listed {
+		if u.pid == 1 {
+			continue
+		}
+		if fallback == "" {
+			fallback = u.name
+		}
 		if u.pid <= 0 {
 			continue
 		}
@@ -677,7 +686,10 @@ func listenerOwner(line string) string {
 			return u.name
 		}
 	}
-	return listed[0].name
+	if fallback == "" {
+		return listed[0].name
+	}
+	return fallback
 }
 
 func securityListeners(raw string) []securityItem {
