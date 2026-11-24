@@ -237,8 +237,13 @@ func BenchmarkHostSecuritySnapshotInventory(b *testing.B) {
 }
 
 func TestHostSecurityListenerOwnerIgnoresInheritingWorkers(t *testing.T) {
-	busy := `tcp LISTEN 0 100 0.0.0.0:25 0.0.0.0:* users:(("smtpd",pid=52311,fd=6),("smtpd",pid=52290,fd=6),("master",pid=1187,fd=13))`
-	idle := `tcp LISTEN 0 100 0.0.0.0:25 0.0.0.0:* users:(("master",pid=1187,fd=13))`
+	// PIDs have wrapped: the workers have lower PIDs than master.
+	parents := map[int]int{997352: 1, 288372: 997352, 285139: 997352}
+	previous := processParent
+	processParent = func(pid int) (int, bool) { parent, ok := parents[pid]; return parent, ok }
+	t.Cleanup(func() { processParent = previous })
+	busy := `tcp LISTEN 0 100 0.0.0.0:25 0.0.0.0:* users:(("smtpd",pid=285139,fd=6),("smtpd",pid=288372,fd=6),("master",pid=997352,fd=13))`
+	idle := `tcp LISTEN 0 100 0.0.0.0:25 0.0.0.0:* users:(("master",pid=997352,fd=13))`
 	for _, raw := range []string{busy, idle} {
 		items := securityListeners(raw)
 		if len(items) != 1 || items[0].Value.(map[string]any)["process"] != "master" {

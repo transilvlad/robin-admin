@@ -612,15 +612,41 @@ func securityUnits(raw string) []securityItem {
 	return items
 }
 
-// listenerOwner names the process that owns a listening socket: the one with
-// the lowest PID. Workers that inherit the socket, such as Postfix smtpd under
-// master, come and go, so taking the first listed process made the name flap.
+// processParent returns a process's parent PID from /proc.
+var processParent = func(pid int) (int, bool) {
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0, false
+	}
+	// The command name may contain spaces or parentheses; the state and
+	// parent PID follow its closing parenthesis.
+	i := bytes.LastIndexByte(stat, ')')
+	if i < 0 {
+		return 0, false
+	}
+	f := strings.Fields(string(stat[i+1:]))
+	if len(f) < 2 {
+		return 0, false
+	}
+	parent, err := strconv.Atoi(f[1])
+	return parent, err == nil
+}
+
+// listenerOwner names the process that owns a listening socket: the listed
+// process whose parent is not also listed. Workers that inherit the socket,
+// such as Postfix smtpd under master, come and go, so taking the first listed
+// process made the name flap. PIDs wrap, so their order cannot decide it.
 func listenerOwner(line string) string {
 	_, users, ok := strings.Cut(line, "users:((")
 	if !ok {
 		return ""
 	}
-	owner, lowest := "", -1
+	type user struct {
+		name string
+		pid  int
+	}
+	var listed []user
+	pids := map[int]bool{}
 	for _, entry := range strings.Split(users, "),(") {
 		rest, ok := strings.CutPrefix(entry, "\"")
 		if !ok {
@@ -630,17 +656,28 @@ func listenerOwner(line string) string {
 		if !ok {
 			continue
 		}
-		_, rest, _ = strings.Cut(rest, "pid=")
-		digits, _, _ := strings.Cut(rest, ",")
-		pid, err := strconv.Atoi(digits)
-		if err != nil {
-			pid = int(^uint(0) >> 1)
+		pid := 0
+		if _, after, ok := strings.Cut(rest, "pid="); ok {
+			digits, _, _ := strings.Cut(after, ",")
+			pid, _ = strconv.Atoi(digits)
 		}
-		if lowest < 0 || pid < lowest {
-			owner, lowest = name, pid
+		listed = append(listed, user{name, pid})
+		if pid > 0 {
+			pids[pid] = true
 		}
 	}
-	return owner
+	if len(listed) == 0 {
+		return ""
+	}
+	for _, u := range listed {
+		if u.pid <= 0 {
+			continue
+		}
+		if parent, ok := processParent(u.pid); ok && !pids[parent] {
+			return u.name
+		}
+	}
+	return listed[0].name
 }
 
 func securityListeners(raw string) []securityItem {
