@@ -236,6 +236,20 @@ func BenchmarkHostSecuritySnapshotInventory(b *testing.B) {
 	}
 }
 
+func TestHostSecurityListenerOwnerIgnoresInheritingWorkers(t *testing.T) {
+	busy := `tcp LISTEN 0 100 0.0.0.0:25 0.0.0.0:* users:(("smtpd",pid=52311,fd=6),("smtpd",pid=52290,fd=6),("master",pid=1187,fd=13))`
+	idle := `tcp LISTEN 0 100 0.0.0.0:25 0.0.0.0:* users:(("master",pid=1187,fd=13))`
+	for _, raw := range []string{busy, idle} {
+		items := securityListeners(raw)
+		if len(items) != 1 || items[0].Value.(map[string]any)["process"] != "master" {
+			t.Fatalf("listener owner = %+v", items)
+		}
+	}
+	if got := listenerOwner(`tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",fd=3))`); got != "sshd" {
+		t.Fatalf("owner without a PID = %q", got)
+	}
+}
+
 func TestHostSecurityCounters(t *testing.T) {
 	windows := map[string]*securityCounterWindow{}
 	now := time.Date(2026, 11, 19, 10, 0, 30, 0, time.UTC)

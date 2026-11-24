@@ -612,6 +612,37 @@ func securityUnits(raw string) []securityItem {
 	return items
 }
 
+// listenerOwner names the process that owns a listening socket: the one with
+// the lowest PID. Workers that inherit the socket, such as Postfix smtpd under
+// master, come and go, so taking the first listed process made the name flap.
+func listenerOwner(line string) string {
+	_, users, ok := strings.Cut(line, "users:((")
+	if !ok {
+		return ""
+	}
+	owner, lowest := "", -1
+	for _, entry := range strings.Split(users, "),(") {
+		rest, ok := strings.CutPrefix(entry, "\"")
+		if !ok {
+			continue
+		}
+		name, rest, ok := strings.Cut(rest, "\"")
+		if !ok {
+			continue
+		}
+		_, rest, _ = strings.Cut(rest, "pid=")
+		digits, _, _ := strings.Cut(rest, ",")
+		pid, err := strconv.Atoi(digits)
+		if err != nil {
+			pid = int(^uint(0) >> 1)
+		}
+		if lowest < 0 || pid < lowest {
+			owner, lowest = name, pid
+		}
+	}
+	return owner
+}
+
 func securityListeners(raw string) []securityItem {
 	items := map[string]securityItem{}
 	for _, line := range strings.Split(raw, "\n") {
@@ -632,10 +663,8 @@ func securityListeners(raw string) []securityItem {
 			continue
 		}
 		var process any
-		if _, after, ok := strings.Cut(line, "users:((\""); ok {
-			if name, _, ok := strings.Cut(after, "\""); ok {
-				process = securityText(name)
-			}
+		if name := listenerOwner(line); name != "" {
+			process = securityText(name)
 		}
 		key := f[0] + "|" + address + "|" + port
 		if existing, exists := items[key]; exists && existing.Value.(map[string]any)["process"] != nil {
